@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/"><channel>
+<title>Example News</title>
+<item>
+                <title><![CDATA[City Council Votes on the Transit Budget]]></title>
+                <link>https://news.example/2026/08/04/transit-budget-vote/</link>
+                <pubDate>Tue, 04 Aug 2026 19:46:41 +0000</pubDate>
+                                    <dc:creator><![CDATA[A. Reporter]]></dc:creator>
+                                		<guid isPermaLink="false"></guid>
+                <media:thumbnail url="https://news.example/wp-content/uploads/2026/08/council.jpg" />
+                <description><![CDATA[The council meets tonight to decide next year's transit budget.]]></description>
+</item>
+<item>
+                <title><![CDATA[What the New Water Rules Mean for Farmers]]></title>
+                <link>https://news.example/2026/08/03/water-rules-farmers/</link>
+                <pubDate>Mon, 03 Aug 2026 14:02:10 +0000</pubDate>
+                                    <dc:creator><![CDATA[B. Writer]]></dc:creator>
+                                		<guid isPermaLink="false"></guid>
+                <description><![CDATA[A plain-language guide to the rules that take effect next month.]]></description>
+</item>
+<item>
+                <title><![CDATA[Library Extends Weekend Hours]]></title>
+                <link>https://news.example/2026/08/02/library-weekend-hours/</link>
+                <pubDate>Sun, 02 Aug 2026 09:30:00 +0000</pubDate>
+                                    <dc:creator><![CDATA[C. Editor]]></dc:creator>
+                                		<guid isPermaLink="false"></guid>
+                <description><![CDATA[Branches will stay open until 8 p.m. on Saturdays and Sundays.]]></description>
+</item>
+</channel></rss>

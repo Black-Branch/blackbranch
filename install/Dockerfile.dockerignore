@@ -1,0 +1,7 @@
+# Build context = the release root. Only what the images copy is needed.
+**/node_modules
+**/.next
+**/.env
+**/.env.*
+!**/.env.example
+.git

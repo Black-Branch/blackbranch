@@ -1,0 +1,181 @@
+<!doctype html>
+<!-- Poll overlay — OBS browser source (add http://<stream-api host>:3001/overlay/poll).
+     Transparent; hidden until a poll starts. Fetches /poll/current on load,
+     then rides the same public WS the website chat uses (pollUpdate/pollEnd).
+     Numbered options double as the voting instructions for platform chatters
+     ("type the number in chat"). Shows the final result ~15s, then fades out.
+     Option rows are built ONCE per poll and updated in place — rebuilding
+     innerHTML every frame kills the CSS transitions (bars snap instead of
+     sliding). -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Poll</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  * { box-sizing: border-box; }
+  #poll {
+    display: none;
+    width: 460px;
+    margin: 12px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: rgba(12, 12, 16, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: #fff;
+  }
+  #poll.show { display: block; animation: pop-in 220ms ease-out; }
+  #poll.hide { animation: pop-out 300ms ease-in forwards; }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes pop-out { to { opacity: 0; transform: translateY(8px); } }
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .q { font-size: 19px; font-weight: 700; line-height: 1.25; }
+  .clock { font-size: 15px; font-weight: 600; color: #a5c8f7; font-variant-numeric: tabular-nums; white-space: nowrap; transition: color 300ms ease; }
+  .hint { font-size: 11.5px; color: #9ca3af; margin-top: 9px; }
+  .opt { position: relative; margin: 6px 0; border-radius: 8px; background: rgba(255,255,255,0.06); overflow: hidden; }
+  .opt .fill {
+    position: absolute; inset: 0; width: 0%;
+    background: linear-gradient(90deg, rgba(165,200,247,0.38), rgba(165,200,247,0.16));
+    transition: width 500ms ease;
+  }
+  /* Winner tint crossfades in as an overlay — gradients themselves can't transition. */
+  .opt .fill::after {
+    content: ""; position: absolute; inset: 0; opacity: 0;
+    background: linear-gradient(90deg, rgba(125,217,168,0.55), rgba(125,217,168,0.2));
+    transition: opacity 400ms ease;
+  }
+  .opt.winner .fill::after { opacity: 1; }
+  .opt .row { position: relative; display: flex; align-items: center; gap: 9px; padding: 7px 10px; font-size: 15px; }
+  .opt .num {
+    flex: none; width: 22px; height: 22px; border-radius: 6px;
+    background: rgba(255,255,255,0.14); font-weight: 700; font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .opt .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .opt .pct { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .opt .cnt { flex: none; color: #9ca3af; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .bump { animation: bump 320ms ease; }
+  @keyframes bump { 0% { transform: scale(1); } 40% { transform: scale(1.28); } 100% { transform: scale(1); } }
+  #poll.done .clock { color: #7dd9a8; }
+</style>
+</head>
+<body>
+<div id="poll">
+  <div class="head"><div class="q" id="q"></div><div class="clock" id="clock"></div></div>
+  <div id="opts"></div>
+  <div class="hint" id="hint">Vote by typing the number in chat</div>
+</div>
+<script>
+(function () {
+  var box = document.getElementById('poll');
+  var qEl = document.getElementById('q');
+  var optsEl = document.getElementById('opts');
+  var clockEl = document.getElementById('clock');
+  var state = null;         // current poll public state
+  var hideTimer = null;     // schedules the fade-out after a poll ends
+  var fadeTimer = null;     // schedules display:none after the fade-out
+  var tick = null;
+  var rows = {};            // option n -> { root, fill, pct, cnt } (built once per poll)
+  var builtFor = null;      // pollId the rows were built for
+
+  function fmt(sec) {
+    sec = Math.max(0, Math.round(sec));
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function build() {
+    optsEl.innerHTML = '';
+    rows = {};
+    builtFor = state.pollId;
+    state.options.forEach(function (o) {
+      var d = document.createElement('div');
+      d.className = 'opt';
+      d.innerHTML = '<div class="fill"></div>' +
+        '<div class="row"><span class="num">' + o.n + '</span>' +
+        '<span class="txt"></span><span class="pct"></span><span class="cnt"></span></div>';
+      d.querySelector('.txt').textContent = o.text;
+      optsEl.appendChild(d);
+      rows[o.n] = { root: d, fill: d.querySelector('.fill'),
+                    pct: d.querySelector('.pct'), cnt: d.querySelector('.cnt') };
+    });
+  }
+
+  function bump(el) { el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
+
+  function render() {
+    if (!state) { box.className = ''; box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.className = 'show' + (state.status !== 'active' ? ' done' : '');
+    qEl.textContent = state.question;
+    if (builtFor !== state.pollId) build();
+    var total = state.total || 0;
+    state.options.forEach(function (o) {
+      var r = rows[o.n];
+      if (!r) return;
+      var t = (state.tallies && state.tallies[o.n]) || 0;
+      var pct = total > 0 ? Math.round((t / total) * 100) : 0;
+      r.root.classList.toggle('winner', state.winner === o.n);
+      // Width on the next frame so a freshly built bar transitions up from 0.
+      requestAnimationFrame(function () { r.fill.style.width = pct + '%'; });
+      var pctText = pct + '%';
+      if (r.pct.textContent !== pctText) { r.pct.textContent = pctText; bump(r.pct); }
+      var cntText = '(' + t + ')';
+      if (r.cnt.textContent !== cntText) r.cnt.textContent = cntText;
+    });
+    if (state.status === 'active') {
+      clockEl.textContent = fmt((state.endsAt - Date.now()) / 1000);
+      document.getElementById('hint').style.display = '';
+    } else {
+      clockEl.textContent = state.status === 'cancelled' ? 'Cancelled' : 'Final';
+      document.getElementById('hint').style.display = 'none';
+    }
+  }
+
+  function hideSoon() {
+    box.className = 'show hide' + (state && state.status !== 'active' ? ' done' : '');
+    fadeTimer = setTimeout(function () {
+      fadeTimer = null; state = null; builtFor = null; rows = {};
+      render();
+    }, 320);
+  }
+
+  function setState(p) {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    if (fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
+    state = p || null;
+    render();
+    if (state && state.status !== 'active') {
+      hideTimer = setTimeout(hideSoon, 15000);
+    }
+  }
+
+  tick = setInterval(function () {
+    if (state && state.status === 'active') clockEl.textContent = fmt((state.endsAt - Date.now()) / 1000);
+  }, 1000);
+  void tick;
+
+  function load() {
+    fetch('/poll/current').then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.poll) setState(d.poll); })
+      .catch(function () {});
+  }
+
+  function connect() {
+    var ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+    ws.onmessage = function (ev) {
+      var f; try { f = JSON.parse(ev.data); } catch (e) { return; }
+      if (f.type === 'pollUpdate' || f.type === 'pollEnd') setState(f.poll);
+      else if (f.type === 'message' && f.system === 'poll' && f.poll) setState(f.poll);
+    };
+    ws.onclose = function () { setTimeout(connect, 3000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) { /* noop */ } };
+  }
+
+  load();
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+name: Setup help
+description: Stuck installing, or on one of the setup pages.
+labels: ["setup"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us where you are and we will help. Never paste anything from `/opt/blackbranch/.env`,
+        a password or a key — and **never the setup link** the installer prints: until your account
+        exists, whoever opens it can make the site's admin account.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where are you stuck?
+      options:
+        - Before or during install.sh
+        - The setup link / first account
+        - A setup page (platform, payments, modules)
+        - Backups on the Finish page
+        - After setup
+    validations:
+      required: true
+  - type: dropdown
+    id: front-door
+    attributes:
+      label: Front door
+      options: ["Cloudflare tunnel", "Direct (ports 80/443)", "Not sure"]
+  - type: input
+    id: server
+    attributes:
+      label: Server
+      description: Distribution and size, e.g. "Debian 13, 4 GB, 2 cores, rented VPS".
+  - type: textarea
+    id: what
+    attributes:
+      label: What you ran and what you saw
+      description: The command or the page, and the message you got (remove your domain if you prefer). Cut out any `https://…/setup?token=…` link.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: The doctor's report (if blackbranch is installed)
+      description: "`sudo blackbranch doctor --report`, then attach the file it writes. It contains no secrets."

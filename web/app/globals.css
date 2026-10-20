@@ -1,0 +1,2546 @@
+@import "tailwindcss";
+@import "./components/chrome/chrome.css";
+
+/* Markdown is PROSE, not source. Tailwind 4 auto-scans the project, so a doc
+   that merely *mentions* a class name (the audit reports quote them constantly)
+   makes that utility ship in production CSS — dead bytes nobody wrote a UI for,
+   and utilities the design-system gate has no way to see. This shipped two dead
+   zinc rules from CODE-AUDIT-2026-07.md before it was caught. */
+@source not "../**/*.md";
+
+/* Registered so the chrome tokens COMPUTE to an absolute length on :root and
+   inherit as px — `getComputedStyle(el).getPropertyValue("--chrome-top-h")`
+   then returns "36px", not the calc() text. Tailwind 4 already requires the
+   @property baseline (Chrome 111 / Safari 16.4 / Firefox 128). */
+@property --chrome-top-h { syntax: "<length>"; inherits: true; initial-value: 36px; }
+@property --chrome-bottom-h { syntax: "<length>"; inherits: true; initial-value: 48px; }
+/* How far the chrome that stays PAINTED above a lifted pane rises itself —
+   the ONE number two readers share: the video column's keyboard ramp transform
+   (below, phone block) and the window layer's ceiling
+   (chrome.css, `.chrome-window-layer`'s --pane-ceiling). Registered for the
+   same reason as the two above: a calc() over an unregistered term is
+   invalid at computed-value time and the whole declaration is dropped. 0 where no host declares it, which is the conservative
+   reading — "nothing of mine stays painted above the pane". */
+@property --pane-ceiling-rise { syntax: "<length>"; inherits: true; initial-value: 0px; }
+/* The committed keyboard inset K, published by useKeyboardLift on the element
+   it translates — so CSS can do the window layer's ceiling arithmetic itself
+   (chrome.css .chrome-window-layer) instead of JS snapshotting a distance that
+   is still animating. Subtree write, one per discrete K commit: a :root write
+   invalidates the whole document per frame (~40ms, D-2). */
+@property --kb-lift { syntax: "<length>"; inherits: true; initial-value: 0px; }
+/* How much of a pane host's OWN chrome sits, in flow, between the lifted
+   element's top and a window layer inside it — the chat tab bar's height, and
+   0 the moment that bar hides or goes overlay. Declared by the pane host from
+   the SAME state that hides the bar, so the layer's ceiling and the bar's
+   own margin animation move together on one curve instead of the layer
+   holding a number measured before the bar moved. */
+@property --pane-chrome-above { syntax: "<length>"; inherits: true; initial-value: 0px; }
+/* The ceiling itself — the window layer's one derived length,
+   max(0, K − rise − chrome-above): declared by `.chrome-window-layer`
+   (chrome.css) from the three tokens above and READ by the panel inside it,
+   which subtracts it from its own max-height/height. Never the layer's `top`,
+   and never transitioned: a change to it is ONE layout jump of the panel,
+   which PanelWindow's lift-follow turns into a compositor translate. Registered
+   so the max()/calc() computes to a length at the layer and inherits as one. */
+@property --pane-ceiling { syntax: "<length>"; inherits: true; initial-value: 0px; }
+
+:root {
+  /* The app is unconditionally dark (the body gradient + the html canvas pin
+     below force it), so these hold the DARK values directly. They used to default
+     to light (#ffffff/#171717) and get flipped only inside a
+     `@media (prefers-color-scheme: dark)` block — which meant a light-mode *system*
+     kept dark --foreground text on the forced-dark background (invisible), and
+     read like a real light/dark theming system that doesn't exist. Fixed: no
+     light mode to mirror, so there's nothing to toggle. */
+  /* Tell the UA the page is dark so BROWSER-rendered chrome matches. Without this
+     the app forces its own dark palette but native widgets — scrollbars, date and
+     colour pickers, select dropdowns, form controls, the text-selection highlight
+     — keep rendering in the system's light scheme, so they appear as bright strips
+     inside dark panels. CSS variables cannot reach that chrome; only color-scheme
+     can. Declared here rather than in a prefers-color-scheme block because the app
+     has no light mode to mirror. */
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  /* MUST equal settingsRegistry DEFAULT_REM (via sliderToRem(remToSlider(DEFAULT_REM))).
+     This was 0.875rem while the registry default resolved to 1.352rem, and
+     SettingsHydrator applies the registry default unconditionally when the user has
+     no saved size — so every page load painted at 0.875rem and then visibly jumped
+     to 1.352rem. Keep the two in lockstep; the paint value and the settled value are
+     the same number. */
+  --chat-font-size: 1.352rem;
+  /* Frozen basis for avatar + badge sizing: Text Size scales the MESSAGE TEXT,
+     not the whole row — avatars/badges have their own × sliders. It equals the
+     Text Size default so untouched themes render the same; it is a deliberate
+     CONSTANT, NOT required to track --chat-font-size or its default. Consumed
+     via chatFont.ts CHAT_ROW_BASIS / rowBasisCalc(). */
+  --chat-row-basis: 1.352rem;
+  --bg-body-start: #0c1020;
+  --bg-body-end: #08080a;
+  /* Panel colours, model B (settingsRegistry applyPanel/applyPage). Defaults =
+     an untouched account. --bg-page is the whole page background. */
+  --bg-page: radial-gradient(ellipse 140% 65% at 50% 0%, var(--bg-body-start) 0%, var(--bg-body-end) 72%);
+  --panel-tint-bar: #141828;
+  --panel-tint-body: #141828;
+  /* Every panel bar carries ONE shade over its tint: the look the side panel's
+     tab strip has (its scrim around the selected tab), a touch lighter,
+     shared by the video top + bottom bars and the chat's
+     typing bar, so all four match. The tab strip gets it through its
+     band (chrome.css .chrome-shade — the selected tab stays the clear hole);
+     the others paint it as a layer over the tint. The lower panel's tab
+     strip keeps the default --color-scrim (0.30): slightly darker, on purpose. */
+  --panel-bar-shade: rgb(0 0 0 / 0.22);
+  --panel-bar-bg: linear-gradient(var(--panel-bar-shade), var(--panel-bar-shade)), var(--panel-tint-bar);
+
+  /* Panel frame — a real rounded CSS border on each panel (video + chat).
+     --frame-color is the border tint (subtle by default; a solid themeable color
+     when the user enables a custom border), --frame-width its thickness. The old
+     opaque grey backing is gone, so the bars now read against the page/video and
+     their opacity is meaningful. */
+  --frame-color: rgba(255, 255, 255, 0.10);
+  --frame-width: 2px;
+
+  /* Equal-gap spacing (C3): the panels' distance from the page edge equals their
+     distance from each other — one token drives both the outer padding and the
+     inter-panel gap. */
+  --panel-gap: 12px;
+
+  /* Site accent ("platform blue") — pins, links, active states, unread dots.
+     Tailwind utilities via --color-accent below (text-accent, bg-accent/30, …);
+     JS mirror for non-CSS contexts (canvas fills): ACCENT in app/lib/colors.ts.
+     The user-themeable --chat-send-color *defaults* to this same value in
+     settingsRegistry.ts — kept as a literal there because the registry
+     round-trips hex through color inputs. */
+  --accent: #99c1f1;
+
+  /* Player-bar button colours — viewer-themeable (settingsRegistry:
+     donateColor / giftColor, both prePaint with mirrors in layout.tsx).
+     These defaults apply until a viewer picks their own.
+     Gift deliberately does NOT default to Twitch purple, and does not flip
+     colour on subscription — see the registry comment. */
+  --donate-color: #99c1f1;
+  --gift-color: #c98bdd;
+
+  /* Animation tokens — JS-driven transitions read ANIM_* constants that match */
+  --anim-fast:    150ms;
+  --anim-default: 200ms;
+  --anim-slow:    300ms;
+  --anim-slower:  500ms; /* deliberate slow fill — progress bars only (poll, support) */
+  --anim-ease:    ease-out;
+
+  /* Z-index scale — the app's floating-chrome stacking order, in one place.
+     In-layout stacking inside a panel/page keeps the standard z-10…z-50
+     utilities and is not part of this scale. Values predate the scale and are
+     intentionally unchanged; siblings that must stack within one feature
+     derive from their layer token with calc(var(--z-x) ± n). */
+  --z-panel-menu:  60; /* dropdown menus anchored inside a panel (forum sort, threads filter) */
+  --z-popout:     150; /* /chat popout overlay chrome; its settings panel at +1 */
+  --z-float:      200; /* floating menus/cards over the main layout (user menu, overlay user card) */
+  --z-modal:      210; /* chrome's dialog scrim (Window) — poll composer, embed manager, every other chrome dialog; must beat --z-float */
+  --z-nudge:      240; /* bottom nudges, +10 per layer: apps hint < PWA install < secure-account */
+  --z-overlay:    300; /* image lightbox */
+  --z-rail-menu:  400; /* spaces-rail flyout menu */
+  --z-menu:       500; /* context menus + confirm popovers; submenu at +10 */
+  --z-top:        999; /* chat settings panel — above everything */
+
+  /* Chat style customization — all controllable from ChatSettings */
+  --chat-line-height:   1.4;
+  --chat-msg-gap:       1px;
+  /* Chat top fade: rows fade out as they reach the top of the chat —
+     or the pin's bottom while one shows (the scroller sets --chat-fade-top
+     inline to the pin's height). */
+  --chat-fade-top:      0px;
+  --chat-fade-h:        64px;
+  --chat-emote-size:    1.4em;
+  --chat-emote-overlap: 2px;
+  --chat-shadow:        0 1px 4px rgba(0,0,0,1), 0 2px 12px rgba(0,0,0,0.85);
+  /* Pictures (avatar, badges, emotes, styled names): the tight layer ALONE.
+     A two-layer chain would cost most of what the Shadow setting costs, because
+     an animated picture re-runs its filter every frame (see the PICTURES note
+     in settingsRegistry.ts). */
+  --chat-shadow-filter: drop-shadow(0 1px 4px rgba(0,0,0,1));
+  /* Fourth form: the CONTACT layer alone, for effects that already separate
+     themselves from the background and only need the lift (the glow).
+     Its radius is FIXED; only its alpha follows the strength slider. See
+     shadowSpec() in settingsRegistry.ts. */
+  --chat-shadow-contact: 0 1px 4px rgba(0,0,0,1);
+  /* Third form of the SAME shadow, for the indicator's solid shapes. The radii
+     are DOUBLE the other two forms and that is derived, not a typo — see
+     SHADOW_BOX_SCALE in settingsRegistry.ts for the measurement. */
+  --chat-shadow-box:    0 1px 8px rgba(0,0,0,1), 0 2px 24px rgba(0,0,0,0.85);
+  /* Fifth form: the HALO, read only by the see-through /chat window's TEXT
+     (.chat-window below). A form of the SAME setting so the Shadow toggle and
+     both sliders reach it — see HALO_BASE in settingsRegistry.ts. The window's
+     pictures have no drop-shadow twin. */
+  --chat-shadow-halo:        0 0 14px rgba(0,0,0,0.8);
+  /* The highlight card's fill under its accent tint (ChatMessage.tsx — the paid
+     highlight and the broadcaster's click-to-highlight). A variable so the
+     see-through /chat window can soften it without the site's card changing. */
+  --chat-card-base:     rgba(12, 16, 28, 0.88);
+  --chat-username-sat:  1;
+  --chat-font-family:   inherit;
+  --chat-font-weight:   400;
+  --chat-text-color:    #e8e6e3;
+  --chat-ts-color:      #71717a;
+  --chat-username-font:   inherit;
+  --chat-username-weight: 600;
+  /* Gap between the platform indicator / badge block and the username. */
+  --chat-pi-gap:        11px;
+  /* Buffer BETWEEN individual badges. Identical to the indicator gap: even
+     spacing makes the badges read as a row of equal items (a tighter
+     multiplier would make them read as ONE cluster against the wider indicator
+     gap — that is deliberately not the look).
+     The chat style preview must space badges identically to real chat; that
+     trap is why this is one token and not two. */
+  --chat-badge-gap:     var(--chat-pi-gap, 11px);
+
+  /* Shell chrome typography (2j) — app frame outside the chat body. One shared
+     font + per-element sizes; defaults match the original Tailwind text-sm/text-xs
+     so 1× renders identically. --chrome-top-h is derived from --tab-size, so a
+     larger tab size grows both top bars. */
+  --shell-font:      inherit;
+  --tab-size:        0.875rem;
+  --wordmark-size:   0.875rem;
+  --title-size:      0.875rem;
+
+  /* The chrome grid: two HEIGHTS, defined here once and consumed by
+     every Bar (app/components/chrome/Bar.tsx). Heights, not floors — a Bar is
+     exactly its token tall at rest, which is what makes the two panels' bars
+     line up. A floor (`min-h-*`) is not a height: an unlayered row-collapse
+     rule can zero an inner min-height and leave one bar 22px beside a 34px one.
+     The top token follows the viewer's Tab-size slider (--tab-size).
+     Registered as <length> below so getComputedStyle() returns the RESOLVED
+     px, which is how the dock reads it back (readChromePx). */
+  --chrome-top-h:    calc(var(--tab-size) + 22px);
+  /* Window headers only ("Slim"). FIXED,
+     not a calc of --tab-size: the chat tab bar and video top bar follow the
+     Tab-size slider; window headers stay slim. chrome.css sets 30px inside a
+     phone panel (the grab pill moves INTO the band there). */
+  --chrome-window-h: 28px;
+  /* The bottom token follows the viewer's TITLE-size slider the way the top one
+     follows Tab-size, and the chat TEXT-size slider as well, for one reason: a
+     setting must never clip a bar. Both bottom bars read this one token, so it
+     has to clear the taller of the two contents.
+       • Term 2 — the meta bar. Its title block is two lines and always on screen
+         now: the title at `--title-size` × 1.25 (leading-tight), the meta line
+         16px + its 2px margin, plus 12px of breathing and the hairline. 47.5px
+         at the default 0.875rem, 65px at the slider's 2× ceiling, where a fixed
+         48 spilled 6px of the title block over the hairline onto the player (the
+         bar sets no overflow).
+       • Term 3 — the composer. Its row is PINNED to `--composer-ctl` (the
+         derived control diameter, = --chat-font-size × 1.25 + 0.75rem + 2px, see
+         its own note further down) so the bar cannot shift 1-2px when the first
+         letter arrives — a pin is a floor the bar has to clear, not something it
+         can squeeze. Plus 6px: ≈3px a side, which is what the default already
+         gets, and the hairline. 47.04px at the default 1.352rem, so the max()
+         still holds 48 and nothing moves at rest; 60px at the Text-size
+         slider's 2rem ceiling, where the two-term version left 54px of row in a
+         47px content box — 7px straight over the hairline.
+     `--composer-ctl` is declared on `:root` too (one block down), so this
+     registered <length> on `:root` can see it: custom properties substitute
+     after the cascade, not in source order.
+     @property's initial-value stays 48px — it is the pre-registration fallback,
+     not the resting height. --video-chrome is a sum of the two tokens, so it
+     follows both sliders by itself. */
+  --chrome-bottom-h: max(48px, calc(var(--title-size) * 1.25 + 30px), calc(var(--composer-ctl) + 6px));
+}
+
+/* NOTE: a `@media (max-width:767px) { --chat-font-size: 1rem }` override used to live
+   here. It never took effect: SettingsHydrator applies the registry value to every
+   setting on load regardless of viewport, so the media query was overwritten
+   milliseconds later on every mobile load — it only ever contributed a second font
+   jump (1rem → 1.352rem). Removed rather than left as a lie.
+   A genuinely responsive default needs viewport awareness in settingsRegistry, not a
+   CSS override the hydrator will always win against. */
+
+/* Off-screen emote cells (picker grid, autocomplete list) skip paint, so their
+   animated 7TV emotes stop compositing until scrolled into view — a full emote set
+   is hundreds of cells and would otherwise animate all at once the moment the
+   picker opens. contain-intrinsic-size reserves each cell's box so the scroll
+   position stays stable. NOT used on chat message rows: paint containment there
+   would clip the floating hover/mod toolbar and boosted stickers that overflow
+   the row. */
+.emote-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.25rem;
+}
+
+/* Picker tile still waiting for its image. Only the unavoidable case
+   ever shows it — a fling through a catalog the device has not cached yet: the
+   faint box appears after 200 ms, so a tile that loads from cache (every tile once
+   the warm has run) never flashes it. EmotePicker sets data-loaded on load. */
+.emote-tile:not([data-loaded]) {
+  animation: emote-tile-wait 0s linear 200ms forwards;
+}
+@keyframes emote-tile-wait {
+  to { background-color: var(--color-surface-2); border-radius: 4px; }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Micro type scale below Tailwind's text-xs (12px). Font-size only — no
+   line-height companion on purpose, so these inherit line-height exactly like
+   the text-[10px]/text-[11px] arbitrary utilities they replaced. */
+@theme {
+  --text-2xs: 11px;
+  --text-3xs: 10px;
+}
+
+/* ─── DESIGN SYSTEM (north-star Step 2) ──────────────────────────────────────
+   Semantic color roles + the chat-relative type scale. Enforced by
+   scripts/check-tokens.mjs, which fails the build if a raw `zinc-*`,
+   `text-white`, `white/[…]`, `black/…` or bare `calc(var(--chat-font-size)*n)`
+   reappears. Spec: the design-system step 2 plan
+
+   Values are PINNED LITERALS, deliberately not `var(--color-zinc-500)`:
+     • the migration's correctness claim is "the emitted CSS is byte-identical",
+       which must not depend on Tailwind's tree-shaking of unused theme vars, and
+     • a Tailwind palette change in some future upgrade should NOT silently
+       restyle this app. These are our values now.
+   Each oklch below is copied exactly from node_modules/tailwindcss/theme.css,
+   so the rename is provably inert. Do not "modernize" them to hex. */
+@theme {
+  /* Text emphasis ladder — 7 rungs, brightest → dimmest. Hover pairs move UP
+     the ladder: `text-muted hover:text-body-dim`. */
+  --color-strong:     #fff;                          /* was white + zinc-50   */
+  --color-heading:    oklch(96.7% 0.001 286.375);    /* was zinc-100          */
+  --color-body:       oklch(92%   0.004 286.32);     /* was zinc-200          */
+  --color-body-dim:   oklch(87.1% 0.006 286.286);    /* was zinc-300          */
+  --color-secondary:  oklch(70.5% 0.015 286.067);    /* was zinc-400          */
+  --color-muted:      oklch(60.5% 0.016 285.938);    /* was zinc-500; not
+     55.2%: measured 3.68:1 over --color-panel — under the
+     4.5:1 AA floor exactly where muted is used at 2xs/3xs. 60.5% is the
+     minimal lightness clearing AA over panel; a11yRound3.test.ts re-derives it. */
+  /* Decorative only — separator dots, disabled chips. Kept as its own rung
+     because zinc-700 → zinc-500 is a VISIBLE brightening, not a rounding. */
+  --color-faint:      oklch(37%   0.013 285.805);    /* was zinc-700 + 600    */
+
+  /* Label on a FILLED accent surface — the one place the dark-only assumption
+     inverts. Not "dark text": it is text-on-brand. */
+  --color-on-accent:  oklch(21%   0.006 285.885);    /* was zinc-900 + 950    */
+
+  /* PayPal's and Venmo's own button fills, sampled from the rendered SDK
+     buttons. Used ONLY for the ▾ half of the split tip button, so
+     it reads as one button with whichever of theirs sits beside it. */
+  --color-paypal:     #ffc439;
+  --color-venmo:      #008cff;
+
+  /* Supporter encrypted message — the scramble, its lock, and the
+     send button while the redaction destination is armed. A ROLE, not a platform
+     colour: it has to be legible as "not one of the places this can go", so it
+     is deliberately clear of every entry in lib/platformColors (Twitch pink,
+     Kick green, YouTube red, stream.place magenta, the site's blue) and of the
+     cheer yellow the send button already borrows. Soft cyan is the gap left. */
+  --color-encrypted:  oklch(80% 0.09 195);
+  /* The redacted bar a sealed message shows: near-black with a faint grey edge.
+     Near-black rather than the encrypted
+     cyan so a sealed line reads as withheld, not as a highlight; the edge is
+     what keeps a black bar visible on the site's dark background and on the
+     see-through /chat window alike. */
+  --color-redact:      #05060a;
+  --color-redact-edge: rgba(255, 255, 255, 0.18);
+  --color-redact-edge-hover: rgba(255, 255, 255, 0.36);
+
+  /* Talking to the help desk instead of the room — the composer accent while
+     support mode is armed. A ROLE for the same reason --color-encrypted is one:
+     the desk is not a send-to destination, so the label underneath still reads
+     the real destination ("all"), and the accent is the ONLY thing saying the
+     message will not reach anyone there.
+     Clear of every platform colour and of the cheer yellow, and clear of the
+     encrypted cyan it sits beside — warm violet is the remaining gap. */
+  --color-support:    oklch(76% 0.11 305);
+
+  /* Surfaces — translucent overlays, NOT opaque fills. Backdrop-independent,
+     which is exactly why naming them is what unblocks a future light mode.
+     These COLLAPSE ~6 near-duplicate alphas per step (0.02/0.025/0.03/0.04/0.05
+     → surface-1); the deltas are sub-perceptual over a dark backdrop. */
+  --color-surface-1:  rgb(255 255 255 / 0.04);
+  --color-surface-2:  rgb(255 255 255 / 0.07);
+  --color-surface-3:  rgb(255 255 255 / 0.12);
+  --color-surface-4:  rgb(255 255 255 / 0.18);
+  --color-surface-5:  rgb(255 255 255 / 0.30);  /* highlights, not panels */
+
+  /* Borders. Named `edge`, NOT `strong`: Tailwind 4 puts every --color-* in
+     ONE namespace, so --color-strong already owns `border-strong`. Renaming
+     these to `strong` silently collides with the text ladder.
+     `bright` exists because a focus ring genuinely needs more contrast than a
+     divider — it is not just "edge-strong, more so". */
+  --color-edge:        rgb(255 255 255 / 0.08);
+  --color-edge-strong: rgb(255 255 255 / 0.22);
+  --color-edge-bright: rgb(255 255 255 / 0.40);
+
+  /* Scrims — modal/lightbox backdrops. */
+  --color-scrim:        rgb(0 0 0 / 0.30);
+  --color-scrim-strong: rgb(0 0 0 / 0.50);
+  --color-scrim-heavy:  rgb(0 0 0 / 0.80);
+
+  /* OPAQUE elevation ladder — the legacy zinc fills, kept opaque on purpose.
+     These are NOT redundant with surface-*: an opaque fill and a translucent
+     overlay composite differently, so folding them onto the alpha scale would
+     be a VISIBLE change, not the sub-perceptual one the alpha collapse is.
+     Values pinned exactly, so this migration stays inert too.
+
+     They are also deliberately separate tokens from the text ladder even where
+     the value is identical (control == faint == zinc-700): coupling an
+     input's background to a text role means a later tweak to "faint" silently
+     restyles every form control. Same color now, different reasons to change. */
+  --color-canvas:         oklch(14.1% 0.005 285.823);  /* zinc-950 — page canvas,
+                                                          deep insets, and the
+                                                          backdrop-matching cutout
+                                                          ring on status dots */
+  --color-panel:          oklch(21%   0.006 285.885);  /* was zinc-900 — modal/panel fill */
+  --color-raised:         oklch(27.4% 0.006 286.033);  /* was zinc-800 — raised chip */
+  --color-control:        oklch(37%   0.013 285.805);  /* was zinc-700 (+600) — input/
+                                                          toggle fill, resting border */
+  --color-control-strong: oklch(70.5% 0.015 286.067);  /* was zinc-400 (+500) — hover/
+                                                          active border, toggle-on fill */
+
+  /* Chat-relative type. A SEPARATE AXIS from the shell's fixed-rem text-xs/sm:
+     these track the user's chat font-size slider. Because the calc() references
+     --chat-font-size rather than resolving it, changing that var at runtime
+     re-evaluates these — the slider keeps working. Never point a shell surface
+     at these, or it will resize when the viewer touches a chat setting. */
+  --text-chat-xs: calc(var(--chat-font-size, 0.875rem) * 0.72);
+  --text-chat-sm: calc(var(--chat-font-size, 0.875rem) * 0.80);
+  --text-chat-md: calc(var(--chat-font-size, 0.875rem) * 0.88);
+  --text-chat-lg: calc(var(--chat-font-size, 0.875rem) * 1.10);
+}
+
+/* Explicit dark canvas — during mobile keyboard viewport resizes the browser
+   can expose the root background before the body gradient repaints; without
+   this it flashes white */
+html {
+  background-color: var(--bg-body-end);
+  /* Stop iOS Safari from auto-inflating text on rotate/zoom (audit EP-8). */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Keyboard focus is ALWAYS visible. Many `outline-none` utilities and no
+   global rule would let Tab hold focus on an invisible position.
+   :focus-visible fires for keyboard (not pointer) focus, so mouse
+   users see no change. This file is unlayered, so this rule beats the
+   `outline-none` utility for the same property — the layering foot-gun
+   check-layering.mjs polices is, here, the mechanism, deliberately: the
+   utilities keep suppressing the POINTER outline, and this restores only the
+   keyboard one.
+   EXCEPT the composer field, excluded in the SELECTOR: browsers treat any
+   focus on an editable element as :focus-visible, so for a text field this is
+   a pointer rule too — a plain tap would draw this ring around the border that
+   already carries the field's focus (see .chat-input-field: a ring beside that
+   border reads as a blur). Keyboard focus there stays visible
+   through that same border (`focus:border-edge-bright`). */
+:focus-visible:not(.chat-input-field) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Safe-area convention (installed PWA / notched devices). Pad the bottom by AT
+   LEAST `--safe-min` (default 0) and at most the device inset, so any fixed/edge
+   element clears the home indicator instead of hand-rolling env() each time. Set
+   a minimum gap inline: `<div className="pb-safe" style={{ "--safe-min": "0.75rem" }}>`.
+   For positioning (not padding), use the same idiom in an arbitrary value, e.g.
+   `bottom-[max(1.25rem,env(safe-area-inset-bottom))]`. (No pt/pl/pr variants —
+   add one per edge if it gains a user.) */
+.pb-safe { padding-bottom: max(var(--safe-min, 0px), env(safe-area-inset-bottom)); }
+
+/* The live chat's content shadows, shared with the Matrix panels so names,
+   avatars and images sit on the theme the same way everywhere */
+.text-shadow-chat {
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 1), 0 2px 12px rgba(0, 0, 0, 0.85);
+}
+.img-shadow-chat {
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+}
+
+/* Alternating message backgrounds (the "Alternating rows" toggle → `alt-rows`
+   on <html>). Parity is a STABLE per-message flag from useChatMessages, not
+   :nth-child — position parity would re-stripe the whole list every time the
+   capped buffer trims. Subtle by design; row highlights (reply/selected/score)
+   and hover paint over it. */
+.alt-rows .chat-msg-alt { background: rgba(255, 255, 255, 0.03); }
+
+/* Behavior row tints. Each is
+   painted only while its switch is on (the class on <html> comes from the
+   registry + the layout pre-paint). They sit AFTER the alternating stripe and
+   out-specify it: as Tailwind utilities (layered) they would lose to that
+   unlayered stripe, so a mention on every other row would show no tint at all. */
+html:not(.chat-mention-hl-off) .chat-reply-me { color: #f0b464; }
+html:not(.chat-mention-hl-off) .chat-row-mention-mx { border-left: 2px solid rgb(251 191 36); padding-left: 0.875rem; }
+html:not(.chat-mention-hl-off) .chat-row-mention-mx:not([data-hl]) { background: rgb(251 191 36 / 0.1); }
+/* Equal specificity on purpose: a row can carry several of these, and the LAST
+   applicable one wins — own < upvote < mention. */
+html.chat-own-tint .chat-msg-row.chat-row-own { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+html:not(.chat-upvote-hl-off) .chat-msg-row.chat-row-up { background: rgba(153, 193, 241, 0.05); }
+html:not(.chat-mention-hl-off) .chat-msg-row.chat-row-mention { background: rgba(240, 180, 100, 0.08); }
+/* Support-event rows (tip / sub / gift) wear a per-platform tint; ChatMessage
+   puts the colour in --row-event-bg. A CLASS rule, not an inline background:
+   inline — even "transparent" — beats the alternating stripe and the hover, so
+   Behavior › Support events off would leave gaps in the striped chat.
+   After the stripe on purpose, so the tint wins while the switch is on. */
+html:not(.chat-event-hl-off) .chat-msg-row.chat-row-event { background-color: var(--row-event-bg); }
+/* Behavior › Unread dots off: the blue "something new" dots go; red mention
+   counts stay (they are about you). The chat-tab dot is hidden in chrome.css. */
+.chat-dots-off [data-unread-dot] { display: none; }
+/* Behavior › Mark first-time chatters: a small pill before the name. em-sized so it
+   follows the chat text size; text-indent 0 because an inline-block inherits the
+   row's hanging indent and would draw its text off to the left. */
+.chat-first-tag {
+  display: inline-block; text-indent: 0; vertical-align: 0.1em;
+  margin-right: 0.35em; padding: 0 0.4em; border-radius: 999px;
+  font-size: 0.72em; font-weight: 700; line-height: 1.5; letter-spacing: 0.02em;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.chat-first-off .chat-first-tag { display: none; }
+
+/* ── Community settings ────────────────────────────────────────────────────
+   The Community timeline's rows (MatrixMessageRow, class .mx-row) follow the
+   chat's own switches and add four of their own, all as classes / vars on
+   <html> so a switch never re-renders a row:
+   • Shadow — the same --chat-shadow* forms the live chat reads, so Shadow,
+     Hard shadow, strength, blur, direction and distance all apply here.
+   • Message gap — added on top of the base spacing: the slider's default (1px)
+     adds nothing, so an untouched Community keeps the base spacing.
+   • Avatars / Times (Community's own switches; live chat's default them OFF).
+   • Layout: cozy = the row's own utilities; compact = tighter heads;
+     bubbles = one tinted block per message group, in the existing surface
+     token (no new colour). These are unlayered on purpose: they must beat the
+     row's padding / hover utilities while the layout is picked. */
+.mx-row { margin-top: max(0px, calc(var(--chat-msg-gap, 1px) - 1px)); }
+.mx-text { text-shadow: var(--chat-shadow); }
+.mx-row .img-shadow-chat { filter: var(--chat-shadow-filter); }
+.mx-avatars-off .mx-avatar { display: none !important; }
+.mx-times-off .mx-time { display: none !important; }
+.alt-rows .mx-row.chat-msg-alt:hover { background: var(--color-surface-1); }
+.chat-pron-plain .mx-row .chat-pron { color: #c3cddb !important; }
+.mx-compact .mx-row[data-head] { padding-top: 0.25rem; }
+.mx-compact .mx-row:not([data-head]) { padding-top: 0; padding-bottom: 0; }
+.mx-bubbles .mx-row {
+  margin-inline: 0.5rem;
+  padding-inline: 0.75rem;
+  background: var(--color-surface-2);
+}
+.mx-bubbles .mx-row:hover { background: var(--color-surface-3); }
+/* A jumped-to row keeps its accent wash over the bubble / the stripe. */
+.mx-bubbles .mx-row[data-hl],
+.alt-rows .mx-row.chat-msg-alt[data-hl] { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.mx-bubbles .mx-row[data-head] {
+  margin-top: max(0.5rem, calc(0.5rem + var(--chat-msg-gap, 1px) - 1px));
+  padding-top: 0.375rem;
+  border-top-left-radius: 0.75rem;
+  border-top-right-radius: 0.75rem;
+}
+.mx-bubbles .mx-row[data-gend] {
+  padding-bottom: 0.375rem;
+  border-bottom-left-radius: 0.75rem;
+  border-bottom-right-radius: 0.75rem;
+}
+
+/* Live-chat message: apply the same drop-shadow the message text uses to the
+   whole ROW — text-shadow inherits to the username, timestamp, score AND the
+   row-level bits that sit outside .chat-msg-body (the "↩ reply" context chip
+   was visibly unshadowed); the non-text bits (platform dot/icon, badges,
+   avatar) get the matching drop-shadow filter. Both follow the "Shadow" toggle
+   via the --chat-shadow* vars.
+
+   EMOTES and STICKERS are both excluded, and both on purpose. Emotes:
+   a per-image filter on a fast-scrolling list is a needless compositing cost,
+   and there can be several per row. Stickers: same cost, worse — a sticker is
+   the largest image in the timeline and it GROWS when boosted, so the filter
+   would repaint a big layer on every boost. If either is ever revisited,
+   re-measure on a phone first — per-image filters are treated as expensive
+   here because of phone heat.
+   (The /chat window opts emotes IN — see .chat-window below: one desktop
+   window, no phone to heat.) */
+.chat-msg-row,
+.chat-msg-body { text-shadow: var(--chat-shadow); }
+.chat-msg-body .chat-pfp,
+.chat-msg-body .chat-badges { filter: var(--chat-shadow-filter); }
+/* The username is a <button>, and browsers' form-control styles reset
+   text-shadow on buttons (Firefox's forms.css outright; computed `none` in
+   Chrome too), so a plain name — and a font-only styled one, which sets no
+   shadow of its own and relies on inheriting — would sit flat while every word
+   beside it is lifted. Effects and gradients are unaffected: they write their
+   shadow inline. */
+.chat-msg-header > button,
+.chat-msg-row > button[data-reply-jump] { text-shadow: inherit; }
+
+/* The window's gear floats over the top-right corner: 0.5rem in from the top
+   and the right, and 28px square on screen whatever ?scale= is (a 1.75rem
+   button counter-scaled by the same factor the rem carries). The pinned card's
+   text must not run under it — but only its FIRST line or so is beside the
+   gear, so a float the size of the overlap holds that corner open and every
+   line below it gets the card's whole width.
+   The overlap, from the text box's own top-right corner — which sits 1.125rem
+   + 1px in from the right (card inset 0.375rem, border 1px, row padding
+   0.75rem) and 0.75rem + 1px down: the gear reaches 0.5rem + 28px in both. A
+   0.25rem gap is added to the width. */
+.chat-window .pin-row .chat-msg-body::before {
+  content: "";
+  float: right;
+  width: max(0px, calc(27px - 0.375rem));
+  height: max(0px, calc(27px - 0.25rem));
+}
+/* The folded tab bar's class sits on <html>, so it reaches the window too; its
+   .pin-row rule reserves room for a pill the window does not have. Keep the
+   row's own padding, which the arithmetic above assumes. */
+.chat-tabbar-hidden .chat-window .pin-row { padding-right: 0.75rem; }
+
+/* /chat window + OBS overlay gear (OverlaySettingsPanel): hidden until the
+   pointer is over the page, focused, opened, or tapped (data-shown). */
+.overlay-gear { opacity: 0; transition: opacity var(--anim-fast) var(--anim-ease); }
+.overlay-host:hover .overlay-gear,
+.overlay-gear:focus-within,
+.overlay-gear[data-shown] { opacity: 1; }
+
+/* ── The see-through /chat window (ChatWindow.tsx's root carries .chat-window).
+   It may run in a transparent browser over whatever is on the desktop, so it
+   opts into things the site deliberately does not pay for:
+   a halo on everything so it reads over any backdrop, shadowed emotes, a
+   softer highlight card, and a glass hover bar. Nothing here reaches the
+   site or the OBS source.
+   • The halo is APPENDED to the Shadow setting's own layers and is itself a
+     form of that setting (--chat-shadow-halo*), so the window's gear tunes
+     its strength and blur and its toggle switches ALL of it off: with the
+     setting off the text list is `none, none` — invalid at computed-value
+     time, so `text-shadow` falls back to the INHERITED value, which is `none`
+     only as long as no ancestor of the rows sets one — and the filter list is
+     two empty streams, which resolves to `filter`'s initial `none`. A literal
+     written in this block is one those controls cannot reach;
+     chatWindowLook.test.ts refuses it. */
+.chat-window {
+  --chat-card-base: rgba(46, 52, 76, 0.6);
+}
+.chat-window .chat-msg-row,
+.chat-window .chat-msg-body { text-shadow: var(--chat-shadow), var(--chat-shadow-halo); }
+.chat-window .chat-msg-body .chat-pfp,
+.chat-window .chat-msg-body .chat-badges,
+.chat-window .chat-msg-body .chat-emote-el { filter: var(--chat-shadow-filter); }
+/* The hover bar is glass everywhere (.row-actions), so there is no
+   window-only rule for it. */
+
+/* The platform indicator needs BOTH filters, and it is the only thing that
+   does. `filter` is one property, so two rules setting it cannot compose: a
+   saturation rule and a shadow rule on the same element simply overwrite each
+   other, and specificity decides regardless of source order. One declaration,
+   and the bar scoped to the row where it lives: the bar is a child of the ROW,
+   a sibling of `.chat-msg-body`, so `.chat-msg-body .chat-pi-bar-el` matches
+   nothing.
+   `saturate(X) none` is INVALID and drops the whole declaration — which is
+   why `--chat-shadow-filter`'s off value is EMPTY rather than the keyword
+   `none` (see settingsRegistry's applyShadow). Empty substitutes to nothing
+   here, leaving `saturate(X)`, and where the var is used alone it makes the
+   declaration invalid-at-computed-value-time, which resolves to `filter`'s
+   initial value — `none` — with no compositing layer. All four combinations
+   work. */
+/* ── The indicator splits by SHAPE, not by variant ─────────────────────────
+   Layer shadows on simple lines should be fake shadows, not rendered. The bar
+   IS a line — a 3x42 solid rect — and the dot is a solid circle. Neither has
+   an alpha mask worth blurring, so neither needs `drop-shadow`, which forces a
+   filter render surface and TWO mask blurs per element — one per row on a
+   full chat buffer, for the bar and again for the dot when it is the chosen
+   variant.
+
+   `box-shadow` draws the same shadow as a composited primitive. The radii must
+   DOUBLE to match, because box-shadow's falloff is about half as wide as
+   drop-shadow's at the same numeric radius — measured, not assumed: at equal
+   numbers the box form died out by ~15px while the filter form still had ink
+   past 25px. At 2x radius the two are within **rms 1.20 / max 6 of 255** on the
+   real 3x42 geometry, which is why `--chat-shadow-box` exists as its own form.
+   See SHADOW_BOX_SCALE in settingsRegistry.ts.
+
+   The ICON keeps the filter, and that is the whole point of splitting: it wraps
+   an SVG glyph, a genuinely variable shape whose alpha mask is what the shadow
+   is *of*. Same for `.chat-badges` and `.chat-pfp` below — images with real
+   alpha. Do NOT "simplify" those to box-shadow: it would shadow their
+   bounding box instead of their artwork.
+
+   The saturation half is still load-bearing:
+   `filter` is ONE property, so the shadow and the saturation have to share a
+   declaration or silently overwrite each other. Splitting the shadow out of
+   `filter` for the solid shapes is what lets their filter collapse to
+   saturation alone; the icon still needs both in one declaration, which is why
+   `--chat-shadow-filter`'s off value stays EMPTY rather than the keyword
+   `none` (`saturate(X) none` is invalid and drops the whole declaration).
+   The bar is scoped to the ROW, not `.chat-msg-body` — it is a sibling of the
+   body, and `.chat-msg-body .chat-pi-bar-el` matches nothing. */
+.chat-msg-row .chat-pi-bar-el,
+.chat-msg-body .chat-pi-dot-el {
+  box-shadow: var(--chat-shadow-box);
+  filter: saturate(var(--chat-pi-sat, 1));
+}
+.chat-msg-body .chat-pi-icon-el {
+  filter: saturate(var(--chat-pi-sat, 1)) var(--chat-shadow-filter);
+}
+
+/* Glass panel custom properties — settable from ChatSettings "Overlays" section */
+:root {
+  --glass-bg:     rgba(12, 16, 28, 0.82);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  /* GLASS ≠ TRANSPARENCY. --glass-bg is the translucent FILL;
+     --glass-filter is the BLUR. They are separately switchable because they
+     cost nothing alike: the fill is one more blended rect, the blur is a
+     backdrop readback plus two Gaussian passes over the element's whole area,
+     redone on every frame the backdrop changes underneath it.
+
+     OFF must be the keyword `none`, never `blur(0px)`. A zero-radius blur is
+     still a non-`none` backdrop-filter, which promotes the element and forces
+     the readback — the work survives the setting that was supposed to remove
+     it. A Blur slider dragged to 0 buys a 0px blur, not no blur.
+
+     The pair mirrors --panel-shadow: OFF writes an inline override,
+     ON removes it so this :root value applies again. Nothing else may declare
+     `backdrop-filter` — glassSurface.test.ts enforces that, because a
+     hand-rolled blur is unreachable by this switch. */
+  --glass-filter: blur(var(--glass-blur, 14px));
+  /* Pinned banner — glass-style frosted surface (composes --glass-bg/--glass-blur,
+     the same universal glass surface every other .glass panel uses).
+     --pin-shadow floats it off the chat: the banner is an inset card, so the
+     shadow is all-round — a negative spread would hide its sides. */
+  --pin-shadow:   0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+/* Shared glass panel. --glass-blur is set before first paint by the layout.tsx
+   pre-paint script and thereafter by the settings registry; the 14px here is the
+   cold-profile fallback only. Components that compose the glass look inline read
+   the same property so they track the Blur slider too. */
+.glass {
+  background: var(--glass-bg);
+  /* Standard property ONLY — do not hand-add -webkit-backdrop-filter here.
+     Lightning CSS (Tailwind 4's compiler) treats the standard+prefixed pair as
+     duplicate declarations, keeps the LAST one, and shipped `.glass` with only
+     the -webkit- form — which Firefox ignores, killing the blur on every glass
+     overlay. The compiler emits vendor prefixes itself from the browser
+     targets. */
+  backdrop-filter: var(--glass-filter);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+/* ── Row action bar — the hover toolbar that is NOT a pop-up ────────────────
+   Chat rows and Matrix rows each float a small bar of per-message actions over
+   their own top-right corner. Two cost rules shape it:
+
+   1. A row toolbar sits on the chat surface, and a blurred surface is a
+      backdrop readback per element — affordable for one visible bar, not for
+      every row.
+   2. The bar is display-gated, never `opacity-0`: an invisible-but-painted bar
+      on EVERY message in the buffer would carry a live backdrop-filter layer
+      per row, all invisible — enough to make scrolling choppy on a phone.
+
+   So: opaque, and genuinely unpainted while hidden. The fade survives because
+   `display` is transitioned with `transition-behavior: allow-discrete` — the
+   element only reaches `none` after the opacity ramp finishes — and
+   `@starting-style` supplies the entry ramp a display change would otherwise
+   skip. Browsers without either simply cut, which is the honest degradation:
+   the bar is a pointer affordance, so anything without hover never sees it.
+
+   Both properties are declared as LONGHANDS on purpose. Our browserslist still
+   names firefox 100 / safari 15.4, which predate both features, and packing
+   `allow-discrete` into the `transition` shorthand invites Lightning CSS to
+   drop the whole declaration while lowering it for those targets. Kept apart,
+   the fallback is a missing fade rather than a missing transition. */
+.row-actions {
+  display: none;
+  align-items: center;
+  /* Glass, like the other pop-ups. With the display gate below only the hovered
+     bar exists, so this is one blur on screen at most. Through the one glass
+     switch, never a literal blur (glassSurface.test.ts). */
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-filter);
+  /* A tight shadow, not `.glass`'s 0 8px 32px. Raster cost scales with the
+     blur radius, and at most one of these is ever painted. */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition-property: opacity, display;
+  transition-duration: var(--anim-fast);
+  transition-timing-function: var(--anim-ease);
+  transition-behavior: allow-discrete;
+}
+/* THE DOWNVOTE FADE DIMS THE MESSAGE, NOT ITS CONTROLS: the hover controls of a
+   downvoted message must be as solid as an upvoted one's.
+
+   The fade is not `opacity` on the ROW. `opacity` establishes a group and
+   applies to the WHOLE SUBTREE, so the toolbar faded with the message — and a
+   child cannot opt out, because there is no way to undo a parent's opacity from
+   inside it. Upvoted rows sit at opacity 1, which is why only downvoted ones
+   looked wrong.
+
+   So the row keeps opacity 1 and publishes `--row-dim` instead, which the
+   dimmable children read. The excluded children are exactly the CONTROLS: the
+   toolbar, and the sticker-boost button (a `button`, and the only direct-child
+   button on the row) whose own opacity utilities drive its reveal and must not
+   be overridden here.
+
+   The row's own background is not dimmed either — alt-row striping and
+   the event tint hold their colour while the text fades. That is deliberate:
+   the fade is a statement about the MESSAGE, not about the stripe it sits on. */
+.chat-msg-row[data-dim] > *:not(.row-actions):not(button) {
+  opacity: var(--row-dim, 1);
+  /* The transition lived on `.chat-msg-fade` on the row; it has to follow the
+     property it animates or the fade becomes a jump. */
+  transition: opacity var(--anim-slow) var(--anim-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-msg-row[data-dim] > *:not(.row-actions):not(button) { transition-duration: 0.01ms; }
+}
+
+/* HOVER IS FOR POINTERS ONLY.
+   A touch device has no way to express "not hovering": mobile browsers apply
+   :hover on tap and hold it until you tap somewhere else. An ungated reveal
+   would give a phone the toolbar from a plain tap, and a long press the
+   toolbar AND the context menu, because the same touch does both.
+
+   That is not only visual noise. MEASURED on the live site at 390x844x3: the
+   bar's box starts 28.9px ABOVE its own row's top edge, i.e. entirely inside
+   the message above it, and all five buttons hit-test there. So the sequence
+   was: tap message A → A's invisible toolbar appears over message B → your next
+   tap on B lands on A's Reply button → the composer takes focus → the keyboard
+   opens. That is ticket 14's "tapping on a message can open the keyboard",
+   which is why the two tickets are one fix: nothing about the keyboard is
+   wrong, the tap really was a Reply press.
+
+   Gating on (hover: hover) is robust to HOW the phone decided it was hovering,
+   because on a touch-only device the rule no longer exists at all. */
+@media (hover: hover) {
+  /* Hovering the bar keeps the row hovered — :hover matches every ancestor of
+     the element under the pointer — so the row is the only condition needed,
+     even where the bar overhangs the row's own box. */
+  .group:hover > .row-actions {
+    display: flex;
+    opacity: 1;
+  }
+  @starting-style {
+    .group:hover > .row-actions { opacity: 0; }
+  }
+}
+
+/* Touch reveal: the SAME toolbar, opened deliberately by a long press. The row
+   owns the flag; the bar just reflects it.
+   Occluding the neighbouring row is fine HERE, because the user asked for a
+   menu — the defect would only be a toolbar that appears uninvited. */
+.row-actions[data-open] {
+  display: flex;
+  opacity: 1;
+}
+@starting-style {
+  .row-actions[data-open] { opacity: 0; }
+}
+
+/* Keyboard reveal — the third path in, because the other two are pointer
+   gestures and display:none keeps the bar's buttons OUT of the tab order
+   entirely. Focus enters the row through its body tab stops (the username
+   button here, MatrixMessageRow's body buttons there), the bar becomes real,
+   and the next Tab lands in it. rowActionsKeyboard.test.ts holds all of this.
+
+   `:has(:focus-visible)`, NOT `:focus-within`: Android Chrome focuses a
+   tapped <button>, so :focus-within would re-open the uninvited-toolbar
+   hole from a plain tap on a username. Pointer focus fails :focus-visible;
+   keyboard focus matches it. Pre-:has Firefox (<121) degrades to the plain
+   behavior — same accepted degradation as the Bar's data-chrome-grow :has()
+   rule (chrome.css).
+   Deliberately OUTSIDE the (hover: hover) gate: a touch device driven by an
+   external keyboard is exactly who needs this. */
+.group:has(:focus-visible) > .row-actions {
+  display: flex;
+  opacity: 1;
+}
+@starting-style {
+  .group:has(:focus-visible) > .row-actions { opacity: 0; }
+}
+
+/* A pointer target sized for a fingertip. The buttons measured 22–27px wide on
+   a phone, against a 44px guideline, and they were never meant to be tapped —
+   they were a mouse affordance that touch reached by accident. min-* rather
+   than width/height so the Matrix copy's `w-8 h-8` still sets the desktop size
+   (and so this does not collide with a utility for the same property, which is
+   what check-layering exists to catch). 44, matching the guideline this
+   comment has cited all along — it shipped at 40 for a week because nothing
+   held the number (touchTargets.test.ts does now). */
+@media (pointer: coarse) {
+  .row-actions button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Borrowed hit area for tap-only controls whose RENDERED box is load-bearing
+     (the nudge ✕s sit in measured rows) — a centered 44×44 pseudo-element joins
+     the button's own hit test without costing a pixel of layout. Coarse-only:
+     on a fine pointer the invisible overhang would swallow clicks a mouse can
+     actually aim between. */
+  .tap-hit-44 { position: relative; }
+  .tap-hit-44::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+}
+/* The money buttons' touch area (round 2b): 44px tall, and wide only to half
+   of their 6px gap, so neighbours' areas meet but never overlap (a wider one
+   took the next button's edge — the 2a window-band lesson). */
+@media (pointer: coarse) {
+  .money-hit::after { content: ""; position: absolute; inset: -8px -3px; }
+}
+
+/* Rounded corners — OFF by default (square). The .bb-panel utility classes
+   carry the correct per-corner radii (outer corners only; meeting corners stay
+   square); when squared we force them all to 0. Toggled via `panels-square` on
+   <html>, set by the pre-paint script unless the user opted into rounding. */
+html.panels-square .bb-panel { border-radius: 0 !important; }
+
+/* Chat panel top edge. Desktop draws the full frame; the mobile seam block
+   below zeroes it. This lives here rather than in StreamView's inline style
+   because an inline width would beat any media query. */
+.bb-chat-panel { border-top-width: var(--frame-width, 2px); }
+
+/* ── The panel float shadow ─────────────────────────────────────────────────
+   The shadow that lifts the video panel and the chat panel off the page. A
+   variable rather than an inline style on the two elements: an inline
+   declaration beats every layer and every media query, so no setting could
+   reach it — the same trap this file's border-top comment above records.
+
+   Two layers, measured per pixel at the real geometry: this shadow is almost
+   all of the box-shadow paint on mobile, and a third, wider layer
+   (`0 44px 96px rgba(2,0,8,0.38)`) is most of that paint while changing at
+   most 3 of 255 anywhere on screen — so it is not here. Two layers is not a
+   thinned-out version of the look; it IS the look.
+   Kept as a two-scale pair (a 24px contact shadow + a 56px ambient one)
+   because one blur cannot be both a tight core and a wide halo. A single
+   56px layer would mean inventing an alpha; don't trade a derived pair for a
+   guessed scalar.
+
+   `applyShadow` (settingsRegistry.ts) sets `none` here when the Shadow toggle
+   is off, mirrored by the layout.tsx pre-paint script. */
+:root {
+  --panel-shadow: 0 6px 24px rgba(0, 0, 0, 0.55), 0 20px 56px rgba(0, 0, 0, 0.65);
+}
+.bb-panel { box-shadow: var(--panel-shadow); }
+
+/* Phones never get it, at any setting. So this is NOT the toggle's mobile
+   default (which a user can turn back on); it is unconditional, and it is a
+   plain media query so no JS runs and there is no first-paint window where the
+   shadow exists.
+   The query is `deviceClass()`'s, character for character — panelShadow.test.ts
+   pins that. A phone's panel separation comes from the seam gradient,
+   the tab bar's shade and the real frame border, none of which need a blur. */
+@media (pointer: coarse) and (max-width: 1024px) {
+  .bb-panel { box-shadow: none; }
+}
+
+/* ── The separator shade ───────────────────────────────────────────────────
+   ONE definition of "a layer ends here and the chat surface begins below it",
+   used by every boundary that stacks over the chat: the video panel on phones
+   (`.bb-video-col::after`) and every top Bar at every width
+   (chrome.css, `[data-seam]`). One shadow, so the two boundaries a phone
+   shows at once match.
+
+   It needs TWO forms, because neither form works in both places:
+     • the seam has no box to cast from — its source is a 14px sliver, and any
+       negative spread shrinks that to a negative height, so it renders
+       literally nothing (measured: pixels identical to no shadow at all);
+     • the tab bar is `overflow: hidden`, so it clips a ::after of its own
+       before the shade ever reaches the rows below it.
+   So the shade is a gradient at the seam and a box-shadow on the bar, and the
+   two were matched BY MEASUREMENT rather than by eye — rendered on a mid-grey
+   and compared row by row, they track within 0.03 alpha for the whole visible
+   depth (the box-shadow's only difference is a ≤0.04 tail past 13px). Change
+   one and you must re-match the other; the whole point is that a phone showing
+   both boundaries at once shows the same shadow twice. */
+:root {
+  --seam-shade-h: 14px;
+  --seam-shade: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.55) 0%,
+    rgba(0, 0, 0, 0.24) 40%,
+    rgba(0, 0, 0, 0) 100%
+  );
+  --seam-shade-box: 0 6px 13px -3px rgba(0, 0, 0, 0.8);
+}
+
+/* The live message area's BOTTOM edge (the sunken edge at the top AND the
+   bottom). The same separator shade the chat tab bar casts at
+   the top — the gradient form, flipped — drawn on the message area, not on the
+   typing bar, so the bar's own look is untouched. applySeam sets --seam-shade
+   to `none` when the switch is off, which removes this too; the depth slider
+   scales --seam-shade-h. pointer-events: none keeps jump-to-live and the last
+   row clickable. */
+/* A light darkening at the TOP of the message area (the top fade darkens even
+   without shadows). The fade is a mask — rows turn see-through —
+   which over a light tint or glass shows nothing; this gives the edge. Same
+   switch ("Fade chat at the top", part of Low power), starts below a pinned
+   message (--chat-fade-top, set on the area), under the pin (z 10), never
+   takes a click. Light (0.22) because the tab bar's separator shade already
+   darkens the first ~13px. */
+:root:not(.chat-fade-off) .chat-msg-area::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: var(--chat-fade-top, 0px);
+  height: var(--chat-fade-h, 64px);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.22), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+.chat-msg-area::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: var(--seam-shade-h);
+  background: var(--seam-shade);
+  transform: scaleY(-1);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── Mobile seam — video/chat layer separation ──────────────────────────────
+   On phones the two panels meet edge-to-edge with no gap, and the whole chat
+   side paints ABOVE the video column: every Bar is position:relative;
+   z-index:10 (chrome.css) and `.chat-scroll-layer` carries
+   `transform: translateZ(0)` (the hairline-shimmer mitigation
+   further down), every one of which is a stacking context later in tree
+   order. So a shadow on the video frame itself — offset downward — never
+   reaches the chat panel at all: a 40px opaque spread shadow on the frame
+   puts ZERO pixels over the chat surface, only over the page gutters beside
+   it.
+
+   The video casts DOWN onto chat, so the column draws it with its own ::after
+   rather than the frame growing a shadow:
+     • the frame's `overflow-hidden` would clip a ::after of its own —
+       the column doesn't clip;
+     • the frame keeps `z-index: auto`, so no new stacking context is created
+       to trap the player's own overlays (the video bars are Bars: z 10 in flow,
+       30 as overlays);
+     • collapsing the column in full-screen community mode (height:0,
+       overflow:hidden, opacity:0) hides the seam for free.
+   `z-index: 11` orders the ::after inside the column. `.bb-video-col` itself
+   carries `z-index: 12` (below, in the phone block) — a stacking context of
+   its own, which TRAPS `::after`'s 11 inside it, so the column's OWN 12 is
+   what has to outrank the Bars — see the phone block's comment.
+   `position` here is unlayered: a Tailwind `relative`/`absolute` added to
+   .bb-video-col would silently lose to it (check-layering guards the
+   combination). */
+@media (max-width: 767px) {
+  /* The video column paints ABOVE the chat panel on phones.
+     z-index: 12, not 1: with no keyboard up the chat panel is UNTRANSFORMED, so
+     it is not its own stacking context, and its top Bar (`.chrome-bar`, z:10,
+     chrome.css) paints at the SAME root level as this column — a column
+     z-index has to outrank that 10 directly, or the Bar wins and the seam
+     reverses. WHILE THE KEYBOARD IS UP the panel's own lift
+     (translateY(−K), useKeyboardLift) makes IT a stacking context of its
+     own, so its whole subtree — the Bars' z:10 included — composites as ONE
+     unit at that context's level, which still sits below this column's 12.
+     12 wins both ways, which is what tucks the chat top BEHIND the column.
+     The column gets an OPAQUE backing because occlusion is only real if the
+     occluder doesn't show the tucked content through; the top radius matches
+     the video panel's rounded-t-xl so no square corner peeks. ::before
+     extends the backing over the page's top padding strip — the panel can
+     rise above the column's own top with a tall keyboard, and StreamView's
+     root overflow-hidden only clips at the VIEWPORT edge. */
+  /* The backing is the PAGE GRADIENT itself, sized to the body (100vw × the
+     h-app 100dvh) and shifted back by the column's own offset (StreamView's
+     --panel-gap padding), so it lines up with the page behind it and cannot
+     be seen at rest — only its occlusion is. A flat colour would put the
+     phone video bars on a different colour than everywhere else and show the
+     ::before strip as a block above the see-through top bar. The column
+     itself never transforms (the CHAT panel lifts), so the alignment holds
+     with the keyboard up. */
+  .bb-video-col {
+    position: relative;
+    z-index: 12;
+    background: var(--bg-page);
+    background-size: 100vw 100dvh;
+    background-position: calc(-1 * var(--panel-gap, 12px)) calc(-1 * var(--panel-gap, 12px));
+    background-repeat: no-repeat;
+    background-color: var(--bg-body-end);
+    border-radius: 0.75rem 0.75rem 0 0;
+  }
+  .bb-video-col::before {
+    content: "";
+    position: absolute;
+    inset: auto 0 100% 0;
+    height: var(--panel-gap, 12px);
+    background: var(--bg-page);
+    background-size: 100vw 100dvh;
+    background-position: calc(-1 * var(--panel-gap, 12px)) 0;
+    background-repeat: no-repeat;
+    background-color: var(--bg-body-end);
+  }
+  .bb-video-col::after {
+    content: "";
+    position: absolute;
+    inset: 100% 0 auto 0;
+    height: var(--seam-shade-h);
+    z-index: 11;
+    pointer-events: none;
+    background: var(--seam-shade);
+  }
+  /* Keyboard ramp: keyboard up → the COLUMN translates up so the top
+     bar clears the viewport entirely, not just by its own token. Above the
+     bar, inside the column's box, sit two more things: StreamView's root
+     `--panel-gap` padding (12px default) and the video frame's
+     `--frame-width` border (2px default) — the token alone stops 14px short
+     and leaves a clipped, opaque, inert strip of the bar on screen.
+     --chrome-top-h + --panel-gap + --frame-width = the top bar fully exits
+     and the video's top edge lands flush at viewport y=0. There is ONE
+     transform, on the COLUMN — every descendant rises by that SAME three-term
+     distance (~50px at defaults: 36 + 12 + 2), the meta bar included.
+     The meta bar stays on screen (the revenue rule) not because its own
+     distance is smaller, but because rising the full distance still leaves
+     it inside the viewport. The chat's visible band grows because the
+     column's bottom edge rose by the same amount. A transform, not a flow
+     change — barVisibility does not know the keyboard exists. Driven by
+     html.kb-open (the ONE keyboard truth, useViewportHeightVar).
+
+     Two-value attribute, not a boolean (StreamView): [data-kb-ramp] (either
+     value) keeps the TRANSFORM armed even through a panel-resize snap
+     (`onToggleFull` reaches `applyMode` on mobile too, unlike theatre), so
+     the column never un-translates mid-snap. [data-kb-ramp="anim"]
+     additionally arms the TRANSITION — and only "anim" does, because the
+     snap's own Tailwind transition-[flex,width,opacity] utility shares this
+     element and is unlayered-vs-layered on `transition` with it; "anim" and
+     the snap's utility are gated on the same `snapping` boolean in
+     StreamView, so they are mutually exclusive by construction and never
+     actually collide (check-layering.mjs's ALLOW entry for this file records
+     the same proof). */
+  .bb-video-col[data-kb-ramp="anim"] {
+    transition: transform var(--anim-default) var(--anim-ease);
+  }
+  /* The amount is `--pane-ceiling-rise`, declared on the ramp HOST just
+     below, not spelled out here — a window layer inside the chat panel has to
+     subtract exactly this distance to find its ceiling, and two hand-copied
+     calc()s would drift the moment one token changed. One formula, two
+     readers (chrome.css's `.chrome-window-layer` folds it into --pane-ceiling). */
+  html.kb-open .bb-video-col[data-kb-ramp] {
+    transform: translateY(calc(-1 * var(--pane-ceiling-rise)));
+  }
+  /* StreamView's root sets [data-kb-ramp-host] from the SAME boolean that
+     arms [data-kb-ramp] on the column, and it is an ancestor of both the
+     column and the chat panel — so the column's transform and the panel's
+     window layers read one inherited value. Gated, not unconditional: with
+     the bars hidden the column does not ramp, nothing rises above the pane,
+     and a layer that subtracted this anyway would cap itself ~50px low. */
+  [data-kb-ramp-host] {
+    --pane-ceiling-rise: calc(var(--chrome-top-h) + var(--panel-gap, 12px) + var(--frame-width, 2px));
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bb-video-col[data-kb-ramp="anim"] { transition: none; }
+  }
+  /* The seam hairline is the video frame's bottom border; a top border here
+     would double it 2px lower. Zeroing it in the media query (not the
+     `isMobile ? 0` inline style this replaces) also closes the SSR window —
+     server HTML is desktop-first, so phones painted that second hairline
+     until hydration. */
+  .bb-chat-panel { border-top-width: 0; }
+}
+
+/* Video player — true "contain" sizing so the embed is NEVER squished out of
+   16:9 (which makes the iframe letterbox into harsh black bars) and is NEVER
+   cropped. On mobile it's a natural full-width 16:9 block and the page scrolls.
+
+   On desktop the LEFT COLUMN is the size container (container-type:size), so the
+   video is measured against the full available column box — both its width and
+   its height. Two layout modes:
+
+   • player-attached (normal view): the frame is content-height and the bars HUG
+     the video — top bar directly on the video, bottom bar directly under it, as
+     one top-aligned block. The video is the LARGEST 16:9 that fits the column
+     width AND the column height minus the bars (--video-chrome). Any leftover is
+     clean page-coloured space BELOW the block (never a gap between bar & video,
+     never black letterbox bars inside the player).
+
+   • player-fill (theatre / bars-hidden): the frame fills the column and the
+     video is the largest 16:9 centered in it (bars are absolute overlays or
+     gone, so there's no chrome to subtract).
+
+   This is what keeps ultrawide + mobile-landscape viewers from losing video.
+
+   TWO ELEMENTS SHARE THE JOB. The panel's
+   flex child is `.player-fold-region` (chrome.css — the grid that collapses on
+   fold), and `.player-area` is that grid's ITEM. A grid item cannot answer its
+   grandparent's flex container, so each mode's FLEX behaviour is declared on the
+   region and each mode's inner layout stays on `.player-area`. Putting `flex` on
+   `.player-area` instead is silently inert: it de-centres fill mode and clips
+   attached mode. Grid items stretch by default, so the
+   region's height passes straight through its 1fr row to `.player-area`. */
+.player-area { position: relative; }
+.player-box  { position: relative; width: 100%; aspect-ratio: 16 / 9; }
+/* Radio fits its content on EVERY viewport — a 16:9 box under a one-row
+   transport bar is dead black space on a phone. The desktop block below adds
+   the column-height clamp + the avail probe; this is the base both share. */
+.player-radio .player-box { aspect-ratio: auto; height: auto; }
+.player-radio .player-box > div { position: static; }
+/* Folded: the frame is exactly its top bar. */
+.bb-panel.player-folded { flex: none; }
+@media (min-width: 768px) {
+  .bb-video-col {
+    container-type: size;
+    /* The chrome the attached video leaves room for: the two bar tokens plus
+       the frame's two borders. A SUM, not a measurement — the bars are exactly
+       their tokens tall, so a ResizeObserver reading offsetHeight would only
+       measure a value the stylesheet already knows.
+       TWO readers: attached mode, and radio (the .player-radio max-height and
+       the .radio-avail-probe below). Fill mode (theatre) reads none of it.
+       Desktop compact keeps the video ATTACHED with the bars parked as
+       overlays: `.bars-parked` below shrinks the sum
+       to the frame borders alone for both readers, so the video and the radio
+       card grow by the two bar heights while the dock keeps its space. */
+    --video-chrome: calc(var(--chrome-top-h) + var(--chrome-bottom-h) + 2 * var(--frame-width, 2px));
+  }
+  /* Desktop compact with the dock kept: the bars are
+     overlays, so the attached video's chrome allowance is the frame alone —
+     the video is the largest 16:9 in the column minus the dock's reserved
+     height, and the dock keeps its space. A custom property only (this file is
+     unlayered; check-layering). */
+  .bb-video-col.bars-parked { --video-chrome: calc(2 * var(--frame-width, 2px)); }
+
+  /* The space beside (attached) or around (fill) the 16:9 box is the video's letterbox: black,
+     never the page background showing through (white on a light background theme). */
+  .player-attached .player-area,
+  .player-fill .player-area { background: #000; }
+
+  /* Attached: bars hug the video; sized from the column minus the bar chrome. */
+  .player-attached .player-fold-region { flex: none; }
+  .player-attached .player-area {
+    display: flex;
+    justify-content: center;
+  }
+  .player-attached .player-box {
+    /* Available height = column minus the bar chrome and the feed's reserved
+       minimum (--feed-height, set by the desktop drag handle; 0 = pure responsive). */
+    --video-avail: calc(100cqh - var(--video-chrome) - var(--feed-height, 0px));
+    aspect-ratio: auto;
+    width:  min(100cqw, calc(var(--video-avail) * 16 / 9));
+    height: min(var(--video-avail), calc(100cqw * 9 / 16));
+  }
+
+  /* Fill: video centered in the whole frame (theatre, or bars hidden). */
+  .player-fill .player-fold-region {
+    flex: 1 1 0%;
+    min-height: 0;
+  }
+  .player-fill .player-area {
+    display: flex;
+  }
+  .player-fill .player-box {
+    aspect-ratio: auto;
+    margin: auto;
+    width:  min(100cqw, calc(100cqh * 16 / 9));
+    height: min(100cqh, calc(100cqw * 9 / 16));
+  }
+
+  /* Radio: NOT locked to 16:9 — full width, and the box FITS the panel (never
+     taller than the player itself; collapsed fits the row). height:auto + the
+     static override below let the CONTENT size the box — the expanded panel
+     and the collapsed bar each bring their own fixed height, and everything
+     left over goes to the dock.
+
+     The max-height calc is the space the column actually has (drag up →
+     --feed-height grows → less room); RadioPlayer measures it via
+     .radio-avail-probe and SNAPS to the collapsed view when the expanded
+     panel no longer fits — the drag forms the collapsed view rather than
+     squishing the panel. The max(…,14px) keeps a thin always-grabbable
+     handle strip even with the dock faded. */
+  .player-radio .player-fold-region { flex: none; }
+  .player-radio .player-area {
+    display: flex;
+    justify-content: center;
+  }
+  .player-radio .player-box {
+    aspect-ratio: auto;
+    width: 100%;
+    height: auto;
+    max-height: calc(100cqh - var(--video-chrome) - max(var(--feed-height, 0px), 14px));
+    overflow: hidden;
+  }
+  /* The player slot's inset-0 wrapper — static here so radio content can
+     drive the box height (every other tab keeps the absolute fill). */
+  .player-radio .player-box > div {
+    position: static;
+  }
+  /* Invisible sizer: its height IS the calc above, measured by RadioPlayer
+     (a content-sized box cannot be asked how much room it COULD have had). */
+  .radio-avail-probe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: calc(100cqh - var(--video-chrome) - max(var(--feed-height, 0px), 14px));
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
+/* Under-video feed ticker (FeedPanel mode="ticker"): a seamless horizontal
+   marquee. The track holds the items duplicated; translating it -50% loops
+   without a seam. --feed-ticker-dur controls speed; pauses on hover. */
+.feed-ticker-track {
+  display: inline-flex;
+  white-space: nowrap;
+  will-change: transform;
+  animation: feed-marquee var(--feed-ticker-dur, 45s) linear infinite;
+}
+.feed-ticker:hover .feed-ticker-track {
+  animation-play-state: paused;
+}
+/* Off-screen / faded-out fence (FeedPanel sets this from `active` + an
+   IntersectionObserver). Without it the infinite crawl keeps compositing
+   through StreamView's opacity-0 fade and the community-mode width collapse —
+   opacity does not stop an animation, and an invisible element still
+   intersects. Paused (not removed) so the crawl resumes where it left off. */
+.feed-ticker-track.feed-ticker-paused {
+  animation-play-state: paused;
+}
+/* Radio DJ-state level meter (NowPlaying). Bars scale from --radio-level
+   (0–1, written by a visibility-fenced rAF loop). Static under
+   prefers-reduced-motion — the component skips the loop entirely. */
+.radio-level span {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--radio-accent, var(--accent));
+  height: 100%;
+  transform-origin: bottom;
+  transform: scaleY(calc(0.15 + var(--radio-level, 0) * 0.85));
+}
+.radio-level span:nth-child(2) { transform: scaleY(calc(0.1 + var(--radio-level, 0) * 0.6)); }
+.radio-level span:nth-child(4) { transform: scaleY(calc(0.1 + var(--radio-level, 0) * 0.7)); }
+.radio-level span:nth-child(5) { transform: scaleY(calc(0.05 + var(--radio-level, 0) * 0.45)); }
+
+@keyframes feed-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .feed-ticker-track { animation: none; }
+}
+
+/* Skeleton placeholders (Skeleton.tsx, audit EP-4) — a shimmering block that
+   reserves the shape of still-loading content. Static base + a sweeping
+   highlight; the sweep is stopped under reduced-motion (below), leaving the
+   base tint so the shape still reads. */
+.skeleton {
+  background-color: rgba(255, 255, 255, 0.05);
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 30%,
+    rgba(255, 255, 255, 0.06) 50%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-sweep {
+  from { background-position: 180% 0; }
+  to   { background-position: -80% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; background-image: none; }
+}
+
+/* Touch press feedback (audit EP-8) — a quick tactile dip for primary tap
+   targets, which otherwise have hover-only affordances that never fire on
+   touch. Deliberately no `transition` so it composes with each button's own
+   transition-colors/filter (which it would otherwise override) — the dip snaps
+   in/out on press, which reads as crisp native tap feedback. Transform is
+   dropped under reduced-motion; the opacity dip stays. */
+.tap-press:active {
+  transform: translateY(0.5px) scale(0.98);
+  opacity: 0.85;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tap-press:active { transform: none; }
+}
+
+/* Extracted full-article body (FeedPanel reader, sanitized server-side). */
+.feed-article p { margin: 0 0 0.85em; }
+.feed-article h1, .feed-article h2 { font-weight: 600; margin: 1em 0 0.4em; color: rgba(255,255,255,0.9); }
+.feed-article a { color: var(--accent); text-decoration: underline; }
+.feed-article img { max-width: 100%; height: auto; border-radius: 0.375rem; margin: 0.5em 0; }
+.feed-article figure { margin: 0.75em 0; }
+.feed-article figcaption { font-size: 0.82em; color: rgba(255, 255, 255, 0.4); }
+.feed-article ul, .feed-article ol { margin: 0 0 0.85em 1.25em; list-style: revert; }
+.feed-article li { margin: 0.2em 0; }
+.feed-article blockquote {
+  border-left: 2px solid rgba(255, 255, 255, 0.2);
+  padding-left: 0.75em;
+  margin: 0.75em 0;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Platform indicator — bar/dot/icon/none controlled by class on <html> */
+/* Default (no class) = bar: bar visible, dot/icon hidden */
+.chat-pi-dot-el  { display: none !important; }
+.chat-pi-icon-el { display: none !important; }
+
+/* Indicator saturation lives with the indicator's drop-shadow, in ONE `filter`
+   declaration up at the message-row rules — see the S-08/S-09 note there. A
+   second rule setting `filter` here is exactly what made both of them dead. */
+
+.chat-pi-dot .chat-pi-bar-el  { display: none !important; }
+.chat-pi-dot .chat-pi-dot-el  { display: inline-block !important; }
+.chat-pi-dot .chat-msg-row    { padding-left: 0.5rem !important; }
+
+.chat-pi-icon .chat-pi-bar-el  { display: none !important; }
+.chat-pi-icon .chat-pi-icon-el { display: inline-flex !important; }
+.chat-pi-icon .chat-msg-row    { padding-left: 0.5rem !important; }
+
+.chat-pi-none .chat-pi-bar-el { display: none !important; }
+.chat-pi-none .chat-msg-row   { padding-left: 0.5rem !important; }
+
+/* Cross-post indicator color cycle — chat-pi-cycle-N is set per message by
+   ChatMessage together with --pi-c1..--pi-cN (the site's blue first, then the
+   destination platforms' colors; single routed destinations cycle too). One
+   keyframe family animates both background-color (bar/dot) and color (icon).
+   Evenly spaced stops with no holds = a smooth, constantly-morphing blend
+   (~0.6s per color leg). html.chat-pi-nocycle (the "Animate multi-platform"
+   toggle, default on) freezes it at the inline first color (the site's blue). */
+.chat-pi-cycle-2 { animation: chat-pi-cycle-2 1.2s linear infinite; }
+.chat-pi-cycle-3 { animation: chat-pi-cycle-3 1.8s linear infinite; }
+.chat-pi-cycle-4 { animation: chat-pi-cycle-4 2.4s linear infinite; }
+.chat-pi-cycle-5 { animation: chat-pi-cycle-5 3s linear infinite; }
+.chat-pi-nocycle .chat-pi-cycle-2,
+.chat-pi-nocycle .chat-pi-cycle-3,
+.chat-pi-nocycle .chat-pi-cycle-4,
+.chat-pi-nocycle .chat-pi-cycle-5 { animation: none; }
+
+/* Off-screen fence (animFence.ts): rows outside the viewport carry
+   data-anim-off, pausing every per-row INFINITE animation — the indicator
+   cycle and the token-store username styles. Most running cycles on a full
+   chat page are off-screen scrollback. !important is required for the
+   username styles: their `animation` shorthand is an INLINE style (it resets
+   animation-play-state to running and inline beats the stylesheet). Paused,
+   not none, so scrolling back resumes mid-cycle with no restart snap.
+   `[data-anim-off].un-anim` is the element ITSELF: a styled name outside chat
+   is fenced on its own span (useAnimFenceRef). */
+[data-anim-off] .chat-pi-cycle-2,
+[data-anim-off] .chat-pi-cycle-3,
+[data-anim-off] .chat-pi-cycle-4,
+[data-anim-off] .chat-pi-cycle-5,
+[data-anim-off] .un-anim,
+[data-anim-off].un-anim { animation-play-state: paused !important; }
+@keyframes chat-pi-cycle-2 {
+  0%    { background-color: var(--pi-c1); color: var(--pi-c1); }
+  50%   { background-color: var(--pi-c2); color: var(--pi-c2); }
+  100%  { background-color: var(--pi-c1); color: var(--pi-c1); }
+}
+@keyframes chat-pi-cycle-3 {
+  0%     { background-color: var(--pi-c1); color: var(--pi-c1); }
+  33.3%  { background-color: var(--pi-c2); color: var(--pi-c2); }
+  66.7%  { background-color: var(--pi-c3); color: var(--pi-c3); }
+  100%   { background-color: var(--pi-c1); color: var(--pi-c1); }
+}
+@keyframes chat-pi-cycle-4 {
+  0%    { background-color: var(--pi-c1); color: var(--pi-c1); }
+  25%   { background-color: var(--pi-c2); color: var(--pi-c2); }
+  50%   { background-color: var(--pi-c3); color: var(--pi-c3); }
+  75%   { background-color: var(--pi-c4); color: var(--pi-c4); }
+  100%  { background-color: var(--pi-c1); color: var(--pi-c1); }
+}
+@keyframes chat-pi-cycle-5 {
+  0%    { background-color: var(--pi-c1); color: var(--pi-c1); }
+  20%   { background-color: var(--pi-c2); color: var(--pi-c2); }
+  40%   { background-color: var(--pi-c3); color: var(--pi-c3); }
+  60%   { background-color: var(--pi-c4); color: var(--pi-c4); }
+  80%   { background-color: var(--pi-c5); color: var(--pi-c5); }
+  100%  { background-color: var(--pi-c1); color: var(--pi-c1); }
+}
+
+/* The avatar RING cycles the same cross-post colours for multi-platform
+   messages — ring mode hides the marker, so the ring is the only place left to
+   show it. The ring element
+   carries the row's chat-pi-cycle-N class, so the off-screen fence above
+   already pauses it; the marker's own keyframes (background + colour) must
+   never run on an avatar, so outside ring mode it has no animation, and in
+   ring mode it animates only the registered --ring-c. */
+@property --ring-c { syntax: "<color>"; inherits: false; initial-value: transparent; }
+.chat-pfp-ring-el.chat-pi-cycle-2,
+.chat-pfp-ring-el.chat-pi-cycle-3,
+.chat-pfp-ring-el.chat-pi-cycle-4,
+.chat-pfp-ring-el.chat-pi-cycle-5 { animation: none; }
+.chat-pfp-ring-on .chat-pfp-ring-el.chat-pi-cycle-2 { animation: chat-ring-cycle-2 1.2s linear infinite; }
+.chat-pfp-ring-on .chat-pfp-ring-el.chat-pi-cycle-3 { animation: chat-ring-cycle-3 1.8s linear infinite; }
+.chat-pfp-ring-on .chat-pfp-ring-el.chat-pi-cycle-4 { animation: chat-ring-cycle-4 2.4s linear infinite; }
+.chat-pfp-ring-on .chat-pfp-ring-el.chat-pi-cycle-5 { animation: chat-ring-cycle-5 3s linear infinite; }
+.chat-pi-nocycle .chat-pfp-ring-el { animation: none !important; }
+@keyframes chat-ring-cycle-2 {
+  0%, 100% { --ring-c: var(--pi-c1); }
+  50%      { --ring-c: var(--pi-c2); }
+}
+@keyframes chat-ring-cycle-3 {
+  0%, 100% { --ring-c: var(--pi-c1); }
+  33.3%    { --ring-c: var(--pi-c2); }
+  66.7%    { --ring-c: var(--pi-c3); }
+}
+@keyframes chat-ring-cycle-4 {
+  0%, 100% { --ring-c: var(--pi-c1); }
+  25%      { --ring-c: var(--pi-c2); }
+  50%      { --ring-c: var(--pi-c3); }
+  75%      { --ring-c: var(--pi-c4); }
+}
+@keyframes chat-ring-cycle-5 {
+  0%, 100% { --ring-c: var(--pi-c1); }
+  20%      { --ring-c: var(--pi-c2); }
+  40%      { --ring-c: var(--pi-c3); }
+  60%      { --ring-c: var(--pi-c4); }
+  80%      { --ring-c: var(--pi-c5); }
+}
+
+/* Icon style: a multi-platform message stacks one coloured logo per platform and
+   crossfades them (opacity only — a compositor property; the old colour cycle on
+   the icon painted a solid box behind the glyph). Each layer runs the same
+   N-step keyframe offset by 0.6s × its index (set inline). */
+.chat-pi-logos { display: inline-grid; }
+.chat-pi-logo { grid-area: 1 / 1; display: inline-flex; opacity: 0; }
+.chat-pi-logos-2 .chat-pi-logo { animation: chat-pi-logos-2 1.2s linear infinite; }
+.chat-pi-logos-3 .chat-pi-logo { animation: chat-pi-logos-3 1.8s linear infinite; }
+.chat-pi-logos-4 .chat-pi-logo { animation: chat-pi-logos-4 2.4s linear infinite; }
+.chat-pi-logos-5 .chat-pi-logo { animation: chat-pi-logos-5 3s linear infinite; }
+@keyframes chat-pi-logos-2 {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes chat-pi-logos-3 {
+  0%, 30% { opacity: 1; }
+  33.3%, 97% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes chat-pi-logos-4 {
+  0%, 22% { opacity: 1; }
+  25%, 97% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes chat-pi-logos-5 {
+  0%, 17% { opacity: 1; }
+  20%, 97% { opacity: 0; }
+  100% { opacity: 1; }
+}
+/* Off-screen rows pause (animFence.ts); "Animate multi-platform" OFF, Low power
+   and reduced motion hold the first logo (the site's — the message IS native). */
+[data-anim-off] .chat-pi-logo { animation-play-state: paused !important; }
+.chat-pi-nocycle .chat-pi-logo { animation: none; opacity: 0; }
+.chat-pi-nocycle .chat-pi-logo:first-child { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-pi-logo { animation: none; opacity: 0; }
+  .chat-pi-logo:first-child { opacity: 1; }
+}
+
+/* Pronoun symbols — shown unless the reader's "Pronoun symbols" setting is off */
+.chat-pron-off .chat-pron { display: none !important; }
+
+/* PFP toggle — class applied to <html> by ChatSettings pfp toggle */
+.chat-pfp { display: none !important; }
+.chat-pfp-on .chat-pfp { display: inline-flex !important; }
+/* The avatar sits on the message body's first line, which carries a negative
+   hanging text-indent when "Indent to time" is on. text-indent is inherited, so
+   without this the fallback initial glyph inside the avatar is dragged left out
+   of its circle; reset it on the avatar subtree so the initial stays centered. */
+.chat-pfp { text-indent: 0; }
+
+/* Platform ring on the avatar — when on (with avatars), the colored ring IS
+   the platform cue, so the separate bar/dot/icon indicator is hidden. The ring
+   width lives in a var; the color is applied per-message inline in ChatMessage. */
+.chat-pfp-ring-on { --chat-pfp-ring: var(--chat-pfp-ring-w, 2px); }
+.chat-pfp-on.chat-pfp-ring-on .chat-pi-bar-el,
+.chat-pfp-on.chat-pfp-ring-on .chat-pi-dot-el,
+.chat-pfp-on.chat-pfp-ring-on .chat-pi-icon-el { display: none !important; }
+.chat-pfp-on.chat-pfp-ring-on .chat-msg-row { padding-left: 0.5rem !important; }
+
+/* Chat-row switches that are pure CSS (settings reorg part 1, task 6): name
+   styles, badges, pronoun colour, send-to button, "+" tools button. Each is a
+   class on <html> flipped by the pre-paint script in layout.tsx and a
+   registry entry in settingsRegistry.ts — no row re-render. */
+/* Name styles OFF (settings → Chat rows). usernameStyleCSS writes these as
+   INLINE styles, so only !important can undo them. rowSwitches.test.ts checks
+   this list against every property usernameStyleCSS can write. */
+.chat-namestyles-off .chat-un-style {
+  font-family: inherit !important; font-size: inherit !important; line-height: inherit !important;
+  padding: 0 !important; padding-inline-start: 0 !important; padding-inline-end: 0 !important; margin: 0 !important;
+  padding-block: 0 !important; margin-block: 0 !important;
+  background-image: none !important; background-size: auto !important; background-position: 0% 0% !important;
+  background-clip: border-box !important; -webkit-background-clip: border-box !important;
+  -webkit-text-fill-color: currentColor !important; color: inherit !important;
+  text-shadow: inherit !important; filter: none !important; animation: none !important; transform: none !important;
+  display: inline !important;
+  /* The space match, and the outline / underline effects. */
+  word-spacing: normal !important; -webkit-text-stroke: 0 !important; paint-order: normal !important;
+  text-decoration-line: none !important; text-decoration-style: solid !important; text-decoration-color: currentColor !important;
+  text-decoration-thickness: auto !important; text-underline-offset: auto !important;
+}
+.chat-badges-off .chat-badges { display: none !important; }
+
+/* ── Highlight card (paid /highlight + streamer spotlight) ──────────────────
+   Drawn as a layer slightly LARGER than the row — 3px over the rows above and
+   below, 4px in from the sides — so turning a highlight on or off never
+   changes the row's height and the chat never shifts. The row
+   becomes a stacking context above its neighbours; the card sits behind the
+   row's own content. Colours are color-mix, not a hex alpha suffix: the accent
+   is a var(--pc-x, #hex), and "var(…)2b" is invalid CSS that silently drops
+   the whole card. */
+.chat-hl-row { z-index: 1; isolation: isolate; }
+.chat-hl-card {
+  position: absolute;
+  inset: -3px 4px;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 0.5rem;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--hl-c) 17%, transparent), color-mix(in srgb, var(--hl-c) 7%, transparent) 45%),
+    var(--chat-card-base);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--hl-c) 35%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 4px 24px rgba(0, 0, 0, 0.35);
+  animation: chat-hl-in 220ms var(--anim-ease) both;
+}
+@keyframes chat-hl-in {
+  from { opacity: 0; transform: scale(0.97, 0.8); }
+  to   { opacity: 1; transform: none; }
+}
+.chat-spotlight-off .chat-hl-row[data-spot] .chat-hl-card { display: none; }
+
+/* The chat tab strip's band shade is the shared panel-bar shade (see
+   --panel-bar-shade in :root). */
+[data-bar="chat-top"] { --chrome-band-shade: var(--panel-bar-shade); }
+/* Plain pronoun colour is a chat-row setting — scoped to rows so a
+   future PronounMark on a profile card or member list keeps its colour. */
+.chat-pron-plain .chat-msg-row .chat-pron { color: #c3cddb !important; }
+.chat-sendto-btn-off .chat-sendto-btn { display: none !important; }
+.chat-tools-btn-off .chat-tools-btn { display: none !important; }
+
+/* Fallback name colour (settings → Colours): "Platform colour" paints names that
+   have no colour of their own in the sender's platform colour. --row-pc is set
+   per row by ChatMessage. */
+.chat-fallback-platform .chat-name-fallback { color: var(--row-pc) !important; }
+
+/* Group consecutive — collapse same-user runs to a continuation line.
+   Detection is `useChatRowDerivations` (same username + same platform as the
+   previous row, and not a reply), which ChatMessage applies as `.chat-compact`;
+   this just swaps the message header for the continuation spacer when grouping
+   is on. Not to be confused with ChatSidebar's `compact` prop — that is the
+   mobile/overlay chat mode and has nothing to do with grouping. */
+.chat-continuation { display: none !important; }
+.chat-group-on .chat-compact .chat-msg-header { display: none !important; }
+/* The spacer hangs in the wrap-indent gutter (the default hanging text-indent
+   keeps the first line at column 0); sizing it to the wrap indent makes the
+   continuation TEXT begin exactly at the wrap-indent column, aligned with the
+   wrapped lines of the run above.
+   It carries NO glyph — this element is pure geometry, so an empty box is the
+   entire point. Do not "clean it up" as an empty span: deleting it re-aligns
+   every continuation line. The gutter honours the wrap indent EXACTLY, which
+   is what makes the alignment claim above true. */
+/* The time still shows on a grouped row, so the spacer subtracts it
+   (--chat-ts-shown-w, 0 when times are off) — otherwise the text would begin
+   at time + indent, one indent too far. */
+.chat-group-on .chat-compact .chat-continuation {
+  display: inline-block !important;
+  width: max(0px, calc(var(--chat-wrap-padding, 0px) - var(--chat-ts-shown-w, 0px)));
+  box-sizing: border-box;
+  margin: 0 !important;
+}
+/* Flush-left continuations — "Indent continuations" off. No gutter at all, so a
+   continuation starts at column 0 like the first line of the run. Suppressing
+   the spacer is the whole change; it falls back to the base display:none. */
+.chat-group-on.chat-group-flush .chat-compact .chat-continuation {
+  display: none !important;
+}
+
+/* App shell height, keyboard-aware. TWO tiers, most-authoritative first:
+     1. An INLINE `height` written on <html> and <body> by useViewportHeightVar,
+        on EVERY touch platform — iOS, Firefox, Chromium, tabs and installed PWAs
+        alike — and ONLY while a keyboard-sized inset or a focus prediction is
+        live. With no keyboard in play the hook RELEASES it, so toolbar show/hide
+        rides the dvh tier below (compositor-animated) instead of being chased
+        from JS a frame late (the Firefox border-shimmer bug).
+        This tier is an inline height, NOT a custom property read via `var()`:
+        a custom property on :root INHERITS, so writing it per frame forces a
+        whole-document style recalc — 40ms/frame vs 10ms for an inline height.
+        Never introduce a per-frame custom property here; the numbers and the
+        method are in useViewportHeightVar.ts's setH comment.
+     2. `100dvh` — desktop, and any first paint before JS runs. Under
+        interactive-widget=resizes-content dvh follows the keyboard by itself, so
+        this tier is already correct on Android before a line of JS executes.
+   There is no `env(keyboard-inset-height)` tier: nothing sets
+   `virtualKeyboard.overlaysContent`, so that env() is always 0.
+   BOTH <html> and <body> carry this class (layout.tsx), so the hook writes and
+   clears BOTH. */
+.h-app { height: 100dvh; }
+
+/* The shell is PINNED at baseHeight for the whole keyboard open — there is no
+   shell height transition. The keyboard motion lives on the lifted panels' own
+   transform transitions (`useKeyboardLift`) instead. A height transition here
+   would re-animate the dvh tier's toolbar changes — the border-shimmer bug —
+   and must not return. */
+
+/* Emote button toggle — shown when chat-emote-btn-on is on <html> */
+.chat-emote-btn { display: none !important; }
+.chat-emote-btn-on .chat-emote-btn { display: flex !important; }
+
+/* The field's right inset. Only ONE thing lives inside the box — the emote
+   button — so this is a single switch. The tools button sits OUTSIDE the
+   field, which is what lets the field's padding have one rule.
+   Keep in step with `right-2` on the button row in ChatComposerField. */
+.chat-emote-btn-on .chat-input-field { padding-right: 2.4rem; }
+/* The overlaid placeholder shares the field's text box, so it has to share the
+   inset too — otherwise the ellipsis is computed against the full width and the
+   text slides under the emote button before truncating. */
+.chat-emote-btn-on .chat-input-placeholder { padding-right: 2.4rem; }
+
+:root {
+  --composer-gap: 0.375rem;   /* the composer row's flex gap, in ONE place — the
+                                 collapse rule below cancels exactly this much. */
+
+  /* THE CONTROL DIAMETER IS DERIVED, NOT GUESSED.
+     The field's real single-line height is its line box (leading-tight = 1.25)
+     plus its own py-1.5 and border — 31.5px at the default 14px. An eyeballed
+     multiplier (1.8 → 25.2px) would leave buttons ~6px short of the field, and
+     clamping the collapsed field to that value would SQUEEZE its text.
+     Built from the same terms as the field, these cannot disagree.
+     Consumed by the composer row inside the bottom Bar. */
+  --composer-line: calc(var(--chat-font-size, 0.875rem) * 1.25);
+  --composer-ctl:  calc(var(--composer-line) + 0.5rem + 2px); /* py-1: a tad smaller, so the bar has breathing room */
+}
+
+/* Composing collapse — while the field has text, the controls
+   that are not needed mid-message fold away and give their width to the text.
+   `max-width` rather than `width`, because the controls are auto-width and
+   `width: auto` does not transition. Collapsed also drops pointer events so a
+   mid-fade button can't eat a tap aimed at the text.
+   Applied to the BUTTONS themselves, not to wrappers around them: this rule is
+   `overflow: hidden`, and a wrapper enclosing a popover would clip that
+   popover to 6rem, so the menu would open into nothing. */
+.composer-collapsible {
+  overflow: hidden;
+  max-width: 6rem;
+  opacity: 1;
+  transition: max-width var(--anim-default) var(--anim-ease),
+              opacity var(--anim-fast) var(--anim-ease),
+              margin var(--anim-default) var(--anim-ease);
+}
+.composer-collapsible[data-collapsed="true"] {
+  max-width: 0;
+  opacity: 0;
+  border-width: 0;
+  pointer-events: none;
+  /* A zero-WIDTH control still costs a flex GAP. The row separates every pair
+     of children, so a collapsed control leaves the gap on each side of it —
+     stranding one whole gap of dead space per folded button, so the field
+     would stop short of the pfp while typing. Cancel exactly one gap so the
+     field reclaims the full width. */
+  margin-inline-end: calc(var(--composer-gap) * -1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-collapsible { transition: none; }
+}
+
+/* The typing field's own shape.
+   The radius is NOT constant. A full pill is right for one line, but on a
+   multi-line box the same radius curves inward across the text and clips the
+   first and last characters of the top and bottom rows. So the
+   pill relaxes to a rounded rectangle as soon as the field grows. */
+.chat-input-field {
+  border-radius: 999px;
+  transition: border-radius var(--anim-default) var(--anim-ease),
+              max-height var(--anim-default) var(--anim-ease),
+              padding-right var(--anim-default) var(--anim-ease),
+              background-color var(--anim-fast) var(--anim-ease),
+              border-color var(--anim-fast) var(--anim-ease);
+}
+.chat-input-field.is-expanded { border-radius: 1rem; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-input-field { transition: none; }
+}
+
+/* The destination signal on the FIELD: the chat input takes the colour of the
+   selected destination. `--composer-accent` is
+   set inline by ChatComposerField from `composerAccent` — the same value the
+   send button is filled with, so the two ends of the row cannot disagree.
+   BORDER ONLY — never a fill, and not a background tint either. The field is
+   a TEXT surface and the platform palette is pastel (kick #7dd9a8, twitch
+   #e697ce are both luminous), so even a 10% tint lifts the field's background
+   far enough to drag the placeholder — `text-muted`, already only 3.84:1 over
+   surface-1 — down to roughly 2:1, well under AA. The border carries the same
+   signal at zero contrast cost.
+   The rest state sits at 70% so the focused state still has somewhere brighter
+   to go: focus is carried by the border alone here (there is deliberately no
+   ring — see the field's own note above), and an accented field must not lose
+   that. Both states inherit the border-color transition declared above. */
+.chat-input-field[data-accent="on"] {
+  border-color: color-mix(in oklab, var(--composer-accent) 70%, transparent);
+}
+.chat-input-field[data-accent="on"]:focus {
+  border-color: var(--composer-accent);
+}
+
+/* Send button toggle — shown when chat-send-btn-on is on <html> */
+.chat-send-btn { display: none !important; }
+.chat-send-btn-on .chat-send-btn { display: flex !important; }
+
+/* Hairline-shimmer mitigation. At FRACTIONAL
+   device-pixel positions a 1px `--color-edge` border rasterizes inconsistently
+   in Firefox — it blinks whenever its rasterization tile is redrawn, where
+   Chrome's rounding keeps it steady. Two triggers:
+     • mobile: the toolbar animation steps the viewport, moving the bars;
+     • desktop at fractional zoom (120%): each chat row's hover highlight
+       repaints the tile the row SHARES with the adjacent panel/bar borders.
+   Promoting the bars AND the chat scroller to their own compositing layers
+   makes each hairline rasterize once and isolates row-hover repaints from the
+   borders around the scroll area. All pointer types — both cases are real.
+   Who carries it, and where:
+     • EVERY bar carries it in chrome.css (`.chrome-bar { transform:
+       translateZ(0) }`), layered, and on `transform` rather than the
+       `translate` the reveal animates, so the promotion and the slide never
+       fight. That includes both composers — they are Bars, so there is
+       nothing to promote by hand here.
+       Safe on a composer Bar because its popovers PORTAL to <body> (pinned
+       by composerLayout.test) — a transform makes the bar a containing block
+       for fixed descendants, of which it must therefore have none;
+     • `.chat-scroll-layer` keeps its own — it is not chrome, so no
+       chrome rule will ever cover it. */
+.chat-scroll-layer {
+  transform: translateZ(0);
+}
+
+/* Tab bar: fold the whole bar away to reclaim its height (the border + ~36px
+   row). A floating control (rendered in ChatSidebar) keeps the
+   Live/Matrix/Split/Community switches reachable while it's folded. */
+.chat-tabbar-hidden [data-bar="chat-top"] { display: none !important; }
+
+/* The floating pill sits top-right of the panel — the same corner the Matrix/
+   forum headers + pinned banner put their own controls. While folded, reserve
+   the pill's measured width (--folded-ctl-w, published by ChatSidebar) as
+   right-padding on those rows so their controls sit clear of it. */
+.chat-tabbar-hidden [data-bar="mx-header"],
+.chat-tabbar-hidden .pin-row {
+  padding-right: calc(var(--folded-ctl-w, 0px) + 0.5rem);
+}
+
+/* Hidden scrollbar — scrolling stays fully functional */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Touch devices: suppress text selection + iOS callout on chat rows — the
+   long-press context menu (Reply/Copy) is the interaction there. Desktop
+   keeps normal text selection. */
+@media (pointer: coarse) {
+  .touch-no-select {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+/* Incoming live-chat messages fade in WITHOUT vertical motion. A translateY
+   here fought the bottom-scroll anchor — the row settled into place a few
+   pixels off, which read as a jitter/"pull-down". Opacity-only keeps the
+   append perfectly stable while still giving a soft entrance. */
+@keyframes msg-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.chat-msg-in {
+  animation: msg-in var(--anim-fast) var(--anim-ease) both;
+}
+
+/* ── Chat top fade ──────────────────────────────────────────────────────────
+   Rows fade to nothing as they reach the top of the chat (the pin's bottom
+   while a pin shows), so the pin sits on clean background. A mask on the
+   scroller: one compositor mask, no per-row work, and it fades to TRANSPARENT,
+   so the see-through /chat window stays see-through.
+   Not a per-row "roll": a browser can only bend whole messages, so a roll
+   reads as message-by-message squashing, and a CSS view-timeline version
+   gives every row its own compositor layer. */
+:root:not(.chat-fade-off) .chat-scroll-layer {
+  -webkit-mask-image: linear-gradient(to bottom, transparent var(--chat-fade-top), #000 calc(var(--chat-fade-top) + var(--chat-fade-h)));
+  mask-image: linear-gradient(to bottom, transparent var(--chat-fade-top), #000 calc(var(--chat-fade-top) + var(--chat-fade-h)));
+}
+
+/* ── Redacted message ──────────────────────────────────────────────────────────
+   A hidden part of a message is a run of bars, and the bars are the control that
+   opens it (RedactedText). A message may be hidden whole or only in parts
+   (`||like this||`); the visible parts are ordinary chat text.
+
+   No CSS keyframe animation, on purpose, and nothing that runs at rest (see
+   the bar's own note below). The only motion is the one-shot reveal walk. */
+/* `.redact-text` has NO rule of its own, on purpose. Opened text is the
+   message's own colour, font and size: a hidden part mid-sentence must read
+   like its neighbours. */
+/* THE CIPHER PAINTS UNDERNEATH EVERYTHING ELSE IN THE ROW: an encrypted message
+   must never sit on top of emotes or names.
+
+   Block glyphs are SOLID, opaque ink filling ~1.31em of the line box, and emotes
+   are deliberately drawn in a zero-height wrapper with `overflow: visible` and
+   `translateY(-50%)` so they spill outside their own line (that is what keeps
+   line-height constant as emote size changes). Where the two meet, whichever
+   paints later wins — and an opaque block winning over someone's emote or their
+   name is the one outcome that is never right.
+
+   The cipher can only be pushed DOWN by raising its neighbours: giving a
+   positioned element `z-index: 0` puts it in the positioned layer, which paints
+   ABOVE ordinary inline content — the opposite of what is wanted here. So the
+   name and the emotes are lifted instead, and the cipher stays static. */
+.chat-msg-header,
+.chat-emote-el {
+  position: relative;
+  z-index: 1;
+}
+
+/* NO GLOW AT REST. These are SOLID block glyphs, so an always-on 6px blur in
+   every direction from every character would weld the rows together into one
+   slab — the blur radius alone is ~3× the gap the line box leaves between
+   lines. The glow earns its place by being an affordance: it appears under
+   the pointer, saying "this one opens".
+
+   Paint-only, both states — no metric ever changes on hover. */
+/* Hover = the bar's own grey edge brightens. No glow, no colour, paint only. */
+.redact-text[data-sealed="true"]:hover .redact-bar {
+  --redact-rim: var(--color-redact-edge-hover);
+}
+/* The redacted bar (RedactedText → redactSegments): one per word, sitting over
+   a filler in TRANSPARENT ink, so the bar is about the width of the words it
+   hides; opening one may shift the line slightly (accepted).
+
+   STILL. Nothing here animates at rest, and nothing may: an idle shimmer
+   re-renders every sealed message on a timer and can hold a desktop GPU at
+   ~35% (enough to cost encoding frames on stream). The only motion is the
+   one-shot reveal walk, and the hover edge.
+
+   `text-shadow: none` is load-bearing — the chat row's inherited shadow would
+   otherwise draw the hidden glyphs' shapes around transparent ink.
+
+   A BAND, NOT THE WHOLE BOX. An inline background fills the font's whole
+   content area — ~1.3em, nearly the full 1.4 line — and a 1px edge shadow then
+   closes the last of the gap, so wrapped lines would weld together.
+
+   THE FLAT BAR: square, black, a
+   thin grey edge on ALL FOUR sides, one bar per line over the whole phrase
+   (redactSegments bars the spaces too). Two sized background layers — the edge
+   colour, and the black 1px smaller inside it — so the edge follows the band,
+   not the content box, and nothing but paint changes: no line box moves.
+   `clone` gives every wrapped line its own full edge. */
+.redact-bar {
+  --redact-rim: var(--color-redact-edge);
+  color: transparent;
+  text-shadow: none;
+  background-image: linear-gradient(var(--color-redact), var(--color-redact)),
+                    linear-gradient(var(--redact-rim), var(--redact-rim));
+  background-repeat: no-repeat;
+  background-size: calc(100% - 2px) calc(84% - 2px), 100% 84%;
+  background-position: center 58%, center 58%;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+
+/* Sticker boost: the emote itself grows from its pre-boost size to the new
+   one as a distinct SECOND step, only once the row has settled at its final
+   position (see ChatMessage.tsx's boost-grow effect, which briefly sets
+   `transition: none` inline to snap to the old size on arrival with no
+   visible animation, then clears that override right before setting the
+   final size so this transition is what animates the actual growth). */
+.sticker-grow {
+  /* Slower + a slight overshoot ("back out" easing) so the boost growth reads as
+     a deliberate pop, not a quiet resize. Animates height (the sticker now sizes
+     via an explicit height, not max-height — see ChatMessage.tsx); the final size
+     is still stickerBoostScale() so cap math is unchanged. */
+  transition: height var(--anim-slow) cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Matches the side panels' 200ms width slide — the timeline is the flex-1
+   anchor, so it fades/slides instead of animating width */
+@keyframes panel-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.panel-slide-in {
+  animation: panel-in var(--anim-default) var(--anim-ease) both;
+}
+
+/* Bottom-dock tab content entrance — the view slides DOWN from under the tab
+   row (the pane's overflow-hidden
+   clips the start of the travel so it reads as emerging beneath the tabs).
+   One-shot, so no animation fence needed. Lives on an INNER element, not the
+   fade wrapper: `both` keeps the final keyframe's opacity applied, and on the
+   wrapper that would override the squeezed-state opacity-0 class (animations
+   beat normal declarations). Collapse has no exit animation on purpose —
+   collapsed means UNMOUNTED (BottomDock says why). */
+@keyframes dock-tab-in {
+  from { opacity: 0; transform: translateY(-14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.dock-tab-in {
+  animation: dock-tab-in var(--anim-default) var(--anim-ease) both;
+}
+/* …and the mirrored pull-up on collapse. BottomDock keeps the content
+   mounted (inert) until this animation's END event, then unmounts for real —
+   so this class doubles as the unmount trigger, not just decoration. */
+@keyframes dock-tab-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-14px); }
+}
+/* Exit runs FASTER than the entrance (fast vs default) — a dismissal that
+   lingers reads as lag, not polish (300ms on both feels slow). */
+.dock-tab-out {
+  animation: dock-tab-out var(--anim-fast) var(--anim-ease) both;
+}
+
+/* ── Help-desk panel ───────────────────────────────────────────────────────────
+   An in-flow element of the chat column (SupportPanel.tsx); only its entrance lives here. */
+@keyframes support-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.support-in {
+  animation: support-in var(--anim-default) var(--anim-ease) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .support-in { animation: none; opacity: 1; }
+}
+
+/* The "+2q" earn chip: rise, HOLD, leave.
+   ─────────────────────────────────────────────────────────────────────────
+   Two separate jitter modes live here, and the fix for one causes the other.
+   Neither is a frame-rate problem — a performance trace finds nothing in
+   either case.
+
+   (1) EASING IS PER SEGMENT. `animation-timing-function` is applied to every
+   keyframe segment independently, never to the animation as a whole. One
+   four-stop animation with `ease-out` ran ease-out THREE times, decelerating
+   to a near-stop and re-accelerating at each boundary — measured velocity
+   discontinuity of -0.1796 at the 72% stop, 8x the next largest.
+
+   (2) A SLOW CONTINUOUS DRIFT QUANTIZES. Collapsing it to one from/to segment
+   removed the discontinuity and made it worse: 11.85px of travel spread over
+   1500ms is ~one whole pixel every 127ms. Measured: 137 distinct sub-pixel
+   positions but only THIRTEEN distinct whole-pixel ones. However smooth the
+   maths, the rendered chip steps a pixel at a time and the eye tracks it.
+
+   The shape that solves both is the one the original was reaching for:
+   MOVE FAST, then HOLD PERFECTLY STILL, then LEAVE. Motion is confined to
+   ~210ms in and ~240ms out — inside the 70-350ms every published system uses
+   — and for the 70% in between the transform does not change AT ALL, so there
+   is nothing to quantize during the part the viewer actually reads.
+
+   The hold segments carry IDENTICAL values on purpose. That is what makes a
+   multi-stop transform safe here: a segment with no value change cannot suffer
+   from (1). Each segment that DOES move declares its own easing, so the
+   per-segment behaviour is deliberate rather than inherited — and it gets the
+   enter-decelerate / exit-accelerate split every published motion system
+   specifies.
+
+   NO DURATION HERE. EarnChip.tsx supplies it inline from EARN_CHIP_MS, the
+   same constant the store advances on. `both` holds the 0% state before the
+   first frame so the chip cannot flash at full opacity on mount.
+
+   CHOSEN BY LOOKING, NOT BY MEASURING. Versions that measured better still
+   looked wrong. Candidates (uniform-linear, a longer uniform glide, a
+   scale-pop, and a pure fade) can be compared in the real composer behind
+   `?chipdebug=<variant>`; if this is ever revisited, use that rig rather
+   than reasoning from the numbers. */
+@keyframes earn-chip-rise {
+  0%   { transform: translate(-50%, 8px); animation-timing-function: cubic-bezier(0, 0, 0.2, 1); }
+  14%  { transform: translate(-50%, 0);   animation-timing-function: linear; }
+  84%  { transform: translate(-50%, 0);   animation-timing-function: cubic-bezier(0.4, 0, 1, 1); }
+  100% { transform: translate(-50%, -8px); }
+}
+@keyframes earn-chip-fade {
+  0%   { opacity: 0; animation-timing-function: cubic-bezier(0, 0, 0.2, 1); }
+  14%  { opacity: 1; animation-timing-function: linear; }
+  84%  { opacity: 1; animation-timing-function: cubic-bezier(0.4, 0, 1, 1); }
+  100% { opacity: 0; }
+}
+.earn-chip {
+  animation-name: earn-chip-rise, earn-chip-fade;
+  animation-fill-mode: both;
+  /* `will-change` in a stylesheet is normally wrong — it creates a stacking
+     context up front and keeps the optimisation alive indefinitely. This is
+     the documented exception: the element EXISTS only for the length of its
+     animation, so "indefinitely" is under two seconds, and it is already
+     `absolute z-10` so the stacking context changes nothing. It buys the
+     compositor layer BEFORE the first frame, which is what keeps the text from
+     being re-rasterised as the chip moves. */
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Fade only. Redefining the KEYFRAMES rather than `animation: none`, for
+     dock-tab-out's reason one screen up: `none` would leave the chip painted
+     at full opacity forever, since nothing unmounts it.
+     The -50% X translate is not motion, it is the centring the `left-1/2`
+     anchor depends on — dropping it here would shove every chip half its own
+     width to the right for exactly the users who asked for less movement.
+     The fade is left untouched: reduce means REDUCE, and a cross-fade is the
+     substitution WebKit's own guidance models. */
+  @keyframes earn-chip-rise {
+    0%   { transform: translateX(-50%); }
+    100% { transform: translateX(-50%); }
+  }
+}
+/* The dock pane's bottom edge — scrolling content fades out over the last
+   ~24px instead of hard-cutting at the clip edge. A MASK, not an overlay
+   gradient: the dock sits directly on the site background with no surface of
+   its own, so an overlay would have to guess the backdrop colour; a mask
+   needs none. BottomDock applies it only to the scrolling views (news list,
+   VODs) — the ticker row is barely taller than the fade and would lose its
+   own text to it. */
+.dock-fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 24px), transparent);
+}
+
+/* Shared modal entrance — backdrop fades, the dialog box fades + scales up
+   slightly. The backdrop-in keyframes are consumed by .chrome-scrim
+   (components/chrome/chrome.css); .modal-in goes on the box, so every modal
+   opens consistently instead of popping in instantly. */
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal-in {
+  animation: modal-in var(--anim-default) var(--anim-ease) both;
+}
+
+/* Sheet entrance (chrome 5c-r) — retired as a Window presentation (L1);
+   now serves ONLY PanelWindow's peek-kind FALLBACK (no registered pane
+   layer — community page, /mod, the popout document), same rendered shape
+   as before. The bottom sheet slides up from its own edge. Referenced by
+   name from chrome.css (.chrome-window-sheet), same arrangement as
+   modal-in / .chrome-window-page. The shadow token lives here with the raw
+   values (check-tokens) and is UPWARD-biased on purpose: shadow-2xl's
+   downward bulk would be clipped below the viewport, leaving the sheet's
+   seam against the chat above it nearly shadowless (5c-r final-review
+   finding 11). */
+:root {
+  --sheet-shadow: 0 -8px 28px rgba(0, 0, 0, 0.55);
+}
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Panel entry/exit — the panel window
+   EMERGES from the composer seam it sits above (chrome.css
+   .chrome-window-panel). Named `panel-seam-*`, not `panel-in`/`panel-out`:
+   this file already defines a DIFFERENT `panel-in` (MatrixView's
+   horizontal room-switch slide via .panel-slide-in) — @keyframes names are
+   global, and a same-named later rule fully replaces the earlier one rather
+   than merging, so reusing the name here would silently swap that
+   slide's motion for this one. */
+@keyframes panel-seam-in {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes panel-seam-out {
+  from { transform: translateY(0); }
+  to   { transform: translateY(100%); }
+}
+/* A TOP panel (chrome.css [data-from="top"]) comes down from the pane's top
+   edge and goes back up through it. */
+@keyframes panel-drop-in {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes panel-drop-out {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-100%); }
+}
+
+/* Apply the standard easing token to any element using a bare Tailwind
+   `transition-*` (which otherwise falls back to Tailwind's default `ease`). */
+.anim-ease {
+  transition-timing-function: var(--anim-ease);
+}
+
+/* Downvote fade — the row's opacity is set inline (scaled by score), this
+   just makes the transition between vote states smooth instead of a snap. */
+.chat-msg-fade {
+  transition: opacity var(--anim-slow) var(--anim-ease);
+}
+
+/* Reduced motion: collapse every shared entrance to a near-instant fade (tiny
+   duration, NOT 0ms/`animation:none` — animationend/transitionend listeners
+   must still fire) and strip the movement so nothing slides or scales. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-msg-in,
+  .chat-hl-card,
+  .panel-slide-in,
+  .modal-in {
+    animation-duration: 0.01ms;
+  }
+  /* Tailwind's utility spinners/pulses (Spinner, LinkPreview/MatrixInput loading
+     placeholders, LIVE dots, presence status dots) live outside the named-entrance
+     set above, so they kept looping under reduce. Stop them — a spinner degrades to
+     a static partial ring and a pulsing dot to a solid one, both still legible. */
+  .animate-spin,
+  .animate-pulse {
+    animation: none;
+  }
+  .chat-msg-fade,
+  .sticker-grow {
+    transition-duration: 0.01ms;
+  }
+  /* Indicator color cycle: no end-listeners involved — stop it outright and
+     let the inline first-destination color stand. */
+  .chat-pi-cycle-2,
+  .chat-pi-cycle-3,
+  .chat-pi-cycle-4,
+  .chat-pi-cycle-5 {
+    animation: none;
+  }
+  .chat-pfp-ring-el { animation: none !important; }
+  @keyframes panel-in {
+    from { opacity: 0; transform: none; }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes dock-tab-in {
+    from { opacity: 0; transform: none; }
+    to   { opacity: 1; transform: none; }
+  }
+  /* Keep dock-tab-out as a (motionless) animation, NOT `animation: none` —
+     BottomDock unmounts the closing tab on the animationend event, which
+     `none` would never fire. */
+  @keyframes dock-tab-out {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: none; }
+  }
+  @keyframes modal-in {
+    from { opacity: 0; transform: none; }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes sheet-in {
+    from { opacity: 0; transform: none; }
+    to   { opacity: 1; transform: none; }
+  }
+  /* Keep panel-seam-out as a (motionless) animation, NOT `animation: none` —
+     PanelWindow's exit relies on its animationend to deliver the close (see
+     the 250ms timer fallback in Window.tsx, which `none` never needs but a
+     reader should not have to infer is safe). */
+  @keyframes panel-seam-in {
+    from { opacity: 0; transform: none; }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes panel-seam-out {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: none; }
+  }
+  @keyframes panel-drop-in {
+    from { opacity: 0; transform: none; }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes panel-drop-out {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: none; }
+  }
+  /* Token-store animated username styles: infinite loops with no listeners —
+     stop them outright (usernameStyleAnimClass tags the element). */
+  .un-anim {
+    animation: none !important;
+  }
+}
+
+/* "Animate name styles" toggle (settingsRegistry `unAnim`, default on) —
+   same shape as chat-pi-nocycle: the html class marks the OFF state and
+   freezes every token-store username animation at its first frame.
+   !important for the same reason as the fence above: the animation shorthand
+   is inline. */
+.un-noanim .un-anim { animation: none !important; }
+
+/* Token-store username styles (usernameStyles.ts) — the inline style composes
+   the `animation` list; only the keyframes live here. Colors ride custom
+   properties (--un-c) or the inline background layers, so one set of keyframes
+   serves every user's own color. */
+@keyframes un-pulse {
+  0%, 100% { text-shadow: 0 0 3px var(--un-c); }
+  50%      { text-shadow: 0 0 6px var(--un-c), 0 0 12px color-mix(in srgb, var(--un-c) 40%, transparent); }
+}
+@keyframes un-shimmer {
+  /* Layer 1 = the white gleam band, layer 2 = the (static) fill. */
+  0%   { background-position: 200% 0, 0 0; }
+  100% { background-position: -100% 0, 0 0; }
+}
+@keyframes un-rainbow {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+@keyframes un-wobble {
+  0%, 100% { transform: rotate(-2deg); }
+  50%      { transform: rotate(2deg); }
+}
+/* The transform trio (see TRANSFORM_EFFECTS): composited, so unlike pulse and
+   shimmer they cost no repaint per frame. Amplitudes are deliberately small —
+   these run on every message a user sends, forever, next to a wall of text
+   somebody is trying to read. */
+@keyframes un-bounce {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-2px); }
+}
+@keyframes un-pop {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.07); }
+}
+@keyframes un-jitter {
+  0%   { transform: translate(0, 0); }
+  33%  { transform: translate(-1px, 1px); }
+  66%  { transform: translate(1px, -1px); }
+  100% { transform: translate(0, 0); }
+}
+/* Name effects. */
+/* Flicker: a neon sign that sputters. Opacity only — composited. */
+@keyframes un-flicker {
+  0%, 18%, 22%, 25%, 53%, 57%, 100% { opacity: 1; }
+  20%, 24%, 55% { opacity: 0.4; }
+}
+/* Glitch: still most of the time, then a quick colour-split twitch. step-end,
+   so it JUMPS between frames like a bad signal instead of sliding. */
+/* The split is drop-shadow FILTERS added to the name's own (--un-f), never a
+   text-shadow — that paints over a gradient name's clipped fill. */
+@keyframes un-glitch {
+  0%, 88% { transform: none; filter: var(--un-f); }
+  89% { transform: translate(-2px, 1px); filter: var(--un-f) drop-shadow(-2px 0 rgba(255, 43, 109, 0.9)) drop-shadow(2px 0 rgba(43, 242, 255, 0.9)); }
+  91% { transform: translate(2px, -1px); filter: var(--un-f) drop-shadow(2px 0 rgba(255, 43, 109, 0.9)) drop-shadow(-2px 0 rgba(43, 242, 255, 0.9)); }
+  93% { transform: translate(-1px, 0); filter: var(--un-f) drop-shadow(-1px 0 rgba(255, 43, 109, 0.9)) drop-shadow(1px 0 rgba(43, 242, 255, 0.9)); }
+  95%, 100% { transform: none; filter: var(--un-f); }
+}
+/* Colour drift: an angle the hue-rotate in the inline filter reads. Registered,
+   or a custom property cannot interpolate and the drift would snap. */
+@property --un-h {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes un-drift {
+  0%, 100% { --un-h: 0deg; }
+  50%      { --un-h: 60deg; }
+}
+/* Arrivals — one iteration each. Type in wipes on letter by letter (steps of
+   --un-n, the name's length, set by nameInk.ts); the inset reaches past the box
+   so halos and swashes are not cut off at the end frame. */
+@keyframes un-typein {
+  from { clip-path: inset(-0.5em 100% -0.5em -0.5em); }
+  to   { clip-path: inset(-0.5em -0.5em -0.5em -0.5em); }
+}
+@keyframes un-focusin {
+  from { opacity: 0; filter: blur(6px); }
+  to   { opacity: 1; filter: blur(0); }
+}
+@keyframes un-stamp {
+  0%   { opacity: 0; transform: scale(2.2); }
+  60%  { opacity: 1; transform: scale(0.92); }
+  100% { opacity: 1; transform: scale(1); }
+}
+/* An entrance plays for a message that ARRIVED — never for every history row
+   when chat loads (only live frames carry .chat-msg-in; ChatMessage). Only the
+   entrance's slot of the animation list is emptied, so an effect worn with it
+   keeps running (usernameStyles.ts ARRIVALS). */
+.chat-msg-row:not(.chat-msg-in) .un-arrive { --un-enter: none !important; }
+
+/* Force text (monochrome) presentation for UI glyph icons so browsers that
+   substitute color emoji for symbols like ↩ ✎ ✓ ⎘ keep them as crisp glyphs.
+   Inherited, so applying it to a menu/bar covers all child glyphs. */
+.glyph-text {
+  font-variant-emoji: text;
+}
+
+/* ── Marathon-timer "running low" treatment ──────────────────────────────────
+   Drives the player-bar timer (StreamTimerIndicator.tsx) once it drops under
+   TIMER_LOW_THRESHOLD_SEC. That timer is PARKED (the component is @parked,
+   not deleted), so nothing renders these rules — this block is kept for its
+   return, alongside the component it drives. The timer itself pulses at an
+   accelerating rate as the clock runs out.
+
+   Gated on the low window — this is NOT an always-on animation. That is
+   deliberate: infinite compositor-driven animations running at idle heat
+   phones, so nothing here may run while the timer is healthy.
+
+   Tuning is NOT here any more: the threshold and ramp rate live in
+   stream.timer_state (v81) and arrive on the timerState frame, so mods tune them
+   in /mod → Utility without a deploy. This file receives the already-resolved
+   --timer-pulse-ms. */
+.timer-low-pulse {
+  animation: timer-low-pulse var(--timer-pulse-ms, 1600ms) ease-in-out infinite;
+}
+@keyframes timer-low-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the colour signal, drop the motion. */
+  .timer-low-pulse { animation: none; }
+}
+
+/* "Time added" popup beside the player-bar timer — the same 2.2s read the OBS
+   overlay uses, so stream and site agree. Finite animation, not infinite: it
+   runs once per event and stops (see the phone-heat note above). */
+.timer-delta-pop {
+  animation: timer-delta-pop 2.2s ease-out forwards;
+}
+@keyframes timer-delta-pop {
+  0%   { opacity: 0; transform: translateY(4px); }
+  12%  { opacity: 1; transform: translateY(0); }
+  70%  { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-3px); }
+}
+/* ─── Controls standard: the site slider (docs/DESIGN-STANDARD.md) ───────────
+   One look for settings-style sliders: a 4px track
+   in --color-control, the filled part in --color-strong (the "selected" colour
+   every control shares), a 14px light thumb. The element box is 24px tall so it
+   lines up with every other control and is easier to grab. WebKit has no
+   progress pseudo-element, so the fill is a hard gradient stop at --fill, which
+   the component sets from the value. Firefox draws it with ::-moz-range-progress.
+   The player/radio volume sliders keep their own look on purpose.
+   Unlayered, and check-layering does NOT cover these properties: never put a
+   Tailwind height/background/cursor/opacity/radius utility on a .ui-range
+   element — this rule would silently win. controlsStandard.test.ts guards it. */
+.ui-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 1.5rem;
+  background: transparent;
+  cursor: pointer;
+}
+.ui-range:disabled { cursor: not-allowed; opacity: .5; }
+.ui-range:focus { outline: none; }
+.ui-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(to right, var(--color-strong) var(--fill, 0%), var(--color-control) var(--fill, 0%));
+}
+.ui-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 9999px;
+  background: var(--color-strong);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .5);
+}
+.ui-range::-moz-range-track { height: 4px; border-radius: 9999px; background: var(--color-control); }
+.ui-range::-moz-range-progress { height: 4px; border-radius: 9999px; background: var(--color-strong); }
+.ui-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--color-strong);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .5);
+}
+.ui-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--color-edge-bright); }
+.ui-range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--color-edge-bright); }
+
+/* The colour swatch: the native picker's inner padding and border removed so
+   the 24px rounded box IS the colour. */
+.ui-color::-webkit-color-swatch-wrapper { padding: 0; }
+.ui-color::-webkit-color-swatch { border: 0; border-radius: 5px; }
+.ui-color::-moz-color-swatch { border: 0; border-radius: 5px; }
+/* end ui-range */
+
+/* Terminal colour schemes.
+   The terminal's own palettes: the raw values live here because this is the
+   one file allowed them (check-tokens); terminal.css only reads the vars. */
+/* Reverse video is the scheme's text and background swapped — unless
+   the scheme says otherwise (site, below: its background is transparent). Read by segView.tsx
+   and the cursor cell / lit Ctrl key / Tab menu pick in terminal.css.
+   BEFORE every named scheme on purpose: `[data-term-theme]` and `[data-term-theme="site"]`
+   have the same specificity, so the later rule wins — declared after them, this swap would
+   silently override the site pair (terminalReverse.test.ts pins the order). */
+[data-term-theme] { --term-rev-bg: var(--term-fg); --term-rev-fg: var(--term-bg); }
+[data-term-theme="zsh"] {
+  --term-bg: rgba(12, 14, 20, 0.96); --term-fg: #d7dae0; --term-dim: #7d8590;
+  --term-user: #7ee787; --term-path: #79c0ff; --term-dir: #58a6ff; --term-exec: #7ee787;
+  --term-err: #ff7b72; --term-ok: #56d364; --term-warn: #e3b341; --term-accent: #d2a8ff;
+  --term-cursor: #d7dae0; --term-select: rgba(121, 192, 255, 0.3);
+}
+[data-term-theme="green"] {
+  --term-bg: rgba(2, 10, 3, 0.97); --term-fg: #33ff66; --term-dim: #1f9a40;
+  --term-user: #7dffa0; --term-path: #33ff66; --term-dir: #7dffa0; --term-exec: #b6ffc8;
+  --term-err: #ff5f56; --term-ok: #7dffa0; --term-warn: #e8ff5a; --term-accent: #b6ffc8;
+  --term-cursor: #33ff66; --term-select: rgba(51, 255, 102, 0.25);
+}
+[data-term-theme="amber"] {
+  --term-bg: rgba(14, 9, 0, 0.97); --term-fg: #ffb000; --term-dim: #9a6a00;
+  --term-user: #ffcc4d; --term-path: #ffb000; --term-dir: #ffd580; --term-exec: #ffe0a0;
+  --term-err: #ff6a3d; --term-ok: #ffd580; --term-warn: #fff0b3; --term-accent: #ffe0a0;
+  --term-cursor: #ffb000; --term-select: rgba(255, 176, 0, 0.25);
+}
+[data-term-theme="light"] {
+  --term-bg: rgba(250, 250, 250, 0.98); --term-fg: #24292f; --term-dim: #6e7781;
+  --term-user: #1a7f37; --term-path: #0969da; --term-dir: #0969da; --term-exec: #1a7f37;
+  --term-err: #cf222e; --term-ok: #1a7f37; --term-warn: #9a6700; --term-accent: #8250df;
+  --term-cursor: #24292f; --term-select: rgba(9, 105, 218, 0.2);
+}
+[data-term-theme="site"] {
+  --term-bg: transparent; --term-fg: var(--color-body); --term-dim: var(--color-muted);
+  --term-user: var(--accent); --term-path: var(--color-strong); --term-dir: var(--accent); --term-exec: var(--accent);
+  --term-err: #ff7b72; --term-ok: #56d364; --term-warn: #e3b341; --term-accent: var(--accent);
+  --term-cursor: var(--color-strong); --term-select: color-mix(in srgb, var(--accent) 30%, transparent);
+  /* Reverse video: the swap below would paint TRANSPARENT text on a body-coloured strip, so the
+     TUI's bars, nano's title row and the ^G cells would be hard to read. The site's strongest
+     text colour as the strip, the panel colour as the text on it. */
+  --term-rev-bg: var(--color-strong); --term-rev-fg: var(--color-panel);
+}
+/* The 16 ANSI colours a program can ask for:
+   black red green yellow blue magenta cyan white, then their bright forms.
+   Dark schemes share one set; light swaps to darker inks; the phosphor
+   schemes stay one hue, the way a green or amber screen did. */
+[data-term-theme] {
+  --term-c0: #484f58; --term-c1: #ff7b72; --term-c2: #3fb950; --term-c3: #d29922;
+  --term-c4: #58a6ff; --term-c5: #bc8cff; --term-c6: #39c5cf; --term-c7: #b1bac4;
+  --term-c8: #6e7681; --term-c9: #ffa198; --term-c10: #56d364; --term-c11: #e3b341;
+  --term-c12: #79c0ff; --term-c13: #d2a8ff; --term-c14: #56d4dd; --term-c15: #f0f6fc;
+}
+[data-term-theme="light"] {
+  --term-c0: #24292f; --term-c1: #cf222e; --term-c2: #116329; --term-c3: #4d2d00;
+  --term-c4: #0969da; --term-c5: #8250df; --term-c6: #1b7c83; --term-c7: #6e7781;
+  --term-c8: #57606a; --term-c9: #a40e26; --term-c10: #1a7f37; --term-c11: #633c01;
+  --term-c12: #218bff; --term-c13: #a475f9; --term-c14: #3192aa; --term-c15: #8c959f;
+}
+[data-term-theme="green"] {
+  --term-c0: #0b3d18; --term-c1: #1f9a40; --term-c2: #33ff66; --term-c3: #7dffa0;
+  --term-c4: #1f9a40; --term-c5: #5fdc85; --term-c6: #7dffa0; --term-c7: #33ff66;
+  --term-c8: #1f9a40; --term-c9: #5fdc85; --term-c10: #7dffa0; --term-c11: #b6ffc8;
+  --term-c12: #5fdc85; --term-c13: #b6ffc8; --term-c14: #b6ffc8; --term-c15: #e0ffe8;
+}
+[data-term-theme="amber"] {
+  --term-c0: #3d2a00; --term-c1: #9a6a00; --term-c2: #ffb000; --term-c3: #ffcc4d;
+  --term-c4: #9a6a00; --term-c5: #e09a00; --term-c6: #ffd580; --term-c7: #ffb000;
+  --term-c8: #9a6a00; --term-c9: #e09a00; --term-c10: #ffcc4d; --term-c11: #ffe0a0;
+  --term-c12: #e09a00; --term-c13: #ffe0a0; --term-c14: #ffe0a0; --term-c15: #fff0b3;
+}
+/* The installable schemes (dracula, nord …) are theme FILES: their colours live
+   only in app/lib/terminal/termThemes.ts and are painted on the terminal as these same vars. */
+
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the information, drop the travel — it still fades so it clears itself. */
+  .timer-delta-pop { animation: timer-delta-fade 2.2s linear forwards; }
+  @keyframes timer-delta-fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
+}

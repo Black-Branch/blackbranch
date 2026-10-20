@@ -1,0 +1,17 @@
+# One update to the release named by the instance (blackbranch-update@1.2.3.service), started by
+# the request the Admin Panel's button drops (verb update-v<version>). The version is checked
+# against the signed feed before anything happens: the newest release on the box's channel must be
+# exactly this one. Running as its own unit keeps the request watcher free while it runs.
+[Unit]
+Description=Black Branch: update to release %i
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch update --apply %i
+# A stop (a shutdown, `systemctl stop`) signals the updater alone, and gives it time: its trap
+# starts the site it stopped again, or goes back to the previous release and its data
+# (`blackbranch` update_stopped) — a restore takes minutes. The rest of the unit is killed after.
+KillMode=mixed
+TimeoutStopSec=30min

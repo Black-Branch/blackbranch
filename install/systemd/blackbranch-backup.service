@@ -1,0 +1,11 @@
+# The nightly backup, started by blackbranch-backup.timer at the quiet hour. The timer
+# is rendered by `blackbranch render` from the instance settings (updates.quietHour, site.timeZone);
+# the result lands in /opt/blackbranch/results/backup-last.json, which the doctor reads.
+[Unit]
+Description=Black Branch: back up the site
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch backup --scheduled

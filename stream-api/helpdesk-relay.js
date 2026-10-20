@@ -1,0 +1,169 @@
+// ── Help-desk relay ──────────────────────────────────────────────────────────
+// Private request/response plumbing for the site's support panel: the web app
+// POSTs a free-text turn (/bot/support/ask, response HELD), the help desk in
+// stream-ingest long-polls for work (/bot/support/next) and posts the
+// answer back (/bot/support/reply), which resolves the held response.
+//
+// NEVER route these through the WS hub: broadcast() fans out to every
+// public socket (ws-hub.js has no client auth at all), and a support question
+// is a private conversation. Long-poll over localhost is why this needs no
+// new auth surface — requireInternal's IP trust already covers the brain.
+
+function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQueue = 20 } = {}) {
+  const queue = [];            // jobs waiting for the brain
+  const pending = new Map();   // requestId -> { res, timer } — held web responses
+  let waiter = null;           // the brain's parked poll: { res, timer }
+  let draining = false;        // set by release(); no new socket may be parked after
+  let seq = 0;
+
+  function deliver(job, res) {
+    res.json(job);
+  }
+
+  function ask(payload, res) {
+    // Draining: answer immediately rather than holding the browser's socket for
+    // askTimeoutMs against a process that is going away.
+    if (draining) {
+      res.status(503).json({ error: 'restarting' });
+      return;
+    }
+    if (queue.length >= maxQueue) {
+      res.status(503).json({ error: 'busy' });
+      return;
+    }
+    const requestId = `req_${++seq}`;
+    const job = { requestId, ...payload };
+    const timer = setTimeout(() => {
+      // The brain never answered — release the browser; a late reply() finds
+      // nothing and returns false.
+      pending.delete(requestId);
+      res.status(504).json({ error: 'timeout' });
+    }, askTimeoutMs);
+    pending.set(requestId, { res, timer });
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      clearTimeout(w.timer);
+      deliver(job, w.res);
+    } else {
+      queue.push(job);
+    }
+  }
+
+  function next(res) {
+    // Draining: reply empty so the brain re-polls against the NEW process instead
+    // of parking a 25s request on a socket this one is trying to close.
+    if (draining) { res.json({}); return; }
+    const job = queue.shift();
+    if (job) { deliver(job, res); return; }
+    if (waiter) {
+      // The brain loop is serial, but a restart mid-poll can briefly double
+      // up — release the displaced waiter empty so its socket isn't hung.
+      clearTimeout(waiter.timer);
+      waiter.res.json({});
+    }
+    waiter = {
+      res,
+      timer: setTimeout(() => {
+        if (waiter && waiter.res === res) waiter = null;
+        res.json({}); // empty answer = "nothing yet, poll again"
+      }, pollTimeoutMs),
+    };
+    // The ingest-restart race: the old process's parked poll dies with its
+    // socket, and a job delivered there vanished (one 504'd turn per deploy).
+    // Drop a waiter the moment its socket closes so asks queue for the live
+    // poller instead. (res is an http.ServerResponse; optional-chained for
+    // the unit tests' bare mocks.)
+    res.on?.('close', () => {
+      if (waiter && waiter.res === res) {
+        clearTimeout(waiter.timer);
+        waiter = null;
+      }
+    });
+  }
+
+  function reply(requestId, text) {
+    const held = pending.get(requestId);
+    if (!held) return false;
+    pending.delete(requestId);
+    clearTimeout(held.timer);
+    held.res.json({ text });
+    return true;
+  }
+
+  function stats() {
+    return { queued: queue.length, pending: pending.size, brainParked: !!waiter };
+  }
+
+  // Release every socket this relay is holding open. Called from the SIGTERM
+  // drain in index.js.
+  //
+  // This is REQUIRED for a graceful shutdown, not a nicety. The brain's poll is
+  // parked for up to pollTimeoutMs (25s) — LONGER than the shutdown grace — and
+  // it is an ACTIVE request, so closeIdleConnections() cannot touch it and
+  // server.close() waits on it. Without this, every restart runs to the
+  // forced-exit backstop and systemd records status=1/FAILURE.
+  //
+  // The brain gets the same empty body its poll timeout would have produced, so
+  // it simply polls again against the new process. Held web asks get 503 rather
+  // than being left to hang until the browser gives up.
+  function release() {
+    // Latch: after this, no caller may park a NEW socket. Without the latch the
+    // brain answers its released poll by immediately re-polling, which parks a
+    // fresh 25s request in the middle of the drain and the close never settles.
+    draining = true;
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      clearTimeout(w.timer);
+      try { w.res.json({}); } catch { void 0; }
+    }
+    for (const held of pending.values()) {
+      clearTimeout(held.timer);
+      try { held.res.status(503).json({ error: 'restarting' }); } catch { void 0; }
+    }
+    pending.clear();
+    queue.length = 0;
+  }
+
+  return { ask, next, reply, stats, release };
+}
+
+// Route shells. All requireInternal; /bot/support/* rather than /support/*
+// because POST /support is the MONEY endpoint (route-surface snapshot).
+function registerHelpdeskRoutes(app, { requireInternal, wrap, relay }) {
+  app.post('/bot/support/ask', requireInternal, wrap(async (req, res) => {
+    const { matrixId, username, text, history } = req.body || {};
+    if (typeof text !== 'string' || !text.trim() || typeof matrixId !== 'string') {
+      return res.status(400).json({ error: 'bad request' });
+    }
+    // Account context is web-derived (the ONE canonical entitlement read) and
+    // shape-clamped here — the brain treats it as facts about the asker.
+    const acc = req.body && typeof req.body.account === 'object' && req.body.account ? req.body.account : null;
+    relay.ask({
+      matrixId,
+      username: String(username || '').slice(0, 80),
+      text: text.slice(0, 2000),
+      history: Array.isArray(history) ? history.slice(-8).map((h) => ({
+        role: h && h.role === 'user' ? 'user' : 'bot',
+        text: String((h && h.text) || '').slice(0, 500),
+      })) : [],
+      account: acc ? {
+        username: String(acc.username || '').slice(0, 80),
+        supporter: !!acc.supporter,
+        linked: Array.isArray(acc.linked) ? acc.linked.slice(0, 10).map((p) => String(p).slice(0, 20)) : [],
+        points: Math.max(0, parseInt(acc.points, 10) || 0),
+      } : null,
+    }, res);
+  }));
+
+  app.get('/bot/support/next', requireInternal, wrap(async (_req, res) => relay.next(res)));
+
+  app.post('/bot/support/reply', requireInternal, wrap(async (req, res) => {
+    const body = req.body || {};
+    const ok = relay.reply(String(body.requestId || ''), String(body.text || '').slice(0, 4000));
+    res.status(ok ? 200 : 404).json({ ok });
+  }));
+}
+
+module.exports = { createSupportRelay, registerHelpdeskRoutes };

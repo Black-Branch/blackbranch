@@ -1,0 +1,77 @@
+# The RELEASE-CANDIDATE rehearsal: on ONE fresh runner, real signed releases are cut from this checkout
+# with a throwaway key — the site's image built once and pushed to a registry on the runner, the feed
+# served on the runner — and then:
+#   1. release A installed with the stamped one-line form (curl … | sudo bash -s -- …), and the first-boot
+#      path proved: every service healthy, the setup page and the homeserver answering, setup's first step
+#      (the first admin) through the site's own API, the update health check passing with that admin
+#      signed in, and a second run changing nothing. The later setup pages sign in through a browser.
+#   2. `blackbranch update --apply B` (B = one changed file): the box runs B, healthy, data kept.
+#   3. `blackbranch update --apply C` (C's stream-api closes every viewer's socket): its health check fails and
+#      the box goes back to B and its data, and says so.
+# Every step is install/ci/release-candidate.sh, which runs the same way by hand on a throwaway machine.
+#
+# NOT on every push (it takes a runner for most of an hour): by hand — Actions → release-candidate →
+# Run workflow — and on every v* tag. The key it makes signs nothing anyone else trusts.
+name: release-candidate
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rehearse:
+    name: install, update and roll back on a fresh runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      # A tag v1.2.3 rehearses as 1.2.3-ci.1/2/3 (never the tag's own version); a run by hand as 0.0.0-ci.N.
+      RC_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: The runner's room (the limits this job has to fit in)
+        run: |
+          nproc; free -m; df -h / "$RUNNER_TEMP"
+          docker version --format 'docker {{.Server.Version}}'; docker compose version; docker buildx version
+      - name: Prepare — a throwaway key, a local registry and feed, the site's image
+        timeout-minutes: 30
+        run: install/ci/release-candidate.sh prepare .
+      - name: Cut release A
+        timeout-minutes: 5
+        run: install/ci/release-candidate.sh cut A
+      - name: Install A with the one-line form
+        timeout-minutes: 20
+        run: install/ci/release-candidate.sh install
+      - name: First boot — healthy, setup answers, the first admin, a second run changes nothing
+        timeout-minutes: 20
+        run: install/ci/release-candidate.sh check-install
+      - name: Cut release B (one changed file)
+        timeout-minutes: 5
+        run: install/ci/release-candidate.sh cut B
+      - name: Update A → B
+        timeout-minutes: 25
+        run: install/ci/release-candidate.sh update-good
+      - name: Cut release C (its stream-api closes every viewer's socket)
+        timeout-minutes: 5
+        run: install/ci/release-candidate.sh cut C
+      - name: Update B → C fails its health check and rolls back to B
+        timeout-minutes: 25
+        run: install/ci/release-candidate.sh update-bad
+      - name: Peak memory and disk
+        if: always()
+        run: install/ci/release-candidate.sh usage report
+      - name: Logs (on failure)
+        if: failure()
+        run: install/ci/release-candidate.sh logs

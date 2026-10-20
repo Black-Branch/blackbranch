@@ -1,0 +1,39 @@
+node_modules/
+.next/
+out/
+dist/
+*.log
+.DS_Store
+
+# Secrets. `.env*` rather than a list: the old three-line form covered .env,
+# .env.local and .env*.local, so a stream-api/.env.production would have been
+# stageable. web/.gitignore already had the broad form; the root did not.
+.env*
+!.env.example
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+
+# Editor/tool leftovers that have carried live secrets here before —
+# stream-ingest/.gitignore documents `.env.bak*` doing exactly that.
+*.bak
+*.bak-*
+*.orig
+*.rej
+
+# local working notes / harness state — never track
+# (⚠ this also un-tracks .claude/hooks/, which gate turn completion and
+# hand-list build gates. They can drift from package.json with no diff.)
+.claude/
+.superpowers/
+
+# Browser-test output (Playwright MCP screenshots + page snapshots) and loose
+# top-level screenshots from visual checks — working files, never source.
+# Real images live under web/public/ or web/app/.
+.playwright-mcp/
+/*.png
+
+# shell prompt caches that agents leave behind
+.cache/

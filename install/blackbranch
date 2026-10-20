@@ -1,0 +1,2376 @@
+#!/usr/bin/env bash
+# blackbranch — the host command for a Black Branch install. It works when the site is
+# down, which is why it is not a page.
+#
+#   blackbranch status                 what runs, its health, the release, the site's image
+#   blackbranch logs <service> [-f]    recent logs of one service
+#   blackbranch restart <service>      restart one service
+#   blackbranch render                 regenerate the router, Synapse and MAS config from .env
+#                                      (+ the federation switch); restarts what changed
+#   blackbranch set <KEY> <value>      change one display value; the site restarts with it
+#   blackbranch migrate                apply database migrations now (also runs on every start)
+#   blackbranch up                     bring the whole bundle to its configured state
+#   blackbranch matrix bootstrap [--as <name>]   create the community space and #general as the
+#                                      streamer's account, record their ids (safe to repeat)
+#   blackbranch federation [on|off]    show or switch federation (re-renders, restarts Synapse)
+#   blackbranch setup-link [--new]     print the setup link again while no admin exists (--new:
+#                                      a fresh token; the old link stops working)
+#   blackbranch apply-install          write the setup pages' display values into .env and restart
+#                                      the site once (the setup pages' last step asks for this itself)
+#   blackbranch doctor [--report]      the checks of the Admin Panel's doctor page, printed (exit 1
+#                                      when one fails); --report writes a shareable report with no
+#                                      secret, chat text, viewer id or domain in it
+#   blackbranch backup [list|key]      back up now (the three databases, Synapse's media and signing
+#                                      key, .env and MAS's keys, encrypted with the recovery sheet's
+#                                      passphrase); list: the snapshots; key: the SFTP target's key
+#   blackbranch restore <snapshot|latest> [--verify] [--with-env] [--from <address>] [--yes]
+#                                      bring a snapshot back (asks first; the site stops meanwhile);
+#                                      --verify: restore it into a scratch database instead and check
+#                                      it — nothing live is touched; --with-env: a new box takes the
+#                                      snapshot's .env too; --from: read the backups at that bucket or
+#                                      SFTP address (a new box knows none yet). When .env's passphrase
+#                                      does not open them (.env was lost), it asks for the recovery
+#                                      sheet's passphrase (or reads BB_RECOVERY_PASSPHRASE)
+#   blackbranch update [--check|--dry-run|--auto|--apply <version>|--reconcile|--channel stable|beta] [--yes]
+#                                      the update channel: read the signed feed; apply a
+#                                      newer release — backup, switch, migrate, health check, and
+#                                      back to the previous release and its data if the check fails.
+#                                      --auto (the nightly timer): a security release applies itself
+#                                      at the quiet hour, never while the stream is live; a feature
+#                                      release waits for the Admin Panel's button or this command
+#                                      --reconcile (at boot): finish an update a power loss cut off —
+#                                      start the stopped site, or go back to the previous release
+#   blackbranch health                 the update's health check, on demand: every doctor check an
+#                                      update can affect, a WebSocket frame, a sign-in round trip
+#   blackbranch install-files          put the release's host files in place (the installer's step)
+#   blackbranch user                   not in this release yet
+#
+# Everything an install is lives in $BB_HOME (default /opt/blackbranch): .env (the one place for
+# its values and secrets, mode 600), compose.yaml, releases/<release>/ (each release's source; the
+# images but the site's are built from it) with release/ pointing at the one in use, site-files/
+# (the install's own icons, served at /site-files/), rendered/, requests/, results/, state/.
+# Secrets are never printed.
+set -euo pipefail
+
+BB_HOME="${BB_HOME:-/opt/blackbranch}"
+# BB_DOTENV: another .env to read (an update checks the next release against the migrated copy).
+ENV_FILE="${BB_DOTENV:-$BB_HOME/.env}"
+STATE="$BB_HOME/state"
+LONG_RUNNING=(postgres stream-api stream-ingest web caddy synapse mas)
+# The display values `set` may change: the site's install values (compose.yaml x-install-values)
+# that are not part of the install's identity. Origins, the server name and the sign-in client are
+# permanent. install/bundle.test.mjs checks this list against the schema and compose.yaml.
+SETTABLE_KEYS=(
+  SITE_NAME SITE_SHORT_NAME SITE_TAGLINE SITE_DESCRIPTION SITE_HOME_HEADING SITE_HOME_INTRO SITE_ICON_SET
+  LEGAL_OPERATOR LEGAL_CONTACT_EMAIL LEGAL_GOVERNING_LAW LEGAL_EFFECTIVE_DATE
+  CURRENCY_NAME CURRENCY_NAME_PLURAL CURRENCY_SYMBOL CURRENCY_ICON COMMUNITY_SCORE_NAME
+  YOUTUBE_VOD_PLAYLIST
+)
+# The services a request from the site may restart (the module manifests' `packages`).
+REQUEST_RESTARTABLE=(stream-api stream-ingest web)
+# The setup link's token: the token itself only here (root, mode 600) so `setup-link`
+# can print it again; web gets its sha256 (SETUP_TOKEN_HASH in .env). Dead once an admin exists.
+SETUP_TOKEN_FILE="$STATE/setup-token"
+# Inside the bundle's network: Synapse's federation listener (only while federation is on), and the
+# users the two homeserver images run as (Synapse drops to 991; MAS's image is distroless nonroot).
+FEDERATION_PORT=8448
+SYNAPSE_UID=991
+MAS_UID=65532
+
+# The homeserver generator (install/matrix/render.sh): beside this script in a checkout, in the
+# installed release on a box.
+MATRIX_LIB="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/matrix/render.sh"
+[ -f "$MATRIX_LIB" ] || MATRIX_LIB="$BB_HOME/release/install/matrix/render.sh"
+# shellcheck source-path=SCRIPTDIR source=matrix/render.sh
+. "$MATRIX_LIB"
+
+say()  { printf '\033[1m==\033[0m %s\n' "$*"; }
+info() { printf '   %s\n' "$*"; }
+die()  { printf '\033[31mblackbranch: %s\033[0m\n' "$*" >&2; exit 1; }
+not_yet() { printf 'blackbranch %s: not in this release yet.\n' "$1" >&2; exit 3; }
+
+need_root() {
+  if [ "$(id -u)" != 0 ] && [ ! -w "$BB_HOME" ]; then die "run as root (sudo blackbranch $*)"; fi
+}
+need_install() { [ -f "$ENV_FILE" ] || die "no install at $BB_HOME (no .env) — run install.sh first"; }
+
+# ── .env: read and write one key (never sourced: values are data) ───────────────────────────
+env_get() { # env_get KEY → value ("" when absent)
+  local line
+  line=$(grep -m1 -E "^$1=" "$ENV_FILE" 2>/dev/null || true)
+  line="${line#*=}"
+  case "$line" in
+    \"*\") line="${line:1:${#line}-2}"; line="${line//\\\"/\"}"; line="${line//\\\\/\\}" ;;
+    \'*\') line="${line:1:${#line}-2}" ;;
+  esac
+  printf '%s' "$line"
+}
+env_quote() { printf '"%s"' "$1"; } # callers refuse " \ $ and line breaks: Compose's .env has no escape for them
+# A file is replaced by a rename only once its new content is all there; a short or empty one is
+# removed instead. Every write below checks its own status and every caller checks the function's:
+# `set -e` is OFF inside `if msg=$(cmd …)` (every request handler) and in `x=$(f) || die`, and a
+# full disk there once turned .env — every bootstrap secret, kept nowhere else — into 0 bytes.
+replace_file() { # replace_file <tmp> <dest> [fewest lines] → 1 (tmp removed, dest untouched) when short
+  if [ ! -s "$1" ] || [ "$(wc -l < "$1")" -lt "${3:-1}" ]; then rm -f "$1"; return 1; fi
+  mv -f "$1" "$2" || { rm -f "$1"; return 1; }
+}
+env_set() { # env_set KEY VALUE — atomic, keeps mode 600; a failed write leaves .env as it was (status 1)
+  local key="$1" val="$2" tmp lines why="could not write .env ($1): the write failed (is the disk full?) — .env is as it was"
+  tmp=$(mktemp "$(dirname "$ENV_FILE")/.env.XXXXXX") || { echo "$why" >&2; return 1; }
+  chmod 600 "$tmp"
+  lines=$(wc -l < "$ENV_FILE") || { rm -f "$tmp"; echo "$why" >&2; return 1; }
+  if grep -q -E "^$key=" "$ENV_FILE"; then
+    awk -v k="$key" -v line="$key=$(env_quote "$val")" 'index($0, k "=") == 1 { print line; next } { print }' "$ENV_FILE" > "$tmp"
+  else
+    { cat "$ENV_FILE" && printf '%s=%s\n' "$key" "$(env_quote "$val")"; } > "$tmp"
+  fi || { rm -f "$tmp"; echo "$why" >&2; return 1; }
+  replace_file "$tmp" "$ENV_FILE" "$lines" || { echo "$why" >&2; return 1; }
+}
+
+compose() {
+  if [ -n "${BB_DOTENV:-}" ]; then (cd "$BB_HOME" && docker compose --env-file "$BB_DOTENV" "$@")
+  else (cd "$BB_HOME" && docker compose "$@"); fi
+}
+# A release's name, the tag its images carry. Versions only ever reach here checked (VERSION_RE).
+VERSION_RE='^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})(-[0-9a-z-]+(\.[0-9a-z-]+)*)?$'
+release_tag() { local t; t=$(env_get BB_RELEASE); [[ "$t" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || t=local; printf '%s' "$t"; }
+
+# ── Stamps: what the images were made from ──────────────────────────────────────────────────
+tree_hash() { # tree_hash [dir] — content hash of a release's source (default: the one in use)
+  (cd "${1:-$BB_HOME/release}" && find . -type f ! -name RELEASE -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
+}
+stamp_get() { cat "$STATE/$1" 2>/dev/null || true; }
+# A stamp is replaced like every other file (replace_file): a write that fails (a full disk) keeps the
+# one it had — an emptied `federation` stamp read as "off" the next time the database was down.
+stamp_set() { # stamp_set <name> <value> → 1 when it could not be written (the old one kept)
+  mkdir -p "$STATE" || return 1
+  if printf '%s\n' "$2" > "$STATE/$1.new" && replace_file "$STATE/$1.new" "$STATE/$1"; then return 0; fi
+  rm -f "$STATE/$1.new"; echo "could not record $1 in $STATE (is the disk full?) — it is as it was" >&2; return 1
+}
+# What one release's images were made from: <name>.<release>. (An install from
+# before releases had names kept them unsuffixed; that is the "local" release.)
+rstamp_get() {
+  local v; v=$(stamp_get "$1.$(release_tag)")
+  if [ -z "$v" ] && [ "$(release_tag)" = local ]; then v=$(stamp_get "$1"); fi
+  printf '%s' "$v"
+}
+rstamp_set() { stamp_set "$1.$(release_tag)" "$2"; }
+
+# The images built here, from the release's source. The site's is one of them only in a checkout:
+# a published release names it by digest (tools/release.mjs), and the box pulls it.
+APP_IMAGES=(stream-api stream-ingest web backup)
+web_from_source() { # web_from_source [compose.yaml] — does this release build the site here (a checkout)?
+  awk '/^  web:[[:space:]]*$/ { w = 1; next } w && /^  [^ #]/ { exit } w && /^    build:/ { found = 1 } END { exit !found }' \
+    "${1:-$BB_HOME/compose.yaml}"
+}
+web_image() { # the image the site runs: the release's digest, or the tag a checkout builds
+  local ref
+  ref=$(awk '/^  web:[[:space:]]*$/ { w = 1; next } w && /^  [^ #]/ { exit } w && /^    image:/ { print $2; exit }' "$BB_HOME/compose.yaml")
+  ref="${ref//\$\{BB_RELEASE:-local\}/$(release_tag)}"
+  printf '%s' "$ref"
+}
+images_present() {
+  local i
+  for i in "${APP_IMAGES[@]}"; do
+    if [ "$i" = web ] && ! web_from_source; then continue; fi
+    docker image inspect "blackbranch/$i:$(release_tag)" >/dev/null 2>&1 || return 1
+  done
+  docker image inspect "$(web_image)" >/dev/null 2>&1
+}
+build_images() {
+  local want targets=(stream-api stream-ingest backup)
+  want=$(tree_hash)
+  if [ "$(rstamp_get images)" = "$want" ] && images_present; then
+    info "images: up to date ($(release_tag), $want)"; return 0
+  fi
+  if web_from_source; then
+    targets+=(web)
+    say "Building the images of release $(release_tag) from its source, the site's too (a checkout; first time: several minutes)"
+  else
+    say "Fetching the site's image ($(web_image | sed 's/@sha256:\(.\{12\}\).*/@sha256:\1…/'))"
+    compose pull -q web || die "the site's image could not be fetched"
+    say "Building the images of release $(release_tag) from its source (first time: a few minutes)"
+  fi
+  compose --profile backup build "${targets[@]}"
+  rstamp_set images "$want"
+}
+
+# ── render: the ONE routing table ───────────────────────────────────────────────────────────
+render_caddyfile() {
+  local domain mode email global scheme="" cfip routes
+  domain=$(env_get BB_DOMAIN); mode=$(env_get BB_TLS_MODE); email=$(env_get BB_ACME_EMAIL)
+  [ -n "$domain" ] || die ".env has no BB_DOMAIN"
+  routes=$(matrix_inputs && mx_caddy_routes) || { echo "cannot render the homeserver routes" >&2; return 1; }
+  case "$mode" in
+    tunnel)
+      # cloudflared hands caddy plain HTTP; TLS ended at Cloudflare. Only cloudflared's own
+      # fixed address is trusted to say who the client is (Cf-Connecting-Ip, set by Cloudflare's
+      # edge) — never "any private address": every container on the network is one.
+      scheme="http://"
+      cfip=$(env_get BB_CLOUDFLARED_IP); cfip="${cfip:-172.29.83.250}"
+      [[ "$cfip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "BB_CLOUDFLARED_IP is not an IPv4 address"
+      global=$'\tauto_https off\n\tservers {\n\t\ttrusted_proxies static '"$cfip"$'/32\n\t\tclient_ip_headers Cf-Connecting-Ip\n\t}' ;;
+    direct)
+      global=$'\t# Certificates from Let\'s Encrypt; ports 80 and 443 are this box\'s.'
+      [ -n "$email" ] && global+=$'\n\temail '"$email" ;;
+    internal)
+      global=$'\t# LAB MODE — NOT FOR PRODUCTION. Certificates come from caddy\'s own local CA, which no\n\t# browser trusts until its root (caddy-data volume: pki/authorities/local/root.crt) is added.\n\tlocal_certs' ;;
+    *) die "BB_TLS_MODE must be tunnel, direct or internal (got \"$mode\")" ;;
+  esac
+  cat <<EOF
+# GENERATED by \`blackbranch render\` from $ENV_FILE — never edit by hand; it is overwritten.
+# TLS mode: $mode
+{
+$global
+}
+
+# The client address the apps see is the one caddy determined ({client_ip}: the connecting
+# address, or Cloudflare's header from cloudflared alone). Overwritten on every request, so a
+# client cannot choose its own rate-limit bucket by sending CF-Connecting-IP itself.
+(upstream) {
+	reverse_proxy {args[0]} {
+		header_up CF-Connecting-IP {client_ip}
+		header_up X-Forwarded-For {client_ip}
+	}
+}
+
+# The site, and the Matrix discovery files it serves itself (/.well-known/matrix/*).
+$scheme$domain {
+	import upstream web:3000
+}
+
+# The platform API and its WebSocket.
+${scheme}api.$domain {
+	import upstream stream-api:3001
+}
+
+# The homeserver: Synapse, and MAS for sign-in (install/matrix/render.sh writes these routes).
+${scheme}matrix.$domain {
+$routes
+}
+EOF
+}
+
+# A failed write (status 1) leaves <file> as it was: a request-driven render on a full disk must not
+# swap a short homeserver.yaml or Caddyfile in. Every caller checks the status (see replace_file).
+write_if_changed() { # write_if_changed <file> [mode] [uid] (content on stdin) → prints written|unchanged
+  local f="$1" mode="${2:-644}" uid="${3:-}" tmp why="could not write $1 (is the disk full?) — it is as it was"
+  tmp=$(mktemp "$(dirname "$f")/.render.XXXXXX") || { echo "$why" >&2; return 1; }
+  chmod "$mode" "$tmp"
+  if ! cat > "$tmp" || [ ! -s "$tmp" ]; then rm -f "$tmp"; echo "$why" >&2; return 1; fi
+  if [ -n "$uid" ] && [ "$(id -u)" = 0 ]; then chown "$uid:$uid" "$tmp"; fi
+  if [ -f "$f" ] && cmp -s "$tmp" "$f"; then rm -f "$tmp"; echo unchanged
+  else replace_file "$tmp" "$f" || { echo "$why" >&2; return 1; }; echo written; fi
+}
+private_dir() { # private_dir <dir> [uid] — exists, mode 700, owned by uid when we are root
+  mkdir -p "$1"; chmod 700 "$1"
+  if [ -n "${2:-}" ] && [ "$(id -u)" = 0 ]; then chown "$2:$2" "$1"; fi
+}
+
+# ── instance config (site.instance_config) from the host, through the postgres container ────
+# Values travel as psql variables on stdin, never spliced into SQL text.
+postgres_up() { [ "$(service_health postgres)" = healthy ]; }
+config_get() { # config_get <key> → the value as text ("" when unset)
+  printf '%s\n' "SELECT value #>> '{}' FROM site.instance_config WHERE key = :'k';" \
+    | compose exec -T postgres psql -U postgres -d stream -qAt -v ON_ERROR_STOP=1 -v k="$1"
+}
+config_set() { # config_set <key> <json value> — with its history row, like the Admin Panel's write
+  printf '%s\n' "BEGIN;" \
+    "INSERT INTO site.instance_history (key, tier, action, old_value, new_value, updated_by)
+       SELECT :'k', 'instance', 'set', (SELECT value FROM site.instance_config WHERE key = :'k'), :'v'::jsonb, 'blackbranch';" \
+    "INSERT INTO site.instance_config (key, value, updated_by, updated_at) VALUES (:'k', :'v'::jsonb, 'blackbranch', now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now();" \
+    "COMMIT;" \
+    | compose exec -T postgres psql -U postgres -d stream -q -v ON_ERROR_STOP=1 -v k="$1" -v v="$2" >/dev/null
+}
+
+# The federation switch: instance config `matrix.federation`, written by the Admin Panel
+# or `blackbranch federation`. Read from the database when it runs; otherwise the state the last
+# render saw (so render works with the database down). Unset = off.
+federation_state() { # federation_state [ro] — ro: never record what it read (the doctor writes nothing)
+  local v s
+  if postgres_up && v=$(config_get matrix.federation 2>/dev/null); then
+    if [ "$v" = true ]; then s=on; else s=off; fi
+    [ "${1:-}" = ro ] || stamp_set federation "$s"
+  else
+    s=$(stamp_get federation)
+  fi
+  echo "${s:-off}"
+}
+
+# The generator's inputs, from .env alone (+ the federation switch). Sets MX_* for render.sh.
+matrix_inputs() {
+  local domain hs issuer
+  domain=$(env_get BB_DOMAIN); hs=$(env_get MATRIX_HOMESERVER_URL); issuer=$(env_get MATRIX_OAUTH_ISSUER)
+  MX_SERVER_NAME=$(env_get MATRIX_SERVER_NAME)
+  # The bundle serves the homeserver at matrix.<domain> and MAS under a path of that same host.
+  [ "$MX_SERVER_NAME" = "$domain" ] || { echo "MATRIX_SERVER_NAME must be the bare domain ($domain)" >&2; return 1; }
+  [ "$hs" = "https://matrix.$domain" ] || { echo "MATRIX_HOMESERVER_URL must be https://matrix.$domain" >&2; return 1; }
+  if ! [[ "$issuer" =~ ^https://matrix\.[^/]+(/[a-z0-9_-]+)/$ ]] || [ "${issuer#"$hs"/}" = "$issuer" ]; then
+    echo "MATRIX_OAUTH_ISSUER must be a path of $hs, ending in / (e.g. $hs/auth/)" >&2; return 1
+  fi
+  MX_ISSUER="$issuer"; MX_ISSUER_PATH="${BASH_REMATCH[1]}"
+  MX_PUBLIC_BASEURL="$hs/"
+  MX_FEDERATION="${BB_FEDERATION:-off}"; MX_FEDERATION_PORT="$FEDERATION_PORT"
+}
+matrix_secrets() {
+  MX_CONFIG_DIR=/config; MX_DATA_DIR=/data; MX_X_FORWARDED=true
+  MX_DB_HOST=postgres; MX_DB_NAME=synapse; MX_DB_USER=synapse; MX_DB_PASSWORD=$(env_get SYNAPSE_DB_PASSWORD)
+  MX_REGISTRATION_SECRET=$(env_get SYNAPSE_REGISTRATION_SECRET); MX_MACAROON_SECRET=$(env_get SYNAPSE_MACAROON_SECRET)
+  MX_FORM_SECRET=$(env_get SYNAPSE_FORM_SECRET)
+  MX_MAS_ENDPOINT=http://mas:8080/; MX_MAS_SECRET=$(env_get MAS_SYNAPSE_SECRET)
+  MX_SYNAPSE_ENDPOINT=http://synapse:8008/
+  MX_MAS_DB_URI="postgresql://mas:$(env_get MAS_DB_PASSWORD)@postgres/mas"
+  MX_MAIL_FROM="noreply@$(env_get BB_DOMAIN)"
+  MX_CLIENT_ID=$(env_get MATRIX_OAUTH_CLIENT_ID); MX_CLIENT_SECRET=$(env_get MATRIX_OAUTH_CLIENT_SECRET)
+  MX_REDIRECT_URI="$(env_get SITE_ORIGIN)/api/auth/mas-callback"
+  # The consent screen names the site by its address: permanent, so renaming the site re-renders nothing.
+  MX_CLIENT_NAME=$(env_get BB_DOMAIN); MX_CLIENT_URI="$(env_get SITE_ORIGIN)/"
+  MX_ENCRYPTION_SECRET=$(env_get MAS_ENCRYPTION_SECRET)
+  MX_MAS_KEYS_FILE="$BB_HOME/matrix/mas-keys.yaml"
+  MX_TRUSTED_PROXIES=$(env_get BB_SUBNET); MX_TRUSTED_PROXIES="${MX_TRUSTED_PROXIES:-172.29.83.0/24}"
+}
+image_of() { grep -m1 -oE "$1:[^ \"]+" "$BB_HOME/compose.yaml"; }
+
+# Every file rendered in full into caddy_txt hs_txt log_txt mas_txt (the caller declares them
+# local); nothing is written. Shared by `render` and the doctor's "matches a fresh render" check.
+render_all() { # render_all [ro]
+  BB_FEDERATION=$(federation_state "${1:-}")
+  caddy_txt=$(render_caddyfile) || { echo "the router config did not render" >&2; return 1; }
+  matrix_inputs || { echo "cannot render the homeserver config" >&2; return 1; }
+  matrix_secrets
+  hs_txt=$(mx_render_homeserver) || { echo "Synapse's config did not render" >&2; return 1; }
+  log_txt=$(mx_render_log_config)
+  mas_txt=$(mx_render_mas) || { echo "MAS's config did not render" >&2; return 1; }
+}
+
+cmd_render() {
+  need_root render; need_install
+  local r hs log mas caddy_txt hs_txt log_txt mas_txt
+  # --check: render everything and write nothing (an update tries the next release's templates
+  # against the migrated .env before the site goes down).
+  if [ "${1:-}" = --check ]; then render_all ro || die "the config does not render (see above)"; info "renders"; return 0; fi
+  private_dir "$BB_HOME/matrix"
+  if [ ! -s "$BB_HOME/matrix/mas-keys.yaml" ]; then
+    mx_generate_mas_keys "$(image_of ghcr.io/element-hq/matrix-authentication-service)" "$BB_HOME/matrix/mas-keys.yaml" \
+      || die "could not generate MAS's signing keys"
+    info "generated MAS's signing keys (matrix/mas-keys.yaml)"
+  fi
+  # Every file is rendered in full before any is written: a failed render replaces nothing.
+  render_all || die "nothing was rendered (see the message above)"
+
+  # Root's alone: rendered/synapse and rendered/mas below belong to the services' uids (991, 65532),
+  # and a host account that happens to share one could otherwise walk in. The containers do not need
+  # the parent — each mounts its own folder, and Docker (root) makes the mount.
+  private_dir "$BB_HOME/rendered" 0
+  # The router's folder is its own: caddy (internet-facing, root in its image) mounts rendered/caddy
+  # alone. It mounted all of rendered/ before, and could read Synapse's and MAS's secrets.
+  private_dir "$BB_HOME/rendered/caddy" 0
+  r=$(printf '%s\n' "$caddy_txt" | write_if_changed "$BB_HOME/rendered/caddy/Caddyfile") || die "could not write rendered/caddy/Caddyfile (see above)"
+  info "rendered/caddy/Caddyfile: $r"
+  if [ "$r" = written ] && [ -n "$(compose ps -q caddy 2>/dev/null)" ]; then
+    if compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then info "caddy reloaded"
+    else die "caddy refused the new Caddyfile — blackbranch logs caddy"; fi
+  fi
+  # The homeserver: each file holding a secret is readable only by the user its service runs as.
+  private_dir "$BB_HOME/rendered/synapse" "$SYNAPSE_UID"
+  private_dir "$BB_HOME/rendered/mas" "$MAS_UID"
+  hs=$(printf '%s\n' "$hs_txt" | write_if_changed "$BB_HOME/rendered/synapse/homeserver.yaml" 600 "$SYNAPSE_UID") \
+    || die "could not write rendered/synapse/homeserver.yaml (see above)"
+  log=$(printf '%s\n' "$log_txt" | write_if_changed "$BB_HOME/rendered/synapse/log.config" 644 "$SYNAPSE_UID") \
+    || die "could not write rendered/synapse/log.config (see above)"
+  mas=$(printf '%s\n' "$mas_txt" | write_if_changed "$BB_HOME/rendered/mas/config.yaml" 600 "$MAS_UID") \
+    || die "could not write rendered/mas/config.yaml (see above)"
+  info "rendered/synapse/homeserver.yaml: $hs (federation $BB_FEDERATION) · log.config: $log · rendered/mas/config.yaml: $mas"
+  if [ "$mas" = written ] && [ "$(service_health mas)" = running ]; then compose restart mas >/dev/null 2>&1 && info "mas restarted"; fi
+  if [ "$hs$log" != unchangedunchanged ] && [ -n "$(compose ps -q synapse 2>/dev/null)" ]; then
+    compose restart synapse >/dev/null 2>&1 && info "synapse restarted"
+    wait_healthy 180 synapse || die "synapse did not come back healthy after the new config — blackbranch logs synapse"
+  fi
+  backup_timers || die "could not write the timers (see above)"
+}
+
+# Synapse's data volume: owned by its user, and the signing key generated ONCE. --generate-keys
+# writes only keys that are missing, so a key that exists is never replaced.
+synapse_init() {
+  compose run --rm --no-deps -T --user 0 --entrypoint sh synapse \
+    -c "mkdir -p /data/media_store && chown $SYNAPSE_UID:$SYNAPSE_UID /data /data/media_store" >/dev/null
+  if ! compose run --rm --no-deps -T --entrypoint test synapse -s /data/signing.key; then
+    compose run --rm --no-deps -T --user "$SYNAPSE_UID:$SYNAPSE_UID" --entrypoint python synapse \
+      -m synapse.app.homeserver -c /config/homeserver.yaml --generate-keys >/dev/null
+    info "generated the homeserver's signing key (kept in the synapse-data volume; never regenerated)"
+  fi
+}
+# MAS has no shell for a health check of its own; ask it from Synapse's container.
+mas_health() { compose exec -T synapse curl -fsS -o /dev/null http://mas:8080/health 2>/dev/null; }
+wait_mas() {
+  local deadline=$(( $(date +%s) + ${1:-120} ))
+  until mas_health; do [ "$(date +%s)" -ge "$deadline" ] && return 1; sleep 3; done
+}
+
+# ── health ──────────────────────────────────────────────────────────────────────────────────
+expected_services() {
+  printf '%s\n' "${LONG_RUNNING[@]}"
+  [ "$(env_get BB_TLS_MODE)" = tunnel ] && echo cloudflared
+  return 0
+}
+service_health() { # → healthy | running | starting | unhealthy | exited | missing
+  local id state health
+  id=$(compose ps -a -q "$1" 2>/dev/null | head -1)
+  [ -n "$id" ] || { echo missing; return; }
+  state=$(docker inspect -f '{{.State.Status}}' "$id")
+  health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id")
+  if [ "$state" != running ]; then echo "$state"; elif [ -n "$health" ]; then echo "$health"; else echo running; fi
+}
+# Why a service that is not healthy yet never will be, when that is already plain — its own log
+# names the cause, or it keeps stopping — so a wait ends at once and says it, rather than running
+# out the clock to a bare "not every service became healthy" (install verification pass, item 8).
+# stuck_reason <service> <restarts when the wait began> → the reason, or nothing.
+stuck_reason() {
+  local id log n last
+  id=$(compose ps -a -q "$1" 2>/dev/null | head -1); [ -n "$id" ] || return 0
+  if [ "$1" = cloudflared ]; then
+    log=$(docker logs --tail 40 "$id" 2>&1 || true)
+    case "$log" in
+      *"Tunnel token is not valid"*)
+        echo "the tunnel token is not valid (cloudflared: \"Provided Tunnel token is not valid.\") — copy it again from the Cloudflare dashboard (Zero Trust → Networks → Tunnels → your tunnel), then: sudo $BB_HOME/release/install/install.sh --tunnel-token"
+        return 0 ;;
+      *"Failed to get tunnel"*|*"Unauthorized"*)
+        echo "Cloudflare does not know this tunnel (cloudflared: \"$(printf '%s' "$log" | grep -oE 'Failed to get tunnel|Unauthorized[^"]*' | head -1)\") — the tunnel was deleted, or the token is another tunnel's; copy its token again from the Cloudflare dashboard, then: sudo $BB_HOME/release/install/install.sh --tunnel-token"
+        return 0 ;;
+    esac
+  fi
+  n=$(docker inspect -f '{{.RestartCount}}' "$id" 2>/dev/null || echo 0)
+  [[ "$n" =~ ^[0-9]+$ ]] || return 0
+  # 5, not fewer: a healthy first start has seen stream-ingest restart twice (VM 120, 2026-10-18).
+  if [ $(( n - ${2:-0} )) -ge 5 ]; then
+    last=$(docker logs --tail 5 "$id" 2>&1 | grep -v '^[[:space:]]*$' | tail -n 1 | tr -d '\000-\037' | cut -c1-200)
+    echo "it keeps stopping (restarted $(( n - ${2:-0} )) times while waiting); its last words: ${last:-none} — blackbranch logs $1"
+  fi
+}
+# What the last wait_healthy found wrong: "<service>: <cause>", or "<service>:<state> …" when it ran
+# out of time. Callers put it in their message, so a failure names the service.
+HEALTH_PROBLEM=""
+wait_healthy() { # wait_healthy <seconds> <service>... (BB_HEALTH_WAIT caps the seconds — a test's short wait)
+  local deadline=$(( $(date +%s) + ${BB_HEALTH_WAIT:-$1} )) s h pending why id
+  local -A base=()
+  shift; HEALTH_PROBLEM=""
+  while :; do
+    pending=()
+    for s in "$@"; do
+      h=$(service_health "$s")
+      case "$h" in healthy|running) ;; *)
+        pending+=("$s:$h")
+        if [ -z "${base[$s]+x}" ]; then
+          id=$(compose ps -a -q "$s" 2>/dev/null | head -1)
+          base[$s]=$( [ -n "$id" ] && docker inspect -f '{{.RestartCount}}' "$id" 2>/dev/null || echo 0)
+          [[ "${base[$s]}" =~ ^[0-9]+$ ]] || base[$s]=0
+        fi
+        why=$(stuck_reason "$s" "${base[$s]}")
+        if [ -n "$why" ]; then HEALTH_PROBLEM="$s: $why"; printf '   not healthy: %s\n' "$HEALTH_PROBLEM" >&2; return 1; fi ;;
+      esac
+    done
+    [ "${#pending[@]}" -eq 0 ] && return 0
+    [ "$(date +%s)" -ge "$deadline" ] && { HEALTH_PROBLEM="${pending[*]}"; printf '   not healthy: %s\n' "$HEALTH_PROBLEM" >&2; return 1; }
+    sleep 3
+  done
+}
+
+# ── up: bring the bundle to its configured state (install.sh's last step; safe to repeat) ──
+# The start order is the update's: the database and its migrations, the
+# homeserver (it migrates itself) once healthy, then stream-api, stream-ingest, and the site.
+cmd_up() {
+  need_root up; need_install
+  mkdir -p "$BB_HOME/rendered" "$BB_HOME/requests" "$BB_HOME/results" "$BB_HOME/lab-ca" "$STATE"
+  # The install's home: root's and its group's alone (install.sh's mode, kept on a box made before it).
+  # A host account that shares a service's uid — 65532 owns cloudflared/, 1000 the site's drop box
+  # and its recovery sheet — cannot walk in. The containers need no way through it: Docker mounts.
+  # Its group is root's: a group with members would walk in through the 750.
+  if [ "$(id -u)" = 0 ]; then chown root:root "$BB_HOME"; fi
+  chmod 750 "$BB_HOME"
+  ensure_env_shape
+  local n; n=$(env_migrations "$BB_HOME/release" "$ENV_FILE") || die "an .env migration failed — .env is as the last one that worked left it"
+  [ "$n" = 0 ] || info ".env: $n migration(s) applied (BB_ENV_VERSION $(env_get BB_ENV_VERSION))"
+  env_report_shape
+  install_files "$BB_HOME/release" | sed 's/^/   updated /'
+  build_images
+  say "Starting the database and applying migrations"
+  local since; since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  compose up -d postgres
+  wait_healthy 120 postgres || die "postgres did not become healthy"
+  compose up -d migrate >/dev/null 2>&1 || die "migrate did not start — blackbranch logs migrate"
+  if ! compose wait migrate >/dev/null 2>&1; then
+    compose logs --no-log-prefix migrate 2>/dev/null | tail -n 20 | sed 's/^/   | /' >&2
+    die "the database migrations failed — blackbranch logs migrate"
+  fi
+  compose logs --no-log-prefix --since "$since" migrate 2>/dev/null | tail -n 3 | sed 's/^/   /'
+  ensure_setup_token
+  recovery_sheet_sweep
+  cmd_render
+  say "Starting the homeserver (Synapse + MAS)"
+  synapse_init
+  compose up -d mas synapse
+  wait_healthy 240 synapse || die "synapse did not become healthy — blackbranch logs synapse"
+  wait_mas 120 || die "MAS did not answer its health check — blackbranch logs mas"
+  info "synapse healthy; MAS answers"
+  say "Starting stream-api and stream-ingest"
+  compose up -d stream-api stream-ingest || die "stream-api or stream-ingest failed to start — blackbranch logs stream-api"
+  wait_healthy 180 stream-api || die "stream-api did not become healthy"
+  say "Starting everything"
+  compose up -d
+  # A box from before the router had its own folder: caddy now reads rendered/caddy/, so the old
+  # file is read by nothing (`render` left it while the caddy started before this release used it).
+  rm -f "$BB_HOME/rendered/Caddyfile"
+  # shellcheck disable=SC2046
+  wait_healthy 240 $(expected_services) || die "not every service became healthy ($HEALTH_PROBLEM) — blackbranch status"
+  export_lab_ca
+  info "all services healthy"
+}
+
+cmd_migrate() {
+  need_root migrate; need_install
+  compose up -d postgres >/dev/null
+  wait_healthy 120 postgres || die "postgres did not become healthy"
+  compose run --rm migrate
+}
+
+cmd_status() {
+  need_install
+  local mode domain s h rc=0
+  domain=$(env_get BB_DOMAIN); mode=$(env_get BB_TLS_MODE)
+  printf 'Black Branch — %s (TLS: %s%s)\n' "$domain" "$mode" "$([ "$mode" = internal ] && echo ', LAB ONLY')"
+  # (only where this user may write results: root on a box)
+  if results_dir_ok "$BB_HOME/results"; then update_reconcile record || true; fi
+  local rel_line; rel_line=$(head -1 "$BB_HOME/release/RELEASE" 2>/dev/null || echo unknown)
+  if [ "$rel_line" = "$(current_label)" ]; then printf '  release      %s (channel %s)\n' "$rel_line" "$(update_channel)"
+  else printf '  release      %s (%s; channel %s)\n' "$(current_label)" "$rel_line" "$(update_channel)"; fi
+  printf '  site image   %s\n' "$(web_image | sed 's/@sha256:\(.\{12\}\).*/@sha256:\1…/')"
+  printf '  federation   %s\n' "$(federation_state)"
+  if postgres_up; then
+    if [ -n "$(config_get setup.completedAt 2>/dev/null)" ]; then printf '  setup        finished\n'
+    elif [ -n "$(first_admin)" ]; then printf '  setup        in progress (first admin: %s) — continue at https://%s/setup\n' "$(first_admin)" "$(env_get BB_DOMAIN)"
+    else printf '  setup        not started — blackbranch setup-link\n'; fi
+  fi
+  printf '  backups      %s\n' "$(backup_status_line)"
+  printf '  update check %s\n' "$(update_check_line)"
+  printf '  last update  %s\n\n' "$(update_last_line)"
+  printf '  %-15s %s\n' SERVICE STATE
+  while read -r s; do
+    h=$(service_health "$s")
+    printf '  %-15s %s\n' "$s" "$h"
+    case "$h" in healthy|running) ;; *) rc=1 ;; esac
+  done < <(expected_services)
+  local mid
+  mid=$(compose ps -a -q migrate 2>/dev/null | head -1)
+  if [ -n "$mid" ]; then
+    printf '  %-15s %s (exit %s): %s\n' migrate "one-shot" "$(docker inspect -f '{{.State.ExitCode}}' "$mid")" \
+      "$(docker logs --tail 1 "$mid" 2>&1 | sed 's/^\[migrate\] //')"
+  fi
+  return "$rc"
+}
+
+update_check_line() {
+  local c st; c=$(cat "$BB_HOME/results/update-feed.json" 2>/dev/null || true); st=$(cat "$BB_HOME/results/update-state.json" 2>/dev/null || true)
+  if [ "$(jfield "$st" state)" = running ]; then printf 'UPDATING to %s — step %s of %s: %s' "$(jfield "$st" to)" "$(jfield "$st" step)" "$(jfield "$st" steps)" "$(jfield "$st" words)"; return; fi
+  if [ "$(jfield "$st" state)" = waiting ]; then printf '%s' "$(jfield "$st" words)"; return; fi
+  if [ -z "$c" ]; then printf 'never — blackbranch update --check'; return; fi
+  printf 'last read %s' "$(jfield "$c" readAt)"
+  [ "$(jfield "$c" ok)" = true ] || printf ' (the last try, %s, failed: %s)' "$(jfield "$c" at)" "$(jfield "$c" error)"
+  case "$c" in
+    *'"available":{'*) printf ' — %s is available%s' "$(printf '%s' "$c" | grep -oE '"available":\{"version":"[^"]+"' | cut -d'"' -f6)" \
+                         "$(case "$c" in *'"security":true'*) printf ' (security: applies itself at the quiet hour)' ;; *) printf ' (feature: Admin Panel or blackbranch update)' ;; esac)" ;;
+    *) printf ' — up to date' ;;
+  esac
+}
+update_last_line() {
+  local l; l=$(cat "$BB_HOME/results/update-last.json" 2>/dev/null || true)
+  if [ -z "$l" ]; then printf 'none yet'; return; fi
+  case "$(jfield "$l" result)" in
+    updated) printf '%s: %s → %s, health check passed' "$(jfield "$l" at)" "$(jfield "$l" from)" "$(jfield "$l" to)" ;;
+    rolled-back) printf '%s: %s FAILED (%s) — ROLLED BACK to %s; health after the rollback: passed' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" "$(jfield "$l" from)" ;;
+    rollback-failed) printf '%s: %s FAILED and going back did not finish cleanly: %s' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" ;;
+    interrupted) printf '%s: the update to %s STOPPED WITHOUT FINISHING — %s' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" ;;
+    *) printf '%s: %s not applied — %s' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" ;;
+  esac
+}
+cmd_logs() {
+  need_install
+  local svc="${1:?usage: blackbranch logs <service> [-f]}"; shift
+  compose config --services 2>/dev/null | grep -qx "$svc" || die "no service \"$svc\" (try: blackbranch status)"
+  compose logs --tail 200 "$@" "$svc"
+}
+
+cmd_restart() {
+  need_root restart; need_install
+  local svc="${1:?usage: blackbranch restart <service>}"
+  compose config --services 2>/dev/null | grep -qx "$svc" || die "no service \"$svc\""
+  compose restart "$svc"
+  wait_healthy 180 "$svc" || die "$svc did not come back healthy"
+  info "$svc: $(service_health "$svc")"
+}
+
+cmd_set() {
+  need_root set; need_install
+  local key="${1:-}" val="${2-}" k ok=0 old
+  [ $# -eq 2 ] || die "usage: blackbranch set <KEY> <value>   (KEY: ${SETTABLE_KEYS[*]})"
+  for k in "${SETTABLE_KEYS[@]}"; do [ "$k" = "$key" ] && ok=1; done
+  [ "$ok" = 1 ] || die "$key cannot be set here. Settable: ${SETTABLE_KEYS[*]} (origins and the server name are permanent)"
+  case "$val" in *'$'*|*'"'*|*\\*|*$'\n'*|*$'\r'*) die "the value may not contain \$, \", \\ or a line break" ;; esac
+  [ "${#val}" -le 300 ] || die "the value is longer than 300 characters"
+  old=$(env_get "$key")
+  [ "$old" = "$val" ] && { info "$key is already that value"; return 0; }
+  env_set "$key" "$val" || die "nothing changed"
+  if ! compose config -q 2>/dev/null; then
+    env_set "$key" "$old" || die "that value does not survive .env parsing, AND putting the old one back failed: check $key in $ENV_FILE"
+    die "that value does not survive .env parsing; nothing changed"
+  fi
+  info "$key updated; restarting what reads it"
+  # Nothing is built in: the services whose environment changed (the site, and stream-ingest for the
+  # site's name) are recreated with it. A site that does not come back gets the old value again.
+  compose up -d
+  # shellcheck disable=SC2046
+  if ! wait_healthy 180 $(expected_services); then
+    env_set "$key" "$old" || die "not every service became healthy with the new value, AND putting the old one back failed: check $key in $ENV_FILE"
+    compose up -d >/dev/null 2>&1 || true
+    die "not every service became healthy with the new value ($HEALTH_PROBLEM) — $key put back to its previous value"
+  fi
+  info "$key applied"
+}
+
+# ── requests from the site: fixed verbs only, run by blackbranch-requests.service ───────────
+# requests/ is the site's drop box (the web container writes it). Nothing in it is trusted: a
+# request is never opened — its NAME is the verb — and it is removed with rm, which never follows a
+# symbolic link (a link planted as a request removes only itself). Results go to results/, a
+# directory only root writes and the site only reads; it is checked before every write, and each
+# result is created with mktemp (O_EXCL) inside it and renamed into place.
+results_dir_ok() {
+  local d="$1"
+  if [ ! -d "$d" ] || [ -L "$d" ]; then return 1; fi
+  [ "$(stat -c %u "$d")" = "$(id -u)" ] || return 1
+  [ $(( 8#$(stat -c %a "$d") & 8#022 )) -eq 0 ] || return 1
+}
+cmd_process_requests() {
+  need_root process-requests; need_install
+  local dir="$BB_HOME/requests" res="$BB_HOME/results" f name verb ok msg svc allowed r out want
+  results_dir_ok "$res" || die "refusing to run requests: $res must be a real directory owned by $(id -un), writable by nobody else"
+  mkdir -p "$STATE"
+  exec 9>"$STATE/requests.lock"; flock 9
+  # The recovery sheet goes back on the first pass after setup moves on, whatever was asked.
+  if [ -e "$res/$RECOVERY_FILE" ]; then recovery_sheet_sweep || true; fi
+  for f in "$dir"/*.req; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    name=$(basename -- "$f" .req)
+    rm -rf -- "$f"
+    # A dot appears only in update-v<version>; every other verb is matched exactly below.
+    case "$name" in *[!a-z0-9.-]*|"") continue ;; esac
+    ok=false; verb=""; out="$name"
+    # While an update runs, only what reads may run: anything else could restart what the update
+    # stopped for its backup, or start containers between its switch and its .env. Only a request
+    # this box knows is answered — an answer named after an unknown one could overwrite one of
+    # root's own records in results/ (update-last.json, backup-last.json, …), update or not.
+    if update_running; then
+      case "$name" in
+        update-check|doctor|backup-key|recovery-sheet) ;;
+        restart-*|render|matrix-bootstrap|apply-install|backup|backup-test|update-v*)
+           case "$name" in update-v*) out=update ;; esac
+           request_answer "$res" "$out" "$name" "$name" false "an update is running; try again when it has finished"; continue ;;
+        *) echo "blackbranch: refused an unknown request ($name)" >&2; continue ;;
+      esac
+    fi
+    case "$name" in
+      restart-*)
+        svc="${name#restart-}"; verb="restart $svc"; allowed=0
+        for r in "${REQUEST_RESTARTABLE[@]}"; do [ "$r" = "$svc" ] && allowed=1; done
+        if [ "$allowed" = 1 ]; then if msg=$(cmd_restart "$svc" 2>&1); then ok=true; fi
+        else msg="restart is allowed only for: ${REQUEST_RESTARTABLE[*]}"; fi ;;
+      # The Admin Panel's federation switch writes its setting, then asks for this.
+      render) verb=render; if msg=$(cmd_render 2>&1); then ok=true; fi ;;
+      # The setup pages: the community step, and the last step's display values.
+      matrix-bootstrap) verb="matrix bootstrap"; if msg=$(matrix_bootstrap 2>&1); then ok=true; fi ;;
+      apply-install) verb=apply-install; if msg=$(cmd_apply_install 2>&1); then ok=true; fi ;;
+      recovery-sheet) verb="recovery sheet"; if msg=$(recovery_sheet 2>&1); then ok=true; fi ;;
+      # The doctor page's "Check again": the host's half of the facts, nothing else.
+      doctor) verb=doctor; if msg=$(doctor_write_host_facts 2>&1); then ok=true; fi ;;
+      # Backups: a backup now; the setup pages' test (a backup, then a verify of it); the SFTP key.
+      backup) verb=backup; if msg=$(bb_backup 2>&1); then ok=true; fi ;;
+      backup-test) verb="backup test"; if msg=$( (bb_backup && bb_verify latest) 2>&1); then ok=true; fi ;;
+      backup-key) verb="backup key"; if msg=$(backup_ssh_key 2>&1); then ok=true; fi ;;
+      # The Admin Panel's update section: read the feed now; apply the release it showed. Its version
+      # is in the request's NAME and is checked against the signed feed before anything happens.
+      update-check) verb="update check"; if msg=$(update_check 2>&1 && update_check_summary); then ok=true; fi ;;
+      update-v*)
+        out=update; verb=update; want="${name#update-v}"
+        if [[ "$want" =~ $VERSION_RE ]]; then if msg=$(start_update "$want" 2>&1); then ok=true; fi
+        else msg="not a release version"; fi ;;
+      update) verb=update; msg="name the release: the request is update-v<version>" ;;
+      # An unknown name is answered by nothing: a result named after it could overwrite one of
+      # root's own records in results/ (update-last.json, backup-last.json, …).
+      *) echo "blackbranch: refused an unknown request ($name)" >&2; continue ;;
+    esac
+    request_answer "$res" "$out" "$name" "$verb" "$ok" "$msg"
+  done
+}
+request_answer() { # request_answer <results dir> <file name> <request> <verb> <ok> <message>
+  local res="$1" tmp msg
+  # Flatten for the one-line JSON: newlines, quotes and backslashes become spaces.
+  # shellcheck disable=SC1003 # the set really is newline, double quote, backslash
+  msg=$(printf '%s' "$6" | tail -n 5 | sed 's/\x1b\[[0-9;]*m//g' | tr '\n"\\' '   ' | tr -d '\000-\037\177')
+  results_dir_ok "$res" || die "refusing to write a result: $res changed under us"
+  tmp=$(mktemp "$res/.result.XXXXXX") || die "could not answer $3: no room in $res (is the disk full?)"
+  printf '{"request":"%s","verb":"%s","ok":%s,"at":"%s","message":"%s"}\n' \
+    "$3" "$4" "$5" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" > "$tmp" || { rm -f "$tmp"; die "could not answer $3 (is the disk full?)"; }
+  chmod 644 "$tmp"
+  replace_file "$tmp" "$res/$2.json" || die "could not answer $3 (is the disk full?)"
+}
+
+# ── first boot: the setup link ────────────────────────────────────────────────────────────────
+# The first admin is `streamer.matrixId`, written by the setup pages' first step. Until it exists
+# the token in $SETUP_TOKEN_FILE is the one way in; after, the token is dead and its file removed.
+first_admin() { config_get streamer.matrixId 2>/dev/null || true; }
+new_setup_token() {
+  local tok
+  tok=$(openssl rand -hex 24)
+  mkdir -p "$STATE"
+  if ! ( umask 077; printf '%s\n' "$tok" > "$SETUP_TOKEN_FILE.new" ) || ! replace_file "$SETUP_TOKEN_FILE.new" "$SETUP_TOKEN_FILE"; then
+    rm -f "$SETUP_TOKEN_FILE.new"; die "could not write the setup link's token (is the disk full?)"
+  fi
+  env_set SETUP_TOKEN_HASH "$(printf '%s' "$tok" | sha256sum | cut -d' ' -f1)" || die "could not record the setup link in .env"
+}
+# Called by `up` once the database answers: make a token while there is no admin; forget it after.
+ensure_setup_token() {
+  if [ -n "$(first_admin)" ]; then
+    [ -f "$SETUP_TOKEN_FILE" ] && rm -f "$SETUP_TOKEN_FILE" && info "setup link retired (the first admin exists)"
+    return 0
+  fi
+  if [ ! -s "$SETUP_TOKEN_FILE" ] || [ -z "$(env_get SETUP_TOKEN_HASH)" ]; then
+    new_setup_token
+    info "made the setup link (blackbranch setup-link prints it)"
+  fi
+}
+
+# ── the recovery sheet: the backup passphrase, once, for the setup pages ─────────────────────
+# Never in the site's environment: the site also chooses where root sends the backups (the backup.*
+# settings, re-read on every run; the `backup` and `backup-key` requests), so a compromised site
+# that held the passphrase could send the backups to its own server and open them — .env, the
+# signing keys, every database. Root hands it over while, and only while, the setup pages' recovery
+# step is current: a file in results/ that only the site's user can read, taken back on the first
+# request after setup moves on. That it was shown is root's own record ($RECOVERY_SHOWN): the site
+# writes the setup state, so a site that rewinds its step to "recovery" must not get it again.
+# The sheet can be due only on an install that install.sh made with this check in it: it writes
+# $RECOVERY_DUE with a new .env. A box without it was set up before the check existed — it finished
+# setup with no record of its own, and the database alone (which the site writes) cannot tell root
+# whether that setup is over — so its sheet is never due, and the next sweep writes the record.
+RECOVERY_FILE=recovery-passphrase.json
+RECOVERY_SHOWN="$STATE/recovery-sheet-shown"
+RECOVERY_DUE="$STATE/recovery-sheet-due"
+# The site's image runs as `node` (install/Dockerfile: USER node), uid 1000: the one account that may
+# read the sheet (mode 600, its owner). A host account with uid 1000 — often the first person's — could
+# too, but cannot reach it: $BB_HOME is 750, root's.
+WEB_UID=1000
+setup_step() { # the setup pages' current step ("" before the first admin's)
+  printf '%s\n' "SELECT value ->> 'step' FROM site.instance_config WHERE key = :'k';" \
+    | compose exec -T postgres psql -U postgres -d stream -qAt -v ON_ERROR_STOP=1 -v k=setup.state
+}
+recovery_sheet_retire() { # take the sheet back, for good
+  rm -f "$BB_HOME/results/$RECOVERY_FILE"
+  mkdir -p "$STATE"; touch "$RECOVERY_SHOWN"; rm -f "$RECOVERY_DUE"
+}
+# Never due on this install (root's own state), setup finished, or past the recovery step: the
+# sheet goes. (An empty step is the moment between the first admin and its step being saved — not
+# "past" anything.)
+recovery_sheet_sweep() {
+  local step
+  if [ ! -e "$RECOVERY_DUE" ]; then
+    if [ ! -e "$RECOVERY_SHOWN" ] || [ -e "$BB_HOME/results/$RECOVERY_FILE" ]; then recovery_sheet_retire; fi
+    return 0
+  fi
+  postgres_up || return 0
+  if [ -n "$(config_get setup.completedAt 2>/dev/null || true)" ]; then recovery_sheet_retire; return 0; fi
+  [ -n "$(first_admin)" ] || return 0
+  step=$(setup_step 2>/dev/null) || return 0
+  if [ -n "$step" ] && [ "$step" != recovery ]; then recovery_sheet_retire; fi
+}
+recovery_sheet() { # the request `recovery-sheet`, from the setup pages' recovery step
+  local pass step tmp res="$BB_HOME/results"
+  need_root recovery-sheet; need_install
+  if [ -e "$RECOVERY_SHOWN" ] || [ ! -e "$RECOVERY_DUE" ]; then
+    recovery_sheet_retire
+    die "the recovery sheet is shown once, and it was — on the server it is BACKUP_PASSPHRASE in $ENV_FILE"
+  fi
+  postgres_up || die "the database is not running"
+  if [ -n "$(config_get setup.completedAt)" ]; then
+    recovery_sheet_retire; die "setup is finished: the recovery sheet is shown once — on the server it is BACKUP_PASSPHRASE in $ENV_FILE"
+  fi
+  [ -n "$(first_admin)" ] || die "no first admin yet: the recovery sheet comes after the setup link's first step"
+  step=$(setup_step) || die "the setup state cannot be read"
+  if [ "$step" != recovery ]; then
+    if [ -n "$step" ]; then recovery_sheet_retire; fi
+    die "this is not the recovery step (setup is at \"$(printf '%s' "$step" | tr -cd 'a-z0-9:_-' | cut -c1-40)\")"
+  fi
+  pass=$(env_get BACKUP_PASSPHRASE)
+  # One JSON line, no escaping: install.sh's passphrase is hex; anything else stays in .env.
+  [[ "$pass" =~ ^[A-Za-z0-9._~+/=-]{8,256}$ ]] || die "the passphrase cannot be shown on the page — on the server it is BACKUP_PASSPHRASE in $ENV_FILE"
+  results_dir_ok "$res" || die "refusing to write the recovery sheet: $res must be a real directory owned by $(id -un), writable by nobody else"
+  tmp=$(mktemp "$res/.result.XXXXXX") || die "could not write the recovery sheet (is the disk full?)"
+  chmod 600 "$tmp"
+  if [ "$(id -u)" = 0 ] && ! chown "$WEB_UID" "$tmp"; then rm -f "$tmp"; die "could not hand the recovery sheet to the site's user"; fi
+  printf '{"v":1,"passphrase":"%s"}\n' "$pass" > "$tmp" || { rm -f "$tmp"; die "could not write the recovery sheet (is the disk full?)"; }
+  replace_file "$tmp" "$res/$RECOVERY_FILE" || die "could not write the recovery sheet (is the disk full?)"
+  echo "the recovery sheet is ready for the setup page; it is taken back once setup moves on"
+}
+cmd_setup_link() {
+  need_root setup-link; need_install
+  local admin
+  postgres_up || die "the database is not running (blackbranch up)"
+  admin=$(first_admin)
+  if [ -n "$admin" ]; then
+    rm -f "$SETUP_TOKEN_FILE"
+    die "the setup link no longer works: the first admin ($admin) exists. Sign in at https://$(env_get BB_DOMAIN)/"
+  fi
+  if [ "${1:-}" = --new ] || [ ! -s "$SETUP_TOKEN_FILE" ]; then
+    new_setup_token
+    compose up -d --no-deps web >/dev/null
+    wait_healthy 180 web || die "web did not come back with the new link"
+    info "a new setup link; any earlier one no longer works"
+  fi
+  printf '\n   Open this link to set up your site (it works once, until the first admin exists):\n\n   https://%s/setup?token=%s\n\n' \
+    "$(env_get BB_DOMAIN)" "$(head -1 "$SETUP_TOKEN_FILE")"
+}
+
+# The setup pages' display values (setup.state.install, by .env name) written into .env, then ONE
+# restart of what reads them — the request `apply-install`, dropped by the setup pages' last step.
+# The values were written by the site, so each is checked here again exactly as `set` checks it; a
+# site that does not come back puts .env back as it was. Refused once setup is finished: later
+# changes go through `set`.
+cmd_apply_install() {
+  need_root apply-install; need_install
+  local name val k ok i names=() vals=() changed=() backup
+  postgres_up || die "the database is not running"
+  [ -z "$(config_get setup.completedAt)" ] || die "setup is finished — change a display value with: blackbranch set <KEY> <value>"
+  # The setup pages' last step: the recovery sheet is long past.
+  recovery_sheet_retire
+  # Read and check every value first; .env is touched only when all of them pass.
+  while IFS=$'\t' read -r name val; do
+    [ -n "$name" ] || continue
+    ok=0; for k in "${SETTABLE_KEYS[@]}"; do [ "$k" = "$name" ] && ok=1; done
+    [ "$ok" = 1 ] || die "$name is not a display value"
+    case "$val" in *'$'*|*'"'*|*\\*|*$'\r'*|*$'\t'*) die "$name: the value may not contain \$, \", \\ or a control character" ;; esac
+    [ "${#val}" -le 300 ] || die "$name: longer than 300 characters"
+    names+=("$name"); vals+=("$val")
+  done < <(printf '%s\n' "SELECT key, value FROM jsonb_each_text(COALESCE((SELECT value->'install' FROM site.instance_config WHERE key = 'setup.state'), '{}'::jsonb)) ORDER BY key;" \
+             | compose exec -T postgres psql -U postgres -d stream -qAt -F $'\t' -v ON_ERROR_STOP=1)
+  # The copy to go back to: complete, or nothing is changed. Going back is a rename — it needs no
+  # free space, so it works on the very disk that just refused a write.
+  backup=$(mktemp "$BB_HOME/.env.before-apply.XXXXXX") || die "could not copy .env before changing it (is the disk full?) — nothing changed"
+  chmod 600 "$backup"
+  if ! cat "$ENV_FILE" > "$backup" || ! cmp -s "$ENV_FILE" "$backup"; then
+    rm -f "$backup"; die "could not copy .env before changing it (is the disk full?) — nothing changed"
+  fi
+  for i in "${!names[@]}"; do
+    [ "$(env_get "${names[$i]}")" = "${vals[$i]}" ] && continue
+    if ! env_set "${names[$i]}" "${vals[$i]}"; then
+      mv -f "$backup" "$ENV_FILE" || die "could not write .env, AND could not put it back: the copy is $backup"
+      die "could not write .env (is the disk full?) — .env is as it was, nothing restarted"
+    fi
+    changed+=("${names[$i]}")
+  done
+  if [ "${#changed[@]}" -eq 0 ]; then rm -f "$backup"; info "display values: unchanged — nothing to restart"; return 0; fi
+  info "display values changed: ${changed[*]}"
+  if ! compose config -q 2>/dev/null; then
+    mv -f "$backup" "$ENV_FILE" || die "the values do not survive .env parsing, AND .env could not be put back: the copy is $backup"
+    die "the values do not survive .env parsing; nothing changed"
+  fi
+  compose up -d
+  # shellcheck disable=SC2046
+  if ! wait_healthy 240 $(expected_services); then
+    mv -f "$backup" "$ENV_FILE" || die "not every service became healthy, AND .env could not be put back: the copy is $backup"
+    compose up -d >/dev/null 2>&1 || true
+    die "not every service became healthy with the new values ($HEALTH_PROBLEM) — .env put back as it was"
+  fi
+  rm -f "$backup"
+  info "applied ${changed[*]}"
+}
+
+# Lab mode only: the apps trust caddy's own CA so the site can call its own public names
+# (compose.lab.yaml). Only the root CERTIFICATE leaves caddy's data — never its keys.
+export_lab_ca() {
+  local crt r
+  [ "$(env_get BB_TLS_MODE)" = internal ] || return 0
+  mkdir -p "$BB_HOME/lab-ca"; chmod 755 "$BB_HOME/lab-ca"
+  crt=$(compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt 2>/dev/null) || return 0
+  case "$crt" in "-----BEGIN CERTIFICATE-----"*) ;; *) return 0 ;; esac
+  r=$(printf '%s\n' "$crt" | write_if_changed "$BB_HOME/lab-ca/root.crt" 644) || die "could not write lab-ca/root.crt (see above)"
+  if [ "$r" = written ]; then
+    info "lab CA root copied for the apps; restarting web and stream-api to trust it"
+    compose up -d --no-deps --force-recreate web stream-api >/dev/null
+    wait_healthy 180 web stream-api || die "web / stream-api did not come back after trusting the lab CA"
+  fi
+}
+
+# ── .env migrations: install/migrations/NNN-*.sh, BB_ENV_VERSION the last applied ──────────────
+# env_migrations <release dir> <env file> — apply that release's newer migrations to that file (the
+# update runs them on a copy first). Prints how many ran.
+env_migrations() {
+  local dir="$1/install/migrations" f n cur ran=0
+  cur=$(env_file_get "$2" BB_ENV_VERSION); [[ "$cur" =~ ^[0-9]{1,3}$ ]] || cur=0
+  for f in "$dir"/[0-9][0-9][0-9]-*.sh; do
+    [ -e "$f" ] || continue
+    n=$(basename "$f"); n=$((10#${n:0:3}))
+    [ "$n" -gt "$cur" ] || continue
+    if ! BB_ENV_FILE="$2" bash "$f" >&2; then echo "the .env migration $(basename "$f") failed" >&2; return 1; fi
+    env_file_set "$2" BB_ENV_VERSION "$n" || { echo "the .env migration $(basename "$f") ran, but its record (BB_ENV_VERSION) could not be written" >&2; return 1; }
+    cur=$n; ran=$((ran + 1))
+  done
+  echo "$ran"
+}
+env_keys() { grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$1" 2>/dev/null | tr -d = | LC_ALL=C sort -u; }
+# env_shape_problems <release dir> <env file> — a key the release does not know (no migration
+# explains it) or one it needs that .env lacks; one per line, names only.
+env_shape_problems() {
+  local known have
+  known=$(env_keys "$1/install/.env.example"); have=$(env_keys "$2")
+  [ -n "$known" ] || { echo "the release has no .env.example"; return 0; }
+  LC_ALL=C comm -23 <(printf '%s\n' "$have") <(printf '%s\n' "$known") | sed '/^$/d; s/^/a key no migration explains: /'
+  LC_ALL=C comm -13 <(printf '%s\n' "$have") <(printf '%s\n' "$known") | sed '/^$/d; s/^/a key the release needs and .env lacks: /'
+}
+env_report_shape() { # `up` says so (an update refuses; a restart must not)
+  local p; p=$(env_shape_problems "$BB_HOME/release" "$ENV_FILE")
+  [ -z "$p" ] || printf '%s\n' "$p" | sed 's/^/   ⚠ .env: /' >&2
+}
+
+# ── the bundle's files on the host (install.sh and every update put them in place) ───────────
+BIN_DIR="${BB_BIN_DIR:-/usr/local/bin}"
+BUNDLE_HOME_FILES=(compose.yaml compose.public.yaml compose.lab.yaml)
+BUNDLE_UNITS=(blackbranch-requests.path blackbranch-requests.service blackbranch-backup.service blackbranch-verify.service
+  blackbranch-update.service blackbranch-update@.service blackbranch-reconcile.service)
+put_file() { # put_file <src> <dest> <mode> — replaced by a rename (a running copy keeps the old one); prints dest when changed
+  if [ -f "$2" ] && cmp -s "$1" "$2"; then return 0; fi
+  install -m "$3" "$1" "$2.new.$$" && mv -f "$2.new.$$" "$2" && printf '%s\n' "$2"
+}
+install_files() { # install_files <release dir> → the files that changed, one per line
+  local src="$1/install" f r units=""
+  for f in "${BUNDLE_HOME_FILES[@]}"; do put_file "$src/$f" "$BB_HOME/$f" 644; done
+  put_file "$src/blackbranch" "$BIN_DIR/blackbranch" 755
+  # Units only as root (or into a test folder), like the timers.
+  if [ -z "${BB_SYSTEMD_DIR:-}" ] && [ "$(id -u)" != 0 ]; then return 0; fi
+  mkdir -p "$SYSTEMD_DIR"
+  for f in "${BUNDLE_UNITS[@]}"; do
+    [ -f "$src/systemd/$f" ] || continue
+    r=$(put_file "$src/systemd/$f" "$SYSTEMD_DIR/$f" 644); [ -z "$r" ] || { printf '%s\n' "$r"; units=1; }
+  done
+  if [ -n "$units" ] && [ -z "${BB_SYSTEMD_DIR:-}" ]; then systemctl daemon-reload; fi
+  # At boot: finish an update a power loss cut off (update_reconcile). Enabled, never started here.
+  if [ -z "${BB_SYSTEMD_DIR:-}" ] && ! systemctl is-enabled -q blackbranch-reconcile.service 2>/dev/null; then
+    systemctl enable -q blackbranch-reconcile.service || true
+  fi
+  return 0
+}
+cmd_install_files() { need_root install-files; need_install; install_files "$BB_HOME/release"; }
+
+# .env written by an earlier release: add what this one reads (never changes a value that is set),
+# and keep BB_RELEASE (the images' tag) on the release that release/ points at.
+# .env's BB_RELEASE (the tag of the images this box built) names the release release/ points at.
+sync_release_tag() {
+  local rel
+  rel=$(readlink "$BB_HOME/release" 2>/dev/null || true); rel="${rel#releases/}"
+  if [[ "$rel" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && [ "$(env_get BB_RELEASE)" != "$rel" ]; then env_set BB_RELEASE "$rel" || die "could not record the release in .env"; fi
+}
+ensure_env_shape() {
+  local files
+  [ -n "$(env_get BB_HOME)" ] || env_set BB_HOME "$BB_HOME" || die "could not write .env"
+  sync_release_tag
+  if [ "$(env_get BB_TLS_MODE)" = internal ]; then
+    files=$(env_get COMPOSE_FILE)
+    case "$files" in *compose.lab.yaml*) ;; *) env_set COMPOSE_FILE "$files:$BB_HOME/compose.lab.yaml" || die "could not write .env" ;; esac
+  fi
+}
+
+# ── the homeserver's bootstrap ───────────────────────────────────────────────────────────────
+# Creates the community space and #general AS the streamer's own account (the creator's power level
+# is permanent, so the rooms must be theirs) and records
+# their ids in instance config; each step looks first, so a second run changes nothing. The account
+# is `streamer.matrixId`, which the setup pages' first step writes. Before that exists, `--as <name>`
+# names an existing account instead (the test path in README.md).
+cmd_matrix() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    bootstrap) matrix_bootstrap "$@" ;;
+    *) die "usage: blackbranch matrix bootstrap [--as <name>]" ;;
+  esac
+}
+room_id_ok() { [[ "$1" =~ ^![A-Za-z0-9._~=/+:-]+$ ]]; }
+matrix_bootstrap() {
+  need_root matrix; need_install
+  local as="" domain owner localpart device token out hub general stored_hub stored_general space_name
+  while [ $# -gt 0 ]; do
+    case "$1" in --as) as="${2:?--as needs an account name}"; shift 2 ;; *) die "unknown option $1" ;; esac
+  done
+  domain=$(env_get BB_DOMAIN)
+  wait_healthy 120 postgres synapse || die "the database and Synapse must be running (blackbranch up)"
+  wait_mas 60 || die "MAS does not answer (blackbranch logs mas)"
+  if [ -n "$as" ]; then owner="@$as:$domain"; else owner=$(config_get streamer.matrixId); fi
+  [ -n "$owner" ] || die "no streamer account yet: the setup pages' first step creates it (streamer.matrixId). To try the bootstrap before that, create an account with MAS and pass --as <name> (README.md)."
+  localpart="${owner#@}"; localpart="${localpart%%:*}"
+  [ "$owner" = "@$localpart:$domain" ] || die "$owner is not an account on $domain"
+  [[ "$localpart" =~ ^[a-z0-9._=/-]+$ ]] || die "\"$localpart\" is not a Matrix user name"
+  # The first admin exists (it is who we bootstrap as): the setup link is dead, so its token goes.
+  [ -z "$as" ] && rm -f "$SETUP_TOKEN_FILE"
+  printf '%s\n' "SELECT count(*) FROM users WHERE username = :'u';" \
+    | compose exec -T postgres psql -U postgres -d mas -qAt -v ON_ERROR_STOP=1 -v u="$localpart" | grep -qx 1 \
+    || die "MAS has no account \"$localpart\""
+  say "Bootstrapping the community as $owner"
+
+  # A short-lived sign-in for the owner, ended when the bootstrap finishes (or fails).
+  device="BBBOOTSTRAP$(date +%s)"
+  token=$(compose exec -T mas mas-cli manage issue-compatibility-token "$localpart" "$device" 2>&1 | grep -oE 'mct_[A-Za-z0-9_]+' | head -1 || true)
+  [ -n "$token" ] || die "MAS did not issue a sign-in for $localpart"
+  # shellcheck disable=SC2064 # the token is fixed now; expand it into the trap
+  trap "printf 'Authorization: Bearer %s\n' '$token' | compose exec -T synapse curl -fsS -o /dev/null -X POST -H @- http://mas:8080/_matrix/client/v3/logout >/dev/null 2>&1 || true" EXIT
+
+  stored_hub=$(config_get matrix.rooms.hub); stored_general=$(config_get matrix.rooms.general)
+  # The space is named after the site. During setup the name typed on "Your site" is staged and not
+  # in .env until setup finishes, so the staged one wins.
+  space_name=$(printf '%s\n' "SELECT value #>> '{install,SITE_NAME}' FROM site.instance_config WHERE key = 'setup.state';" \
+    | compose exec -T postgres psql -U postgres -d stream -qAt -v ON_ERROR_STOP=1 2>/dev/null || true)
+  space_name="${space_name:-$(env_get SITE_NAME)}"
+  out=$(printf '%s\n' "$token" | compose run --rm --no-deps -T \
+          -v "$BB_HOME/release/install/matrix:/bb-matrix:ro" \
+          -e MX_BASE=http://synapse:8008 -e MX_SERVER_NAME="$domain" -e MX_SPACE_NAME="$space_name" \
+          -e MX_STORED_HUB="$stored_hub" -e MX_STORED_GENERAL="$stored_general" -e MX_RECREATE="${BB_RECREATE:-0}" \
+          --entrypoint node stream-api /bb-matrix/bootstrap.mjs) || die "the bootstrap did not finish (nothing it made is lost; run it again)"
+  hub=$(printf '%s' "$out" | grep -oE '"hub":"[^"]+"' | cut -d'"' -f4)
+  general=$(printf '%s' "$out" | grep -oE '"general":"[^"]+"' | cut -d'"' -f4)
+  if ! room_id_ok "$hub" || ! room_id_ok "$general"; then die "the bootstrap returned no room ids"; fi
+  [ "$hub" = "$stored_hub" ] || { config_set matrix.rooms.hub "\"$hub\""; info "recorded matrix.rooms.hub"; }
+  [ "$general" = "$stored_general" ] || { config_set matrix.rooms.general "\"$general\""; info "recorded matrix.rooms.general"; }
+  info "community space $hub · #general $general"
+  # The bot's account belongs with the bot module's setup page, a later release.
+  if [ "$(config_get bot.enabled)" = true ]; then info "bot account: not in this release yet"; fi
+}
+
+cmd_federation() {
+  need_root federation; need_install
+  case "${1:-}" in
+    "") info "federation: $(federation_state)" ;;
+    on|off)
+      postgres_up || die "the database must be running (blackbranch up)"
+      config_set matrix.federation "$([ "$1" = on ] && echo true || echo false)"
+      info "matrix.federation set $1; rendering"
+      cmd_render ;;
+    *) die "usage: blackbranch federation [on|off]" ;;
+  esac
+}
+
+# ── backups ──────────────────────────────────────────────────────────────────────────────────
+# A snapshot holds the three databases (pg_dump, one run), Synapse's media store and signing key,
+# and the install's own files (.env, MAS's keys, the tunnel's credentials) — restic, encrypted with
+# BACKUP_PASSPHRASE (the recovery sheet's). Where it goes is the settings layer's backup.* keys:
+# this server's ./backups unless the operator adds a bucket or an SFTP server. The work runs in the
+# backup image (install/backup/run.sh); this side picks the target, holds the lock, writes the
+# results the doctor and the setup pages read, and renders the timers.
+BACKUP_TARGET_CACHE="$STATE/backup-target.env"
+BACKUP_LAST="backup-last.json"
+VERIFY_LAST="backup-verify-last.json"
+SYSTEMD_DIR="${BB_SYSTEMD_DIR:-/etc/systemd/system}"
+DEFAULT_QUIET_HOUR=4
+BK_TARGET=local BK_REPOSITORY="" BK_S3_REGION="" BK_S3_ACCESS_KEY_ID="" BK_S3_SECRET_ACCESS_KEY="" BK_KEEP_DAILY="" BK_KEEP_WEEKLY="" BK_FROM=default
+# The recovery sheet's passphrase, for one run, when .env's does not open the backups (a new box
+# whose .env was lost). Never written anywhere: it reaches restic through the container's environment.
+BK_PASSPHRASE=""
+
+backup_lock() { mkdir -p "$STATE"; exec 8>"$STATE/backup.lock"; flock -w 7200 8 || die "another backup or restore is still running"; }
+
+# The target's settings as KEY=value lines. Returns 1 when the database is not running (a cached
+# target is fine then), 2 when the settings cannot be read (never silently another target).
+backup_target_lines() {
+  if [ -n "${BB_BACKUP_TARGET_FILE:-}" ]; then cat "$BB_BACKUP_TARGET_FILE"; return; fi   # test hook
+  postgres_up || return 1
+  compose run --rm --no-deps -T -v "$BB_HOME/release/install/backup:/bb-backup:ro" \
+    --entrypoint node stream-api /bb-backup/target.cjs 2> >(grep -v '^ *Container ' >&2) || return 2
+}
+# Sets BK_TARGET BK_REPOSITORY BK_S3_* BK_KEEP_* (and BK_FROM: settings | cache | default).
+# backup_target [strict] [ro] — strict: refuse a cached target when the settings cannot be read;
+# ro: never write the cache (the doctor writes nothing).
+backup_target() {
+  local strict=0 ro=0 lines="" rc=0 line k v a
+  for a in "$@"; do case "$a" in strict) strict=1 ;; ro) ro=1 ;; esac; done
+  BK_TARGET=local BK_REPOSITORY="" BK_S3_REGION="" BK_S3_ACCESS_KEY_ID="" BK_S3_SECRET_ACCESS_KEY="" BK_KEEP_DAILY="" BK_KEEP_WEEKLY=""
+  BK_FROM=settings
+  lines=$(backup_target_lines) || rc=$?
+  if [ "$rc" != 0 ]; then
+    if [ "$rc" = 2 ] && [ "$strict" = 1 ]; then echo "the backup settings cannot be read (see above)" >&2; return 1; fi
+    if [ -s "$BACKUP_TARGET_CACHE" ]; then lines=$(cat "$BACKUP_TARGET_CACHE"); BK_FROM=cache; else lines=""; BK_FROM=default; fi
+  fi
+  while IFS= read -r line; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in
+      BK_TARGET|BK_REPOSITORY|BK_S3_REGION|BK_S3_ACCESS_KEY_ID|BK_S3_SECRET_ACCESS_KEY|BK_KEEP_DAILY|BK_KEEP_WEEKLY) printf -v "$k" '%s' "$v" ;;
+    esac
+  done <<< "$lines"
+  backup_target_check || return 1
+  if [ "$BK_FROM" = settings ] && [ "$ro" = 0 ] && [ -z "${BB_BACKUP_TARGET_FILE:-}" ]; then
+    ( umask 077; printf '%s\n' "$lines" > "$BACKUP_TARGET_CACHE.new" ) && mv -f "$BACKUP_TARGET_CACHE.new" "$BACKUP_TARGET_CACHE"
+  fi
+}
+# The kind and the retention. The ADDRESS is checked by the settings layer's own rule — when it is
+# saved, when target.cjs reads it, and in the backup container before every restic call
+# (install/backup/target-check.mjs: shape, resolved address, pinned) — never by a copy here.
+backup_target_check() {
+  BK_TARGET="${BK_TARGET:-local}"; BK_KEEP_DAILY="${BK_KEEP_DAILY:-7}"; BK_KEEP_WEEKLY="${BK_KEEP_WEEKLY:-4}"
+  if ! [[ "$BK_KEEP_DAILY" =~ ^[0-9]{1,2}$ ]] || [ "$BK_KEEP_DAILY" -lt 1 ]; then echo "backup.keepDaily must be 1–90" >&2; return 1; fi
+  if ! [[ "$BK_KEEP_WEEKLY" =~ ^[0-9]{1,3}$ ]] || [ "$BK_KEEP_WEEKLY" -gt 104 ]; then echo "backup.keepWeekly must be 0–104" >&2; return 1; fi
+  case "$BK_TARGET" in
+    local|sftp) ;;
+    s3)
+      if [ -z "$BK_S3_ACCESS_KEY_ID" ] || [ -z "$BK_S3_SECRET_ACCESS_KEY" ]; then echo "the bucket's access key id and secret key are not both set" >&2; return 1; fi
+      [[ "$BK_S3_REGION" =~ ^[A-Za-z0-9-]{0,64}$ ]] || { echo "backup.s3.region is not a region name" >&2; return 1; } ;;
+    *) echo "backup.target must be local, s3 or sftp" >&2; return 1 ;;
+  esac
+  case "$BK_REPOSITORY" in *$'\n'*|*$'\r'*) echo "backup.repository must be one line" >&2; return 1 ;; esac
+}
+backup_target_label() {
+  case "$BK_TARGET" in local) echo "this server ($BB_HOME/backups)" ;; s3) echo "the S3 bucket" ;; sftp) echo "the SFTP server" ;; esac
+}
+
+backup_image() {
+  docker image inspect "blackbranch/backup:$(release_tag)" >/dev/null 2>&1 && return 0
+  say "Building the backup image (once)"
+  compose build backup
+}
+# run.sh in the backup image as one of its three services; the target's address and keys go in
+# the container's environment through ours (`run -e NAME`), never on a command line.
+backup_run() { # backup_run <service> <mode> [args…] → run.sh's stdout (its progress goes to stderr)
+  local svc="$1"; shift
+  mkdir -p "$BB_HOME/backups" "$BB_HOME/backup-ssh" "$STATE/backup-db" "$STATE/backup-scratch"
+  chmod 700 "$BB_HOME/backups" "$BB_HOME/backup-ssh" "$STATE/backup-db" "$STATE/backup-scratch"
+  ( export BK_TARGET BK_REPOSITORY AWS_ACCESS_KEY_ID="$BK_S3_ACCESS_KEY_ID" \
+      AWS_SECRET_ACCESS_KEY="$BK_S3_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION="$BK_S3_REGION"
+    # Compose reads the shell's value before .env's: the backup services' RESTIC_PASSWORD.
+    if [ -n "$BK_PASSPHRASE" ]; then export BACKUP_PASSPHRASE="$BK_PASSPHRASE"; fi
+    compose run --rm --no-deps -T -e BK_TARGET -e BK_REPOSITORY -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION -e BB_REACH_TIMEOUT \
+      "$svc" "$@" 2> >(grep -v '^ *Container ' >&2) )
+}
+bbresult() { printf '%s\n' "$1" | sed -n 's/^BBRESULT //p' | tail -n 1; }
+jfield() { # jfield <flat json> <name> → a string or number field ("" when absent; never fails)
+  { printf '%s' "$1" | grep -oE "\"$2\":(\"[^\"]*\"|[0-9.]+|true|false|null)" || true; } | head -1 | cut -d: -f2- | sed 's/^"//; s/"$//'
+}
+# shellcheck disable=SC1003 # the set really is control characters, double quote, backslash
+jsafe() { printf '%s' "$1" | tr '\n\t' '  ' | tr -d '\000-\037\177"\\' | cut -c1-400; }
+now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# The result of the last backup run, for the doctor (results/backup-last.json): when, whether it
+# worked, and when the last one that worked was.
+backup_record() { # backup_record <ok> <snapshot> <message>
+  local prev_ok="" at; at=$(now_utc)
+  prev_ok=$(jfield "$(cat "$BB_HOME/results/$BACKUP_LAST" 2>/dev/null || true)" lastOkAt | tr -cd '0-9TZ:-')
+  if [ "$1" = true ]; then prev_ok="$at"; fi
+  printf '{"v":1,"at":"%s","ok":%s,"snapshot":"%s","target":"%s","lastOkAt":%s,"message":"%s"}\n' \
+    "$at" "$1" "$(printf '%s' "$2" | tr -cd '0-9a-f' | cut -c1-16)" "$BK_TARGET" \
+    "$([ -n "$prev_ok" ] && printf '"%s"' "$prev_ok" || echo null)" "$(jsafe "$3")" | results_put "$BACKUP_LAST"
+}
+
+# One backup now. The updater calls this before every update: its status is the backup's.
+bb_backup() {
+  local out res msg snap
+  backup_lock
+  if ! backup_target strict; then backup_record false "" "the backup target is not usable"; die "nothing was backed up: the target is not usable (see above)"; fi
+  backup_image || { backup_record false "" "the backup image did not build"; die "the backup image did not build"; }
+  postgres_up || { backup_record false "" "the database is not running"; die "the database is not running (blackbranch up)"; }
+  say "Backing up to $(backup_target_label)"
+  out=$(backup_run backup backup "$BK_KEEP_DAILY" "$BK_KEEP_WEEKLY") || true
+  res=$(bbresult "$out")
+  msg=$(jfield "$res" message)
+  if [ "$(jfield "$res" ok)" != true ]; then
+    backup_record false "" "${msg:-the backup did not finish}"
+    die "BACKUP FAILED: ${msg:-the backup did not finish: the backup container gave no result}"
+  fi
+  snap=$(jfield "$res" snapshot)
+  backup_record true "$snap" "$msg"
+  # For the updater: the id from root's own state, never from results/ (which requests touch).
+  printf '%s\n' "$snap" | tr -cd '0-9a-f\n' > "$STATE/backup-snapshot-last"
+  info "backup $snap written to $(backup_target_label)${msg:+ — $msg}"
+  backup_timers || true
+}
+
+# A restore onto a new box: the backups at an address given on the command line (--from), and the
+# recovery sheet's passphrase when .env's does not open them. Sets BK_* and BK_PASSPHRASE.
+backup_from() { # backup_from <address> — the target a new box does not know yet
+  case "$1" in
+    s3:*) BK_TARGET=s3 ;;
+    sftp:*) BK_TARGET=sftp ;;
+    *) die "--from takes a bucket (s3:https://<host>/<bucket>[/<folder>]) or an SFTP address (sftp:<user>@<host>:/<folder>)" ;;
+  esac
+  BK_REPOSITORY="$1"; BK_FROM=command-line
+  if [ "$BK_TARGET" = s3 ]; then
+    BK_S3_ACCESS_KEY_ID="${BB_S3_ACCESS_KEY_ID:-}"; BK_S3_SECRET_ACCESS_KEY="${BB_S3_SECRET_ACCESS_KEY:-}"; BK_S3_REGION="${BB_S3_REGION:-}"
+    if [ -z "$BK_S3_ACCESS_KEY_ID" ] || [ -z "$BK_S3_SECRET_ACCESS_KEY" ]; then
+      ( : < /dev/tty ) 2>/dev/null || die "the bucket's keys: set BB_S3_ACCESS_KEY_ID and BB_S3_SECRET_ACCESS_KEY (and BB_S3_REGION if the provider asks), or run this in a terminal"
+      printf '   The bucket'"'"'s access key id: ' >/dev/tty; IFS= read -r BK_S3_ACCESS_KEY_ID < /dev/tty
+      printf '   Its secret key: ' >/dev/tty; IFS= read -rs BK_S3_SECRET_ACCESS_KEY < /dev/tty; printf '\n' >/dev/tty
+    fi
+  fi
+  backup_target_check || die "the address given with --from cannot be used (see above)"
+}
+backup_opens() { # does the passphrase in use open the backups? 1 = it does not (the only "no")
+  local res; res=$(bbresult "$(backup_run backup check 2>/dev/null || true)")
+  [ "$(jfield "$res" repo)" != password ]
+}
+backup_passphrase() {
+  backup_opens && return 0
+  if [ -n "${BB_RECOVERY_PASSPHRASE:-}" ]; then BK_PASSPHRASE="$BB_RECOVERY_PASSPHRASE"
+  elif ( : < /dev/tty ) 2>/dev/null; then
+    printf '   The passphrase in .env does not open these backups — on a new box whose .env was lost, that is expected.\n   Type the backup passphrase from your recovery sheet: ' >/dev/tty
+    IFS= read -rs BK_PASSPHRASE < /dev/tty; printf '\n' >/dev/tty
+  else
+    die "the passphrase in .env does not open these backups. Run this in a terminal to type the recovery sheet's passphrase (or set BB_RECOVERY_PASSPHRASE). Nothing was changed."
+  fi
+  [ -n "$BK_PASSPHRASE" ] || die "no passphrase given. Nothing was changed."
+  backup_opens || die "that passphrase does not open these backups either. Nothing was changed."
+  info "the recovery sheet's passphrase opens the backups"
+}
+
+# Restores the newest (or a named) snapshot into a scratch folder and a scratch Postgres inside the
+# backup-verify container — no database password, no live volume — and judges it (verify.mjs).
+bb_verify() {
+  local snap="${1:-latest}" from="${2:-}" out res
+  backup_lock
+  if [ -n "$from" ]; then backup_from "$from"
+  elif ! backup_target; then
+    printf '{"v":1,"at":"%s","ok":false,"snapshot":null,"failed":["target"],"message":"the backup target is not usable"}\n' "$(now_utc)" | results_put "$VERIFY_LAST"
+    die "the backup target is not usable (see above)"
+  fi
+  case "$BK_FROM" in settings|command-line) ;; *) info "the database is not running: using the target the last backup used" ;; esac
+  backup_image || die "the backup image did not build"
+  backup_passphrase
+  say "Checking that the $([ "$snap" = latest ] && echo "newest backup" || echo "backup $snap") restores (nothing live is touched)"
+  out=$(backup_run backup-verify verify "$snap") || true
+  res=$(bbresult "$out")
+  case "$res" in
+    '{"v":1,'*) ;;
+    *) res="{\"v\":1,\"at\":\"$(now_utc)\",\"ok\":false,\"snapshot\":null,\"failed\":[\"snapshot\"],\"message\":\"$(jsafe "$(jfield "$res" message)")\"}" ;;
+  esac
+  [ "${#res}" -le 16384 ] || res="{\"v\":1,\"at\":\"$(now_utc)\",\"ok\":false,\"failed\":[\"snapshot\"],\"message\":\"the check's answer was not readable\"}"
+  printf '%s\n' "$res" | results_put "$VERIFY_LAST"
+  if [ "$(jfield "$res" ok)" != true ]; then die "VERIFY FAILED: $(jfield "$res" message)"; fi
+  # Never "media checked" when the disk had no room to read the media store back (verify.mjs says which).
+  local pct; pct=$(jfield "$res" mediaSample | tr -cd 0-9)
+  if [ "$(jfield "$res" mediaChecked)" = false ]; then
+    info "verify passed: snapshot $(jfield "$res" snapshot) (made $(jfield "$res" snapshotTime)) restores — tables, keys and token checked; media NOT read back (no room on the disk)${pct:+; a $pct% sample of the stored data was read and checked instead}"
+  else
+    info "verify passed: snapshot $(jfield "$res" snapshot) (made $(jfield "$res" snapshotTime)) restores — tables, keys, token and media checked"
+  fi
+}
+
+env_file_get() { local ENV_FILE="$1"; env_get "$2"; }
+env_file_set() { local ENV_FILE="$1"; env_set "$2" "$3"; }
+bb_restore() { # bb_restore <snapshot> <with_env 0|1> [--from address]
+  local snap="$1" with_env="$2" from="${3:-}" out res id when differ=() k home="$STATE/backup-scratch/r/bb/home" have
+  backup_lock
+  # .env's BB_RELEASE is the tag of the images this box built: always the release in use (a restore
+  # that stopped half-way after taking a snapshot's .env heals here when it is run again).
+  sync_release_tag
+  if [ -n "$from" ]; then backup_from "$from"; else backup_target || die "the backup target is not usable (see above)"; fi
+  case "$BK_FROM" in settings|command-line) ;; *) info "the database is not running: restoring from the target the last backup used ($(backup_target_label))" ;; esac
+  backup_image || die "the backup image did not build"
+  backup_passphrase
+  say "Reading snapshot $snap from $(backup_target_label)"
+  out=$(backup_run backup-restore restore-stage "$snap") || true
+  res=$(bbresult "$out")
+  [ "$(jfield "$res" ok)" = true ] || die "RESTORE FAILED before anything was changed: $(jfield "$res" message)"
+  id=$(jfield "$res" snapshot); when=$(jfield "$res" snapshotTime)
+  # The backup container wrote the staged files from the snapshot. Root reads them and copies them
+  # into place, so a link among them would hand root a file of the link's choosing.
+  if [ -L "$STATE/backup-scratch/r" ] || [ -L "$STATE/backup-scratch/r/bb" ] || [ -L "$home" ] || [ -L "$home/.env" ] \
+     || [ -L "$home/matrix" ] || [ -L "$home/matrix/mas-keys.yaml" ] || [ -L "$home/cloudflared" ] \
+     || { [ -d "$home/cloudflared" ] && [ -n "$(find "$home/cloudflared" -type l -print -quit)" ]; }; then
+    backup_run backup-restore clean >/dev/null || true
+    die "the snapshot holds a link where a file belongs (.env, MAS's keys or the tunnel's credentials) — nothing was changed"
+  fi
+  [ -s "$home/.env" ] || die "the snapshot holds no .env — nothing was changed"
+  have=$(env_file_get "$home/.env" BB_DOMAIN)
+  if [ "$have" != "$(env_get BB_DOMAIN)" ]; then
+    backup_run backup-restore clean >/dev/null || true
+    die "the snapshot is of $have, and this box was installed for $(env_get BB_DOMAIN). Nothing was changed. Install with the same domain (and front door) as the site you are restoring."
+  fi
+  # The databases were encrypted and signed with the snapshot's secrets: on this box they must be
+  # the same ones, unless the operator asks for the snapshot's .env too (a new box).
+  for k in "${BOOTSTRAP_SECRETS[@]}"; do
+    [ "$(env_file_get "$home/.env" "$k")" = "$(env_get "$k")" ] || differ+=("$k")
+  done
+  if [ "${#differ[@]}" -gt 0 ] && [ "$with_env" != 1 ]; then
+    backup_run backup-restore clean >/dev/null || true
+    die "the snapshot was made with other secrets than this box's .env (${differ[*]}). Nothing was changed. On a new box, restore its .env too: blackbranch restore $snap --with-env"
+  fi
+  if [ "${#differ[@]}" -gt 0 ] && postgres_up && [ -n "$(config_get setup.completedAt 2>/dev/null || true)" ]; then
+    backup_run backup-restore clean >/dev/null || true
+    die "--with-env is for a new box, and this one holds a site that finished setup. Nothing was changed."
+  fi
+  say "Stopping the site, the homeserver and the chat services"
+  compose stop web stream-ingest stream-api synapse mas >/dev/null 2>&1 || true
+  if [ "${#differ[@]}" -gt 0 ]; then
+    # A new box: its .env becomes the snapshot's, and its (empty) database is made again with the
+    # snapshot's passwords — Postgres only reads them when its volume is created.
+    cp -p "$ENV_FILE" "$BB_HOME/.env.before-restore-$(date -u +%Y%m%d-%H%M%S)" \
+      || die "could not keep a copy of .env (is the disk full?) — .env is unchanged; the site is stopped (blackbranch up starts it)"
+    # Into place by a rename, complete or not at all.
+    if ! install -m 600 "$home/.env" "$ENV_FILE.restore.$$" || ! replace_file "$ENV_FILE.restore.$$" "$ENV_FILE"; then
+      rm -f "$ENV_FILE.restore.$$"; die "could not write the snapshot's .env (is the disk full?) — .env is unchanged; the site is stopped (blackbranch up starts it)"
+    fi
+    # The snapshot's .env names the release it was made on; the images here are this release's.
+    # (Its .env migrations, if it is older, run in the `up` below.)
+    sync_release_tag
+    info ".env replaced by the snapshot's (the old one kept beside it)"
+    compose rm -sf postgres >/dev/null 2>&1 || true
+    docker volume rm "$(env_get COMPOSE_PROJECT_NAME)_pg-data" >/dev/null 2>&1 || true
+  fi
+  compose up -d postgres >/dev/null
+  wait_healthy 120 postgres || die "postgres did not become healthy"
+  out=$(backup_run backup-restore restore-db) || true
+  res=$(bbresult "$out")
+  [ "$(jfield "$res" ok)" = true ] || die "RESTORE FAILED while loading the databases: $(jfield "$res" message) — the site stays stopped; run the restore again"
+  private_dir "$BB_HOME/matrix"
+  # Staged beside them and swapped in whole: written straight over them, a full disk left MAS a part
+  # of the snapshot's keys and none of its own.
+  if [ -s "$home/matrix/mas-keys.yaml" ]; then
+    local mk="$BB_HOME/matrix/.mas-keys.yaml.restore.$$"
+    if ! install -m 600 "$home/matrix/mas-keys.yaml" "$mk" || ! cmp -s "$home/matrix/mas-keys.yaml" "$mk" \
+       || ! replace_file "$mk" "$BB_HOME/matrix/mas-keys.yaml"; then
+      rm -f "$mk"
+      die "could not write MAS's keys from the snapshot (is the disk full?) — they are as they were; the databases are restored and the site is stopped: run the restore again"
+    fi
+  fi
+  if [ -d "$home/cloudflared" ]; then cp -a "$home/cloudflared/." "$BB_HOME/cloudflared/"; fi
+  # The last step also empties the scratch folder (from inside: the container wrote it).
+  out=$(backup_run backup-restore restore-media "${id:-$snap}") || true
+  res=$(bbresult "$out")
+  [ "$(jfield "$res" ok)" = true ] || die "RESTORE FAILED on the media store: $(jfield "$res" message) — the databases are restored; run the restore again"
+  info "restored snapshot ${id:0:8} (made $when): the three databases, Synapse's media and signing key, MAS's keys"
+  if [ -n "${BB_RESTORE_NO_START:-}" ]; then return 0; fi   # test hook: the stack is not this test's
+  cmd_up
+}
+
+backup_ssh_key() { # the SFTP key's public half (made once, kept in backup-ssh/, root's)
+  local out
+  backup_image || die "the backup image did not build"
+  BK_REPOSITORY=""
+  out=$(backup_run backup key) || die "could not make the SFTP key"
+  printf '%s\n' "$out" | grep -E '^ssh-ed25519 ' | tail -n 1
+}
+
+cmd_backup() {
+  need_root backup; need_install
+  case "${1:-}" in
+    "") bb_backup ;;
+    # The nightly timer: an update makes its own backup, and must not have one run beside it.
+    --scheduled) if update_running; then info "an update is running (it makes its own backup): skipped"; return 0; fi; bb_backup ;;
+    list) backup_target || die "the backup target is not usable (see above)"; backup_image || die "the backup image did not build"; backup_run backup snapshots ;;
+    key) backup_ssh_key ;;
+    *) die "usage: blackbranch backup [list|key]" ;;
+  esac
+}
+cmd_restore() {
+  need_root restore; need_install
+  local snap="" verify=0 with_env=0 yes=0 from="" a typed
+  while [ $# -gt 0 ]; do
+    a="$1"; shift
+    case "$a" in
+      --verify) verify=1 ;; --with-env) with_env=1 ;; --yes) yes=1 ;;
+      --from) from="${1:?--from needs an address}"; shift ;;
+      --scheduled) if update_running; then info "an update is running: the weekly check waits for next week"; return 0; fi ;;
+      -*) die "unknown option $a" ;;
+      *) [ -z "$snap" ] || die "one snapshot at a time"; snap="$a" ;;
+    esac
+  done
+  [ -n "$snap" ] || die "usage: blackbranch restore <snapshot|latest> [--verify] [--with-env] [--from <address>] [--yes]   (snapshots: blackbranch backup list)"
+  [[ "$snap" =~ ^(latest|[0-9a-f]{8,64})$ ]] || die "a snapshot is \"latest\" or its id (blackbranch backup list)"
+  if [ -n "$from" ] && { [[ "$from" == *$'\n'* ]] || [ "${#from}" -gt 512 ]; }; then die "--from takes one address"; fi
+  if [ "$verify" = 1 ]; then bb_verify "$snap" "$from"; return; fi
+  if [ "$yes" != 1 ]; then
+    ( : < /dev/tty ) 2>/dev/null || die "a restore replaces the site's data: run it from a terminal, or add --yes"
+    printf '   This replaces the three databases, Synapse'"'"'s media and signing key and MAS'"'"'s keys with snapshot %s.\n   Everything since that snapshot is lost. Type the domain (%s) to go on: ' "$snap" "$(env_get BB_DOMAIN)"
+    read -r typed < /dev/tty
+    [ "$typed" = "$(env_get BB_DOMAIN)" ] || die "not restored"
+  fi
+  bb_restore "$snap" "$with_env" "$from"
+}
+
+# ── the timers: nightly backup at the quiet hour, weekly verify ─────────────────────────────────
+# Rendered from the instance settings updates.quietHour and site.timeZone (read like the federation
+# switch: from the database when it runs, else the values the last render saw), at every render and
+# after every backup — so a quiet hour changed in the Admin Panel applies by the next night.
+quiet_schedule() { # → "<hour> <zone>"
+  local h="" tz="" v
+  if postgres_up && v=$(config_get updates.quietHour 2>/dev/null); then
+    h="$v"; tz=$(config_get site.timeZone 2>/dev/null || true)
+    stamp_set quiet-hour "$h"; stamp_set time-zone "$tz"
+  else
+    h=$(stamp_get quiet-hour); tz=$(stamp_get time-zone)
+  fi
+  [[ "$h" =~ ^([0-9]|1[0-9]|2[0-3])$ ]] || h="$DEFAULT_QUIET_HOUR"
+  # systemd takes a zone name after the time; one it does not know would stop the timer loading.
+  if ! [[ "$tz" =~ ^[A-Za-z]+(/[A-Za-z0-9_+-]+){0,2}$ ]] || [ ! -f "/usr/share/zoneinfo/$tz" ]; then tz=UTC; fi
+  printf '%s %s\n' "$h" "$tz"
+}
+render_timer() { # render_timer backup|verify|update <hour> <zone>
+  local hh; hh=$(printf '%02d' "$2")
+  if [ "$1" = update ]; then
+    # After the nightly backup. A security release applies itself (never while live); a feature
+    # release is only recorded. The spread keeps every box from asking the feed at the same second.
+    printf '%s\n' "# GENERATED by \`blackbranch render\` from the quiet hour (updates.quietHour) and time zone (site.timeZone)." \
+      "[Unit]" "Description=Black Branch: read the update feed; apply a security release at the quiet hour" "" \
+      "[Timer]" "OnCalendar=*-*-* $hh:45:00 $3" "RandomizedDelaySec=600" "Persistent=true" "Unit=blackbranch-update.service" "" "[Install]" "WantedBy=timers.target"
+  elif [ "$1" = backup ]; then
+    printf '%s\n' "# GENERATED by \`blackbranch render\` from the quiet hour (updates.quietHour) and time zone (site.timeZone)." \
+      "[Unit]" "Description=Black Branch: nightly backup at the quiet hour" "" \
+      "[Timer]" "OnCalendar=*-*-* $hh:00:00 $3" "Persistent=true" "Unit=blackbranch-backup.service" "" "[Install]" "WantedBy=timers.target"
+  else
+    printf '%s\n' "# GENERATED by \`blackbranch render\` from the quiet hour (updates.quietHour) and time zone (site.timeZone)." \
+      "[Unit]" "Description=Black Branch: weekly check that the newest backup restores" "" \
+      "[Timer]" "OnCalendar=Sun *-*-* $hh:30:00 $3" "Persistent=true" "Unit=blackbranch-verify.service" "" "[Install]" "WantedBy=timers.target"
+  fi
+}
+backup_timers() {
+  # Only as root (or into a test folder): everything else about render runs unprivileged in tests.
+  if [ -z "${BB_SYSTEMD_DIR:-}" ] && [ "$(id -u)" != 0 ]; then return 0; fi
+  local h tz a b u
+  read -r h tz < <(quiet_schedule)
+  mkdir -p "$SYSTEMD_DIR"
+  a=$(render_timer backup "$h" "$tz" | write_if_changed "$SYSTEMD_DIR/blackbranch-backup.timer") || return 1
+  b=$(render_timer verify "$h" "$tz" | write_if_changed "$SYSTEMD_DIR/blackbranch-verify.timer") || return 1
+  u=$(render_timer update "$h" "$tz" | write_if_changed "$SYSTEMD_DIR/blackbranch-update.timer") || return 1
+  info "timers: backup daily at $(printf '%02d' "$h"):00, verify Sundays at $(printf '%02d' "$h"):30, update check daily at $(printf '%02d' "$h"):45 ($tz) — $a/$b/$u"
+  [ -z "${BB_SYSTEMD_DIR:-}" ] || return 0
+  if [ "$a$b$u" != unchangedunchangedunchanged ]; then systemctl daemon-reload; fi
+  local t
+  for t in backup verify update; do
+    systemctl is-enabled -q "blackbranch-$t.timer" 2>/dev/null || systemctl enable -q --now "blackbranch-$t.timer"
+  done
+  if [ "$a$b$u" != unchangedunchangedunchanged ]; then systemctl restart blackbranch-backup.timer blackbranch-verify.timer blackbranch-update.timer; fi
+}
+
+backup_status_line() {
+  local last verify
+  last=$(cat "$BB_HOME/results/$BACKUP_LAST" 2>/dev/null || true)
+  verify=$(cat "$BB_HOME/results/$VERIFY_LAST" 2>/dev/null || true)
+  if [ -z "$last" ]; then printf 'none yet — blackbranch backup'; return; fi
+  if [ "$(jfield "$last" ok)" = true ]; then printf 'last %s (%s, to %s)' "$(jfield "$last" at)" "$(jfield "$last" snapshot)" "$(jfield "$last" target)"
+  else printf 'LAST RUN FAILED %s; last good %s' "$(jfield "$last" at)" "$(jfield "$last" lastOkAt)"; fi
+  if [ -n "$verify" ]; then printf ' · verify %s %s' "$([ "$(jfield "$verify" ok)" = true ] && echo passed || echo FAILED)" "$(jfield "$verify" at)"; fi
+}
+
+# For the doctor and `status`: the fixed fields of the last backup and verify (never a message).
+backup_facts_json() { # backup_facts_json [check] — check: also ask the target whether it answers
+  local last verify reach=null kind=null res
+  last=$(cat "$BB_HOME/results/$BACKUP_LAST" 2>/dev/null || true)
+  verify=$(cat "$BB_HOME/results/$VERIFY_LAST" 2>/dev/null || true)
+  if [ "${1:-}" = check ] && [ -f "$BB_HOME/compose.yaml" ] && docker image inspect "blackbranch/backup:$(release_tag)" >/dev/null 2>&1; then
+    if backup_target ro 2>/dev/null; then
+      kind="\"$BK_TARGET\""
+      res=$(bbresult "$(backup_run backup check 2>/dev/null || true)")
+      case "$(jfield "$res" repo)" in ok|missing|password|unreachable|refused) reach="\"$(jfield "$res" repo)\"" ;; esac
+    fi
+  fi
+  printf '{"last":%s,"verify":%s,"target":{"kind":%s,"repo":%s}}' \
+    "$([ -n "$last" ] && printf '{"at":"%s","ok":%s,"lastOkAt":%s}' "$(jfield "$last" at | tr -cd '0-9TZ:-')" "$(jbool "$(jfield "$last" ok)")" \
+        "$(v=$(jfield "$last" lastOkAt | tr -cd '0-9TZ:-'); [ -n "$v" ] && [ "$v" != null ] && printf '"%s"' "$v" || echo null)" || echo null)" \
+    "$([ -n "$verify" ] && printf '{"at":"%s","ok":%s,"failed":[%s]}' "$(jfield "$verify" at | tr -cd '0-9TZ:-')" "$(jbool "$(jfield "$verify" ok)")" \
+        "$(printf '%s' "$verify" | grep -oE '"failed":\[[^]]*\]' | sed 's/^"failed":\[//; s/\]$//' | tr -cd 'a-zA-Z",')" || echo null)" \
+    "$kind" "$reach"
+}
+
+# ── the doctor ───────────────────────────────────────────────────────────────────────────────
+# The checks are ONE list (config/doctor.mjs); this side only gathers the host's facts. Nothing
+# here writes anything but results/doctor-host.json (and the report, when asked for one). The facts
+# are numbers, booleans and fixed words — never a secret, never the domain.
+# The secrets install.sh generates (bundle.test.mjs checks the two lists agree).
+BOOTSTRAP_SECRETS=(
+  POSTGRES_PASSWORD STREAM_DB_PASSWORD SYNAPSE_DB_PASSWORD MAS_DB_PASSWORD STREAM_API_SECRET AUTH_SECRET
+  TOKEN_ENC_KEY INSTANCE_MASTER_KEY MATRIX_OAUTH_CLIENT_SECRET MAS_SYNAPSE_SECRET MAS_ENCRYPTION_SECRET
+  SYNAPSE_REGISTRATION_SECRET SYNAPSE_MACAROON_SECRET SYNAPSE_FORM_SECRET BACKUP_PASSPHRASE
+)
+# .env keys whose values are the product's own words (they appear in any report's fix lines).
+REPORT_PLAIN_KEYS=(COMPOSE_PROJECT_NAME COMPOSE_PROFILES BB_TLS_MODE)
+
+jbool() { case "$1" in true|false) printf '%s' "$1" ;; *) printf null ;; esac; }
+jnum() { if [[ "$1" =~ ^-?[0-9]+$ ]]; then printf '%s' "$1"; else printf null; fi; }
+disk_free_pct() { df -P "$1" 2>/dev/null | awk 'NR == 2 && $2 > 0 { printf "%d", ($4 * 100) / $2 }'; }
+
+# The three public names, as label:hostname.
+public_names() { local d; d=$(env_get BB_DOMAIN); printf '%s\n' "site:$d" "api:api.$d" "matrix:matrix.$d"; }
+answer_path() { case "$1" in site) echo /robots.txt ;; api) echo /stream/current ;; matrix) echo /_matrix/client/versions ;; esac; }
+
+doctor_host_facts() {
+  local mode mem docker_root disk="" clock upg name_json="" tunnel=null certs="" answers="" rendered="" render_err=false
+  local l h ok code end days missing="" k v n=0 maskeys signing=null release sep
+  local caddy_txt hs_txt log_txt mas_txt
+  mode=$(env_get BB_TLS_MODE)
+  release=$(head -1 "$BB_HOME/release/RELEASE" 2>/dev/null | tr ' ' '-' | tr -cd 'A-Za-z0-9._+-' | cut -c1-40)
+  mem=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null)
+  # Disk: where the install lives, and where Docker keeps images and volumes (often the same disk).
+  disk="{\"what\":\"install\",\"freePct\":$(jnum "$(disk_free_pct "$BB_HOME")")}"
+  docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || true)
+  [ -n "$docker_root" ] && disk+=",{\"what\":\"docker\",\"freePct\":$(jnum "$(disk_free_pct "$docker_root")")}"
+  case "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" in yes) clock=true ;; no) clock=false ;; *) clock=null ;; esac
+  if [ -f /etc/apt/apt.conf.d/20auto-upgrades ] || command -v dpkg-query >/dev/null 2>&1; then
+    if grep -qE '^[[:space:]]*APT::Periodic::Unattended-Upgrade[[:space:]]+"1"' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null \
+       && dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null | grep -q 'install ok installed'; then upg=true; else upg=false; fi
+  else upg=null; fi
+
+  # The front door. Lab mode has no public names: the router is asked at this box's own port 443.
+  sep=""
+  while IFS=: read -r l h; do
+    if [ "$mode" != internal ]; then
+      if getent ahosts "$h" >/dev/null 2>&1; then ok=true; else ok=false; fi
+      name_json+="$sep{\"name\":\"$l\",\"resolves\":$ok}"
+    fi
+    local curl_opts=(-s -o /dev/null -w '%{http_code}' --max-time 10)
+    if [ "$mode" = internal ]; then
+      curl_opts+=(--resolve "$h:443:127.0.0.1")
+      if [ -s "$BB_HOME/lab-ca/root.crt" ]; then curl_opts+=(--cacert "$BB_HOME/lab-ca/root.crt"); else curl_opts+=(-k); fi
+    fi
+    code=$(curl "${curl_opts[@]}" "https://$h$(answer_path "$l")" 2>/dev/null || true)
+    answers+="$sep{\"name\":\"$l\",\"status\":$(jnum "$((10#${code:-0}))")}"
+    if [ "$mode" = direct ]; then
+      end=$(echo | timeout 10 openssl s_client -connect 127.0.0.1:443 -servername "$h" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+      days=null; [ -n "$end" ] && days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+      certs+="$sep{\"name\":\"$l\",\"daysLeft\":$(jnum "$days")}"
+    fi
+    sep=","
+  done < <(public_names)
+  if [ "$mode" = tunnel ]; then
+    if [ "$(service_health cloudflared)" = healthy ]; then tunnel=true; else tunnel=false; fi
+  fi
+
+  # The rendered config against a fresh render (read-only: the federation switch is read, not stamped).
+  if render_all ro 2>/dev/null; then
+    sep=""
+    for k in "caddy/Caddyfile:caddy_txt" "synapse/homeserver.yaml:hs_txt" "synapse/log.config:log_txt" "mas/config.yaml:mas_txt"; do
+      v="${k#*:}"
+      if printf '%s\n' "${!v}" | cmp -s - "$BB_HOME/rendered/${k%%:*}" 2>/dev/null; then ok=true; else ok=false; fi
+      rendered+="$sep{\"file\":\"${k%%:*}\",\"match\":$ok}"; sep=","
+    done
+  else render_err=true; fi
+
+  # Bootstrap secrets: present and not a placeholder. Names only — never a value.
+  sep=""
+  for k in "${BOOTSTRAP_SECRETS[@]}"; do
+    case "$(env_get "$k")" in ""|change-me) missing+="$sep\"$k\""; sep="," ;; *) n=$((n + 1)) ;; esac
+  done
+  if [ -s "$BB_HOME/matrix/mas-keys.yaml" ]; then maskeys=true; else maskeys=false; fi
+  if [ "$(service_health synapse)" = healthy ]; then
+    if compose exec -T synapse test -s /data/signing.key 2>/dev/null; then signing=true; else signing=false; fi
+  fi
+
+  printf '{"v":1,"at":"%s","release":"%s","mode":"%s","memTotalMiB":%s,"disk":[%s],"clockSynced":%s,"upgrades":%s,' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$release" "$(printf '%s' "$mode" | tr -cd '[:lower:]')" "$(jnum "$mem")" "$disk" "$clock" "$upg"
+  printf '"names":[%s],"tunnel":%s,"certs":[%s],"answers":[%s],"rendered":[%s],"renderError":%s,' \
+    "$name_json" "$(jbool "$tunnel")" "$certs" "$answers" "$rendered" "$render_err"
+  printf '"secrets":{"count":%s,"missing":[%s],"masKeys":%s,"signingKey":%s},' "$n" "$missing" "$maskeys" "$(jbool "$signing")"
+  printf '"backups":%s,"updates":%s}\n' "$(backup_facts_json check)" "$(updates_facts_json)"
+}
+
+# The update channel's three files, as they are (root writes them, fixed fields): the last feed read,
+# the last update's result, and an update in progress.
+updates_facts_json() {
+  local k v out="" sep=""
+  for k in check:feed last:last state:state; do
+    v=$(head -c 16384 "$BB_HOME/results/update-${k#*:}.json" 2>/dev/null | head -n 1 || true)
+    case "$v" in '{"v":1,'*'}') ;; *) v=null ;; esac
+    out+="$sep\"${k%%:*}\":$v"; sep=","
+  done
+  printf '{%s}' "$out"
+}
+
+# Write <name> into results/ the way every result is written: the directory checked first, the
+# file made with mktemp (O_EXCL) inside it and renamed into place. Content on stdin.
+results_put() {
+  local res="$BB_HOME/results" tmp
+  results_dir_ok "$res" || die "refusing to write $1: $res must be a real directory owned by $(id -un), writable by nobody else"
+  tmp=$(mktemp "$res/.result.XXXXXX") || die "could not write $1: no room in $res (is the disk full?)"
+  if ! cat > "$tmp"; then rm -f "$tmp"; die "could not write $1 (is the disk full?) — the last one is kept"; fi
+  chmod 644 "$tmp"
+  replace_file "$tmp" "$res/$1" || die "could not write $1 (is the disk full?) — the last one is kept"
+}
+doctor_write_host_facts() {
+  need_install
+  doctor_host_facts | results_put doctor-host.json
+  echo "host facts written"
+}
+
+# The site's facts, from the web app itself (inside its container, so the secret that lets the
+# command ask never leaves it). Prints JSON, or fails with the reason on stderr.
+DOCTOR_FETCH_JS="fetch('http://127.0.0.1:3000/api/doctor/facts',{headers:{'x-doctor-key':process.env.STREAM_API_SECRET||''},signal:AbortSignal.timeout(60000)}).then(async r=>{const t=await r.text();if(!r.ok){console.error('the site answered '+r.status);process.exit(2)}process.stdout.write(t.replace(/\n/g,' ')+'\n')},()=>{console.error('the site did not answer');process.exit(2)})"
+doctor_site_facts() {
+  # Test hook: a file of site facts in place of the running site.
+  if [ -n "${BB_DOCTOR_SITE_FACTS:-}" ]; then tr '\n' ' ' < "$BB_DOCTOR_SITE_FACTS"; echo; return; fi
+  local h; h=$(service_health web)
+  case "$h" in healthy|running) ;; *) echo "web is $h" >&2; return 1 ;; esac
+  compose exec -T web node -e "$DOCTOR_FETCH_JS"
+}
+# The evaluator: install/doctor.mjs with the release's config/doctor.mjs, run by node inside the
+# stream-api image (the host has no Node). Test hook: BB_DOCTOR_NODE=<node binary> runs it here.
+doctor_eval() {
+  if [ -n "${BB_DOCTOR_NODE:-}" ]; then
+    "$BB_DOCTOR_NODE" "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/doctor.mjs" "$@"; return
+  fi
+  # Compose's own progress lines ("Container … Creating") are not part of the printout.
+  compose run --rm --no-deps -T -v "$BB_HOME/release/config:/bb/config:ro" -v "$BB_HOME/release/install:/bb/install:ro" \
+    --entrypoint node stream-api /bb/install/doctor.mjs "$@" 2> >(grep -v '^ *Container ' >&2)
+}
+
+# Does <file> hold any .env value of 6 or more characters (the product's own words excepted)?
+# Patterns travel on a file descriptor, never on a command line.
+report_leaks() {
+  local key val k plain pats=""
+  while IFS= read -r key; do
+    plain=0; for k in "${REPORT_PLAIN_KEYS[@]}"; do [ "$k" = "$key" ] && plain=1; done
+    [ "$plain" = 1 ] && continue
+    val=$(env_get "$key"); [ "${#val}" -ge 6 ] && pats+="$val"$'\n'
+  done < <(grep -oE '^[A-Za-z_][A-Za-z0-9_]*' "$ENV_FILE")
+  [ -n "$pats" ] || return 1
+  # Not a pipe into grep -q: under pipefail its early exit would read as "no match".
+  grep -qF -f <(printf '%s' "$pats") "$1"
+}
+
+cmd_doctor() {
+  need_root doctor; need_install
+  local report=0 host site site_err="" rc=0 out at errf
+  case "${1:-}" in "") ;; --report) report=1 ;; *) die "usage: blackbranch doctor [--report]" ;; esac
+  host=$(doctor_host_facts)
+  printf '%s\n' "$host" | results_put doctor-host.json || true
+  errf=$(mktemp)
+  if site=$(doctor_site_facts 2>"$errf"); then :; else site=""; site_err=$(head -1 "$errf" | tr -cd 'A-Za-z0-9 .:-' | cut -c1-80); fi
+  rm -f "$errf"
+  at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  local header site_err_json=null
+  if [ -n "$site_err" ]; then site_err_json="\"$site_err\""; fi
+  header=$(printf '{"hostState":"ok","host":%s,"siteError":%s,"release":"%s","at":"%s"}' \
+    "$host" "$site_err_json" \
+    "$(head -1 "$BB_HOME/release/RELEASE" 2>/dev/null | tr ' ' '-' | tr -cd 'A-Za-z0-9._+-' | cut -c1-40)" "$at")
+  if [ "$report" = 1 ]; then
+    out="$BB_HOME/doctor-report-$(date -u +%Y%m%d-%H%M%S).txt"
+    { printf '%s\n%s\n' "$header" "$site" | doctor_eval --report > "$out"; } || rc=$?
+    if [ "$rc" -gt 1 ] || [ ! -s "$out" ]; then rm -f "$out"; die "the report could not be made"; fi
+    if report_leaks "$out"; then rm -f "$out"; die "the report would hold a value from .env — not written (please report this)"; fi
+    chmod 644 "$out"
+    info "report written: $out (no secret, chat text, viewer id or domain in it — checked against .env)"
+    return "$rc"
+  fi
+  printf 'Black Branch doctor — %s\n\n' "$at"
+  printf '%s\n%s\n' "$header" "$site" | doctor_eval || rc=$?
+  return "$rc"
+}
+
+# ── the update channel ───────────────────────────────────────────────────────────────────────
+# A release is one version that pins everything on the box: its source (a tarball pinned by sha256
+# — the images are built here from it, as at install) and every third-party image by digest. The
+# feed names the newest release on a channel and is signed; the box checks the signature with
+# BB_RELEASE_KEY, the key it was installed with, using the INSTALLED release's verifier
+# (install/update/release.mjs). The update is run by this script, the installed release's; the
+# next release brings the rest — its files, templates, migrations, and its own health check. If
+# that check fails, this script puts the previous release back with the data from the backup it
+# made just before switching.
+UPDATE_DIR="$STATE/update"
+UPDATE_STEPS=8
+if [ -n "${BB_UPDATE_NODE:-}" ]; then RN_WORK="$UPDATE_DIR"; RN_RELEASES="$BB_HOME/releases"; else RN_WORK=/bbu-work; RN_RELEASES=/bbu-releases; fi
+U_VERSION="" U_SECURITY="" U_PUBLISHED="" U_EXPIRES="" U_SRC_URL="" U_SRC_SHA256="" U_SRC_SIZE=""
+U_IMAGES="" U_NOTES="" U_DECISION="" U_REASON="" U_MANIFEST="" U_FROM="" U_SINCE="" U_ERR="" ENVN=""
+
+jsn() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf null; fi; }
+current_version() { # the release in use as a version, or "-" (a source checkout has none)
+  local v; v=$(head -1 "$BB_HOME/release/RELEASE" 2>/dev/null || true)
+  if [[ "$v" =~ $VERSION_RE ]]; then printf '%s' "$v"; else printf '%s' -; fi
+}
+current_label() { local v; v=$(current_version); if [ "$v" = - ]; then release_tag; else printf '%s' "$v"; fi; }
+update_channel() { local c; c=$(env_get BB_UPDATE_CHANNEL); case "$c" in beta) printf beta ;; *) printf stable ;; esac; }
+update_feed_url() { local f; f=$(env_get BB_UPDATE_FEED); f="${f:-https://blackbranch.app/releases}"; printf '%s/%s.json' "${f%/}" "$(update_channel)"; }
+postgres_major() {
+  local n; n=$(compose exec -T postgres psql -U postgres -d postgres -qAt -c 'SHOW server_version_num' 2>/dev/null | tr -cd 0-9)
+  if [ -n "$n" ]; then echo $(( n / 10000 )); else echo -; fi
+}
+# The integrity of what is fetched is the signature and the sha256, never the transport.
+fetch_url() { # fetch_url <url> <file> <max bytes> [seconds]
+  rm -f "$2.part"
+  if ! curl -fsSL --proto '=https,http' --proto-redir '=https' --max-redirs 3 --connect-timeout 20 --max-time "${4:-120}" \
+       --max-filesize "$3" -o "$2.part" "$1" 2>/dev/null; then rm -f "$2.part"; return 1; fi
+  if [ "$(stat -c %s "$2.part")" -gt "$3" ]; then rm -f "$2.part"; return 1; fi
+  mv -f "$2.part" "$2"
+}
+# install/update/release.mjs — the INSTALLED release's — in its stream-api image: no network, a
+# read-only filesystem, no capabilities. Test hook: BB_UPDATE_NODE=<node binary> runs it here.
+release_node() {
+  if [ -n "${BB_UPDATE_NODE:-}" ]; then "$BB_UPDATE_NODE" "$BB_HOME/release/install/update/release.mjs" "$@"; return; fi
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 0:0 \
+    -v "$BB_HOME/release/install/update:/bbu:ro" -v "$UPDATE_DIR:/bbu-work:ro" -v "$BB_HOME/releases:/bbu-releases:ro" \
+    --entrypoint node "blackbranch/stream-api:$(release_tag)" /bbu/release.mjs "$@"
+}
+update_parse() { # the verifier's KEY=value lines into U_* (each value matched a fixed pattern there)
+  local line k v
+  U_VERSION="" U_SECURITY="" U_PUBLISHED="" U_EXPIRES="" U_SRC_URL="" U_SRC_SHA256="" U_SRC_SIZE=""
+  U_IMAGES="" U_NOTES="" U_DECISION="" U_REASON="" U_MANIFEST=""
+  while IFS= read -r line; do
+    case "$line" in
+      "MANIFEST "*) U_MANIFEST="${line#MANIFEST }" ;;
+      *=*) k="${line%%=*}"; v="${line#*=}"
+        case "$k" in VERSION|SECURITY|PUBLISHED|EXPIRES|SRC_URL|SRC_SHA256|SRC_SIZE|IMAGES|NOTES|DECISION|REASON) printf -v "U_$k" '%s' "$v" ;; esac ;;
+    esac
+  done <<< "$1"
+}
+
+# Read and verify the feed: sets U_*, writes results/update-feed.json. 0 = read (U_DECISION says
+# newer, same, older or refused); 1 = not read (the feed did not answer, or was not accepted).
+update_check() {
+  local url out rc=0 pg=-
+  mkdir -p "$UPDATE_DIR"; chmod 700 "$UPDATE_DIR"
+  U_REASON=""
+  url=$(update_feed_url)
+  case "$url" in https://*|http://*) ;; *) U_REASON="BB_UPDATE_FEED is not an http(s) address"; update_check_record false "$U_REASON"; echo "$U_REASON" >&2; return 1 ;; esac
+  if ! fetch_url "$url" "$UPDATE_DIR/feed.json" 262144 60; then
+    U_REASON="the feed did not answer"; update_check_record false "$U_REASON"; echo "the update feed did not answer: $url" >&2; return 1
+  fi
+  if postgres_up; then pg=$(postgres_major); fi
+  out=$(release_node check --feed "$RN_WORK/feed.json" --feed-url "$url" --key "$(env_get BB_RELEASE_KEY)" \
+          --current "$(current_version)" --channel "$(update_channel)" --pg-major "$pg" 2>/dev/null) || rc=$?
+  update_parse "$out"
+  if [ -z "$U_DECISION" ]; then
+    U_REASON="${U_REASON:-the release check did not run (exit $rc)}"
+    update_check_record false "$U_REASON"; echo "the feed was not accepted: $U_REASON" >&2; return 1
+  fi
+  if ! [[ "$U_VERSION" =~ $VERSION_RE ]] || ! [[ "$U_SRC_SHA256" =~ ^[0-9a-f]{64}$ ]] || ! [[ "$U_SRC_SIZE" =~ ^[0-9]{1,10}$ ]] \
+     || ! [[ "$U_PUBLISHED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    U_REASON="the verifier's answer was not readable"; update_check_record false "$U_REASON"; return 1
+  fi
+  # A validly signed feed OLDER than one this box has read is a replay (a network holding a release
+  # back until the old feed expires): not a read. The newest publication time seen is kept PER
+  # CHANNEL: each channel publishes on its own clock, and one floor for both refused the other
+  # channel's feed as "replayed" after a switch — security releases included — until it published
+  # again. (A box from before kept one file: update_floor_adopt makes it the floor of the channel
+  # it is on.)
+  local high floor
+  update_floor_adopt
+  floor="$STATE/update-feed-published.$(update_channel)"
+  high=$(head -1 "$floor" 2>/dev/null | tr -cd '0-9TZ:-')
+  if [ -n "$high" ] && [[ "$U_PUBLISHED" < "$high" ]]; then
+    U_REASON="the feed is older than one this box read before (published $U_PUBLISHED, before $high): a replayed feed"
+    U_DECISION=""; update_check_record false "$U_REASON"; echo "the feed was not accepted: $U_REASON" >&2; return 1
+  fi
+  if ! printf '%s\n' "$U_PUBLISHED" > "$floor.new" || ! replace_file "$floor.new" "$floor"; then
+    rm -f "$floor.new"; U_REASON="could not record the feed's time (is the disk full?)"; update_check_record false "$U_REASON"; echo "$U_REASON" >&2; return 1
+  fi
+  update_check_record true ""
+}
+# A box from before per-channel floors kept one file: it is the floor of the channel the box is on
+# NOW. cmd_update runs this before `--channel` changes the channel — run only after, it gave the old
+# channel's time to the new one, and that channel's own (older) feed was refused as replayed.
+update_floor_adopt() {
+  local floor; floor="$STATE/update-feed-published.$(update_channel)"
+  if [ ! -e "$floor" ] && [ -f "$STATE/update-feed-published" ]; then mv -f "$STATE/update-feed-published" "$floor"; fi
+}
+update_check_record() { # update_check_record <ok> <error> — results/update-feed.json (fixed fields)
+  local prev at read avail=null refused=null
+  prev=$(cat "$BB_HOME/results/update-feed.json" 2>/dev/null || true)
+  at=$(now_utc); read=$(jfield "$prev" readAt | tr -cd '0-9TZ:-')
+  if [ "$1" = true ]; then read="$at"; fi
+  if [ "$1" = true ] && { [ "$U_DECISION" = newer ] || [ "$U_DECISION" = refused ]; }; then
+    avail=$(printf '{"version":"%s","security":%s,"published":"%s","notes":"%s"}' "$U_VERSION" "$(jbool "$U_SECURITY")" \
+      "$(printf '%s' "$U_PUBLISHED" | tr -cd '0-9TZ:-')" "$(jsafe "$U_NOTES")")
+  fi
+  if [ "$1" = true ] && [ "$U_DECISION" = refused ]; then refused="\"$(jsafe "$U_REASON")\""; fi
+  local plain=false; case "$(update_feed_url)" in http://*) plain=true ;; esac
+  printf '{"v":1,"at":"%s","ok":%s,"readAt":%s,"channel":"%s","current":"%s","available":%s,"refused":%s,"expires":%s,"plainHttp":%s,"error":%s}\n' \
+    "$at" "$1" "$(jsn "$read")" "$(update_channel)" "$(current_label | tr -cd 'A-Za-z0-9._-')" "$avail" "$refused" \
+    "$(jsn "$(printf '%s' "$U_EXPIRES" | tr -cd '0-9TZ:-')")" "$plain" "$(jsn "$(jsafe "$2")")" | results_put update-feed.json || true
+}
+update_check_summary() {
+  case "$U_DECISION" in
+    newer) if [ "$U_SECURITY" = true ]; then echo "$U_VERSION is available — a security release: it applies itself at the quiet hour (never while the stream is live)"
+           else echo "$U_VERSION is available — a feature release: apply it from the Admin Panel or with blackbranch update"; fi ;;
+    refused) echo "$U_VERSION is published but cannot be applied here: $U_REASON" ;;
+    *) echo "up to date: $(current_label) on the $(update_channel) channel (the feed's newest is $U_VERSION)" ;;
+  esac
+}
+
+# Progress for the Admin Panel (results/update-state.json) and the result (results/update-last.json).
+# U_OPEN: an update is under way in this process (its state says running or waiting) — what the
+# exit trap (update_exited) reads to tell a finished update from one an error cut short.
+U_OPEN=""
+update_state() { # update_state running|waiting|idle <step> <words>
+  if [ "$1" = idle ]; then U_OPEN=""; else U_OPEN=1; fi
+  printf '{"v":1,"state":"%s","from":"%s","to":"%s","step":%s,"steps":%s,"words":"%s","since":"%s","at":"%s"}\n' \
+    "$1" "$(jsafe "$U_FROM")" "$(jsafe "$U_VERSION")" "$(jnum "$2")" "$UPDATE_STEPS" "$(jsafe "$3")" \
+    "$(printf '%s' "$U_SINCE" | tr -cd '0-9TZ:-')" "$(now_utc)" | results_put update-state.json || true
+}
+ustep() { update_state running "$1" "$2"; say "[$1/$UPDATE_STEPS] $2"; }
+hjson() { case "$1" in '{"ok":'*) if [ "${#1}" -le 8192 ]; then printf '%s' "$1"; else printf null; fi ;; *) printf null ;; esac; }
+u_record() { # u_record updated|rolled-back|rollback-failed|not-applied|interrupted <message> [health] [rollback health] [snapshot]
+  local ok=false; [ "$1" != updated ] || ok=true
+  printf '{"v":1,"at":"%s","started":"%s","from":"%s","to":"%s","result":"%s","ok":%s,"message":"%s","snapshot":"%s","health":%s,"rollbackHealth":%s}\n' \
+    "$(now_utc)" "$(printf '%s' "$U_SINCE" | tr -cd '0-9TZ:-')" "$(jsafe "$U_FROM")" "$(jsafe "$U_VERSION")" "$1" "$ok" "$(jsafe "$2")" \
+    "$(printf '%s' "${5:-}" | tr -cd '0-9a-f' | cut -c1-16)" "$(hjson "${3:-}")" "$(hjson "${4:-}")" | results_put update-last.json || true
+}
+u_not_applied() { rm -f "$UPDATE_DIR/env.next"; u_record not-applied "$1"; update_state idle 0 ""; echo "not applied: $1" >&2; }
+# Refused after the site was stopped for the backup: "not applied" only once the site is back.
+u_not_started_again() { # u_not_started_again <why>
+  if u_start_again; then u_progress ""; u_not_applied "$1"; else u_down "the update to $U_VERSION was not applied: $1" || true; fi
+}
+update_running() { [ -f "$STATE/update.lock" ] && ! flock -n "$STATE/update.lock" true; }
+
+# How far an update got, in root's own state (state/update/progress): `stopped` once the site is
+# stopped for the backup, `switched` (with the release to go back to and the snapshot that holds its
+# data) from just before release/ points at the new one. An update stopped by a signal finishes from
+# here at once (update_stopped); one cut off harder — a power loss — is finished by update_reconcile,
+# at boot (blackbranch-reconcile.service) or by the next update command. Without it a stopped site
+# STAYED down: `restart: unless-stopped` keeps a stopped service down across a reboot, and once
+# release/RELEASE names the new version the timer reads the feed as "same" — nothing went back.
+U_PHASE="" U_PREV="" U_SNAP="" U_CHILD="" U_ROLLING=""
+# U_DONE: the new release passed its health checks and the marker is cleared — what follows is clean-up.
+U_DONE="" U_HEALTH=""
+u_progress() { # u_progress <phase> [previous release] [snapshot] — "" clears it
+  if [ -z "$1" ]; then U_PHASE=""; rm -f "$UPDATE_DIR/progress"; return 0; fi
+  # The phase in memory moves only once the record of it is written: a failed write (a full disk)
+  # leaves both saying the step before, so the way back is the one that matches what happened.
+  if printf 'phase=%s\nprev=%s\nsnap=%s\n' "$1" "${2:-}" "${3:-}" > "$UPDATE_DIR/progress.new" \
+     && mv -f "$UPDATE_DIR/progress.new" "$UPDATE_DIR/progress"; then U_PHASE="$1"; return 0; fi
+  rm -f "$UPDATE_DIR/progress.new" 2>/dev/null || true
+  return 1
+}
+# A long step runs as a child the update waits for, so a stop signal is handled AT ONCE — a trap
+# waits for a foreground command to end, and a hung backup never ends.
+u_wait() { # u_wait <command…> → its status
+  local rc=0
+  "$@" & U_CHILD=$!
+  wait "$U_CHILD" || rc=$?
+  U_CHILD=""
+  return "$rc"
+}
+# A step's whole tree: the child is a subshell whose own children (a docker client, a comsub) would
+# otherwise run on, holding the step's lock and output.
+kill_tree() { # kill_tree <pid>
+  local c
+  for c in $(pgrep -P "$1" 2>/dev/null || true); do kill_tree "$c"; done
+  kill -TERM "$1" 2>/dev/null || true
+}
+# The site the update stopped for its backup, started again: "started" means compose started it AND
+# every service came back healthy — never just that the command was issued.
+U_START_ERR=""
+u_start_again() { # → 1, with U_START_ERR, when it did not come back
+  U_START_ERR=""
+  if ! compose up -d >/dev/null 2>&1; then U_START_ERR="docker compose up failed"; return 1; fi
+  # shellcheck disable=SC2046
+  if ! wait_healthy 240 $(expected_services); then U_START_ERR="not every service became healthy: $HEALTH_PROBLEM"; return 1; fi
+}
+# Starting it again FAILED: the site is down. The record says so in as many words, and the progress
+# marker (phase=stopped) stays, so the boot unit and the next update command (update_reconcile) try
+# again — until then no update starts on top of it. u_down <what happened> → 1
+u_down() {
+  [ -f "$UPDATE_DIR/progress" ] || u_progress stopped || true
+  U_PHASE="" # in memory only: the exit trap must not take the same way back a second time
+  rm -f "$UPDATE_DIR/env.next"
+  u_record interrupted "$1, and starting $U_FROM again FAILED ($U_START_ERR): the site is down; no release was switched. blackbranch update --reconcile tries again (so does the next boot); blackbranch status shows what runs"
+  update_state idle 0 ""
+  printf '\033[31mblackbranch: starting %s again FAILED (%s): the site is down — run: blackbranch update --reconcile\033[0m\n' "$U_FROM" "$U_START_ERR" >&2
+  return 1
+}
+# Put the box back as the phase needs: the site stopped for the backup is started again; a release
+# switched to goes back to the previous one and its data. update_put_back <how it ended>
+update_put_back() {
+  case "$U_PHASE" in
+    stopped)
+      say "the update $1: starting $U_FROM again"
+      if u_start_again; then
+        u_progress ""; rm -f "$UPDATE_DIR/env.next"
+        u_record interrupted "the update to $U_VERSION $1 before it switched; $U_FROM was started again and nothing was changed"
+        update_state idle 0 ""
+      else u_down "the update to $U_VERSION $1 before it switched" || true; fi ;;
+    switched) u_rollback "$U_PREV" "$U_SNAP" "$1 before it finished" "" ;;
+    *)
+      # The update had finished (healthy, switched, the marker cleared) when something after it — the
+      # clean-up of older releases — stopped: the release in use IS the new one, so "not applied"
+      # would be false.
+      if [ -n "$U_DONE" ]; then
+        u_record updated "$U_FROM → $U_VERSION; the health check passed, and again after two restarts — but finishing up afterwards $1 (dropping older releases may not have finished)" "$U_HEALTH" "" "$U_SNAP"
+        update_state idle 0 ""
+      else u_not_applied "the update $1 before anything live changed"; fi ;;
+  esac
+}
+# The update's TERM/INT/HUP trap (a stopped unit, a shutdown).
+update_stopped() {
+  trap '' TERM INT HUP
+  if [ -n "$U_CHILD" ]; then kill_tree "$U_CHILD"; fi
+  update_put_back "was stopped"
+  exit 143
+}
+# The update's EXIT trap: an update that ends any other way than through its own finish — a command
+# failing under `set -e`, a `die` — is put back the same way. Without it a failed write after the site
+# stopped for the backup (a full disk) exited with the site down and the state "running", until the
+# next boot or the nightly timer's reconcile: up to a day down. A finished update (U_OPEN and U_PHASE
+# both empty) passes straight through.
+update_exited() {
+  local rc=$?
+  if [ -z "$U_OPEN" ] && [ -z "$U_PHASE" ]; then return 0; fi
+  trap - EXIT; trap '' TERM INT HUP
+  [ "$rc" != 0 ] || rc=1
+  set +e # the way back runs to its end: one failed step of it must not leave the rest undone
+  if [ -n "$U_CHILD" ]; then kill_tree "$U_CHILD"; fi
+  if [ -n "$U_ROLLING" ] && [ "$U_PHASE" = switched ]; then
+    # Going back itself failed part-way: the record of the switch stays, so the boot unit and the next
+    # update command (update_reconcile) take the way back again from the start.
+    u_record rollback-failed "the update to $U_VERSION stopped on an error (exit $rc) while going back to $U_FROM: blackbranch update --reconcile goes back again" "" "" "$U_SNAP"
+    printf '\033[31mblackbranch: going back to %s stopped on an error — run: blackbranch update --reconcile\033[0m\n' "$U_FROM" >&2
+    exit "$rc"
+  fi
+  update_put_back "stopped on an error (exit $rc)"
+  exit "$rc"
+}
+# An update cut off (a power loss, a killed unit) is finished: a site stopped for the backup is
+# started again; a release switched to but never confirmed healthy is rolled back to the previous one
+# and its data. update_reconcile [record] — record (`status`): start what was stopped and say so, but
+# never restore data from a read; it names `blackbranch update --reconcile` instead.
+update_reconcile() {
+  local st step phase="" prev="" snap="" k v
+  st=$(cat "$BB_HOME/results/update-state.json" 2>/dev/null || true)
+  # Running in the record, or a marker left by an update whose site could not be started again (u_down).
+  [ "$(jfield "$st" state)" = running ] || [ -f "$UPDATE_DIR/progress" ] || return 0
+  if update_running; then return 0; fi
+  mkdir -p "$STATE"
+  exec 6>"$STATE/update.lock"
+  flock -n 6 || return 0
+  U_FROM=$(jfield "$st" from); U_VERSION=$(jfield "$st" to); U_SINCE=$(jfield "$st" since); step=$(jfield "$st" step)
+  if [ -f "$UPDATE_DIR/progress" ]; then
+    while IFS='=' read -r k v; do case "$k" in phase) phase="$v" ;; prev) prev="$v" ;; snap) snap="$v" ;; esac; done < "$UPDATE_DIR/progress"
+  fi
+  if [ "$phase" = switched ] && [[ "$prev" =~ ^releases/[A-Za-z0-9._-]{1,64}$ ]] && [[ "$snap" =~ ^[0-9a-f]{8,64}$ ]] && [ -s "$UPDATE_DIR/env.before" ]; then
+    if [ "${1:-}" = record ]; then
+      info "an update to $U_VERSION was cut off after switching to it: blackbranch update --reconcile goes back to $U_FROM and its data"
+      exec 6>&-; return 0
+    fi
+    U_PHASE=switched
+    u_rollback "$prev" "$snap" "was cut off before it finished (the box restarted, or the update was stopped)" ""
+    exec 6>&-; return 0
+  fi
+  local started="" what
+  if [ "$(jfield "$st" state)" = running ]; then
+    what="the update to $U_VERSION stopped at step $step of $UPDATE_STEPS without finishing (the box restarted, or the update was stopped)"
+  else what="the update to $U_VERSION had stopped the site, and starting it again had failed"; fi
+  # Stopped for the backup (or an older box's record past that step): the release in use is whole.
+  if [ "$phase" = stopped ] || [ "$phase" = switched ] || { [[ "$step" =~ ^[0-9]+$ ]] && [ "$step" -ge 6 ]; }; then
+    # The marker goes only once the site is up AND healthy: until then each reconcile tries again.
+    if ! u_start_again; then u_down "$what" || true; exec 6>&-; return 1; fi
+    started=" $U_FROM was started again."
+  fi
+  u_record interrupted "${what}.${started} blackbranch status shows what runs; the backup made before it is the newest in blackbranch backup list"
+  u_progress ""; rm -f "$UPDATE_DIR/env.next"
+  update_state idle 0 ""
+  exec 6>&-
+}
+
+# Fetch the release's source, check it against the signed manifest, and unpack it as <dir>
+# (releases/<v> for an update). The download goes in <scratch> (default: the update's own folder).
+update_fetch_source() { # update_fetch_source <dir> [scratch]
+  local next="$1" dl="${2:-$UPDATE_DIR}/source.tar.gz" partial="$1.partial" bad
+  rm -rf "$partial"
+  if ! fetch_url "$U_SRC_URL" "$dl" "$U_SRC_SIZE" 900; then U_ERR="the release's source could not be fetched"; return 1; fi
+  if [ "$(stat -c %s "$dl")" != "$U_SRC_SIZE" ] || [ "$(sha256sum "$dl" | cut -d' ' -f1)" != "$U_SRC_SHA256" ]; then
+    rm -f "$dl"; U_ERR="the fetched source does not match the signed manifest (size or sha256)"; return 1
+  fi
+  # Only plain files and folders, all under the one top folder: no link, no device, no absolute path, no "..".
+  bad=$(tar -tvzf "$dl" | awk '{ t = substr($1, 1, 1); if (t != "-" && t != "d") { print; exit } }')
+  if [ -z "$bad" ]; then bad=$(tar -tzf "$dl" | grep -vE "^blackbranch-$U_VERSION(/|$)" | head -1 || true); fi
+  if [ -z "$bad" ]; then bad=$(tar -tzf "$dl" | grep -E '(^|/)\.\.(/|$)' | head -1 || true); fi
+  if [ -n "$bad" ]; then U_ERR="the release's source holds an entry a release may not hold"; return 1; fi
+  mkdir -p "$partial"
+  tar -xzf "$dl" -C "$partial" --strip-components=1 --no-same-owner --no-same-permissions
+  if [ -n "$(find "$partial" -perm /6000 -print -quit)" ]; then rm -rf "$partial"; U_ERR="the release's source holds a set-user or set-group file"; return 1; fi
+  if [ "$(head -1 "$partial/RELEASE" 2>/dev/null)" != "$U_VERSION" ]; then rm -rf "$partial"; U_ERR="the source names another version than its manifest"; return 1; fi
+  local f; for f in install/blackbranch install/compose.yaml install/Dockerfile install/.env.example install/update/release.mjs install/update/probe.mjs; do
+    [ -f "$partial/$f" ] || { rm -rf "$partial"; U_ERR="the release lacks $f"; return 1; }
+  done
+  printf '%s\n' "$U_MANIFEST" > "$partial/MANIFEST.json"
+  rm -rf "$next"; mv "$partial" "$next"; rm -f "$dl"
+  info "fetched and checked: sha256 ${U_SRC_SHA256:0:16}…, $U_SRC_SIZE bytes"
+}
+# The next release's .env: the installed one, migrated by the next release's migrations — a copy
+# (default: the update's env.next).
+update_env_next() { # update_env_next <dir> [copy]
+  local n p
+  ENVN="${2:-$UPDATE_DIR/env.next}"
+  if ! install -m 600 "$ENV_FILE" "$ENVN" || ! cmp -s "$ENV_FILE" "$ENVN"; then rm -f "$ENVN"; U_ERR="could not copy .env (is the disk full?)"; return 1; fi
+  if ! n=$(env_migrations "$1" "$ENVN"); then U_ERR="an .env migration of $U_VERSION failed on a copy of .env"; return 1; fi
+  env_file_set "$ENVN" BB_RELEASE "$U_VERSION" || { U_ERR="could not write the copy of .env (is the disk full?)"; return 1; }
+  p=$(env_shape_problems "$1" "$ENVN")
+  if [ -n "$p" ]; then U_ERR="$U_VERSION cannot start with this .env: $(printf '%s\n' "$p" | paste -sd ';' - | sed 's/;/; /g')"; return 1; fi
+  info ".env: $n migration(s) on a copy; every key is one $U_VERSION knows"
+}
+# docker compose for the NEXT release: its Compose files, the migrated .env, its source as build context.
+compose_next() {
+  local files=() f cf=()
+  IFS=: read -r -a cf <<< "$(env_file_get "$ENVN" COMPOSE_FILE)"
+  for f in "${cf[@]}"; do files+=(-f "$NEXT_DIR/install/$(basename "$f")"); done
+  (cd "$BB_HOME" && BB_RELEASE_DIR="$NEXT_DIR" docker compose --project-directory "$BB_HOME" --env-file "$ENVN" "${files[@]}" "$@")
+}
+update_build() { # update_build <dir> — images pulled by digest (the site's among them), the release's own built, its config rendered, its site tried
+  local imgs=() img out targets=(stream-api stream-ingest backup)
+  NEXT_DIR="$1"
+  if ! out=$(release_node pins --compose "$RN_RELEASES/$U_VERSION/install/compose.yaml" --dockerfile "$RN_RELEASES/$U_VERSION/install/Dockerfile" --images "$U_IMAGES" 2>&1); then
+    U_ERR="$U_VERSION does not pin its images as its manifest says ($(printf '%s\n' "$out" | sed -n 's/^PROBLEM=//p' | head -1))"; return 1
+  fi
+  read -r -a imgs <<< "$U_IMAGES"
+  for img in "${imgs[@]}"; do
+    docker pull -q "$img" >/dev/null 2>&1 || { U_ERR="could not fetch $img"; return 1; }
+  done
+  info "fetched ${#imgs[@]} images by digest"
+  if web_from_source "$1/install/compose.yaml"; then targets+=(web); fi
+  if ! compose_next --profile backup build "${targets[@]}" >&2; then U_ERR="$U_VERSION's images did not build"; return 1; fi
+  stamp_set "images.$U_VERSION" "$(tree_hash "$1")"
+  if ! BB_DOTENV="$ENVN" bash "$1/install/blackbranch" render --check >&2; then U_ERR="$U_VERSION's config templates do not render with this .env"; return 1; fi
+  ustep 5 "trying $U_VERSION's site beside the running one (the site keeps running meanwhile)"
+  if ! web_candidate compose_next; then U_ERR="$U_VERSION's site did not start with this .env"; return 1; fi
+}
+# Start a release's site as a second container on the bundle network — its image, its .env — and
+# ask it for / and /robots.txt, then remove it. Nothing live changes: the running site keeps
+# serving. <compose fn> is `compose` (this release) or `compose_next` (the one an update brings).
+web_candidate() { # web_candidate <compose fn>
+  local cand="bb-web-candidate" deadline good=0
+  docker rm -f "$cand" >/dev/null 2>&1 || true
+  "$1" run -d --no-deps --name "$cand" web >/dev/null || return 1
+  deadline=$(( $(date +%s) + 120 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if docker exec "$cand" node -e "Promise.all(['/', '/robots.txt'].map(p=>fetch('http://127.0.0.1:3000'+p).then(r=>{if(!r.ok)throw new Error(p+' '+r.status)}))).then(()=>process.exit(0),e=>{console.error(String(e.message||e));process.exit(1)})" >/dev/null 2>&1; then
+      good=1; break
+    fi
+    [ "$(docker inspect -f '{{.State.Running}}' "$cand" 2>/dev/null)" = true ] || break
+    sleep 3
+  done
+  if [ "$good" != 1 ]; then docker logs --tail 40 "$cand" 2>&1 | sed 's/^/   | /' >&2 || true; fi
+  docker rm -f "$cand" >/dev/null 2>&1 || true
+  [ "$good" = 1 ] && info "the site answers / and /robots.txt"
+}
+# The update's health check: the release's OWN `blackbranch health` (its doctor list, its probes).
+update_health() {
+  local out rc=0 j
+  out=$("$BIN_DIR/blackbranch" health 2>&1) || rc=$?
+  printf '%s\n' "$out" | grep -v '^BBHEALTH ' | sed 's/^/   /' >&2
+  j=$(printf '%s\n' "$out" | sed -n 's/^BBHEALTH //p' | tail -n 1)
+  [ -n "$j" ] || { j='{"ok":false,"failed":["the health check gave no answer"]}'; rc=1; }
+  printf '%s' "$j"
+  return "$rc"
+}
+manifest_images() { grep -oE '[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}' "$1/MANIFEST.json" 2>/dev/null | LC_ALL=C sort -u | tr '\n' ' ' || true; }
+# After a good update: keep the release in use and the one before it (its images, its folder — the
+# rollback target); drop the rest. The site's image is a manifest image like the others.
+update_prune() { # update_prune <previous release> → 1 when a release's folder could not be removed
+  local now prev d id r i keep="" drop="" rc=0
+  now=$(release_tag); prev="$1"
+  keep="$(manifest_images "$BB_HOME/releases/$now") $(manifest_images "$BB_HOME/releases/$prev")"
+  for d in "$BB_HOME"/releases/*/; do
+    [ -d "$d" ] || continue
+    id=$(basename "$d")
+    case "$id" in "$now"|"$prev") continue ;; esac
+    drop+=" $(manifest_images "$d")"
+    for i in "${APP_IMAGES[@]}"; do docker image rm "blackbranch/$i:$id" >/dev/null 2>&1 || true; done
+    if rm -rf -- "$d" 2>/dev/null && rm -f -- "$STATE/images.$id"; then info "dropped release $id (two releases back)"
+    else rc=1; info "could not drop release $id (two releases back): its folder stays"; fi
+  done
+  for r in $drop; do case " $keep " in *" $r "*) ;; *) docker image rm "$r" >/dev/null 2>&1 || true ;; esac; done
+  return "$rc"
+}
+
+# Back to the release before, with the data from the backup made just before switching.
+u_rollback() { # u_rollback <previous release link> <snapshot> <why> <health>
+  local prev="$1" snap="$2" why="$3" health="$4" rb="" rrc=0
+  U_ROLLING=1
+  ustep 8 "going back to $U_FROM and its data from before the update"
+  compose stop web stream-ingest stream-api mas synapse >/dev/null 2>&1 || true
+  ln -sfn "$prev" "$BB_HOME/release.new" && mv -Tf "$BB_HOME/release.new" "$BB_HOME/release"
+  install -m 600 "$UPDATE_DIR/env.before" "$BB_HOME/.env.back.$$" && mv -f "$BB_HOME/.env.back.$$" "$ENV_FILE"
+  install_files "$BB_HOME/release" >/dev/null
+  rm -f "$UPDATE_DIR/env.next"
+  if ! "$BIN_DIR/blackbranch" restore "$snap" --yes >&2; then
+    rm -f "$UPDATE_DIR/env.before"; u_progress ""
+    u_record rollback-failed "$why — and going back failed while restoring snapshot ${snap:0:8}: run blackbranch restore ${snap:0:8} --yes" "$health" "" "$snap"
+    update_state idle 0 ""
+    die "ROLLBACK FAILED: $U_VERSION $why, and restoring snapshot ${snap:0:8} did not finish — run: blackbranch restore ${snap:0:8} --yes"
+  fi
+  rm -f "$UPDATE_DIR/env.before"; u_progress ""
+  rb=$(update_health) || rrc=1
+  if [ "$rrc" = 0 ]; then
+    u_record rolled-back "$why; the box is back on $U_FROM with its data from just before the update" "$health" "$rb" "$snap"
+    say "ROLLED BACK: $U_VERSION $why; back on $U_FROM with its data from just before the update — its health check passed"
+  else
+    u_record rollback-failed "$why; the box is back on $U_FROM and its data, but its health check failed too" "$health" "$rb" "$snap"
+    say "ROLLED BACK, BUT NOT HEALTHY: back on $U_FROM; blackbranch doctor says what is wrong"
+  fi
+  update_state idle 0 ""
+}
+
+# The update itself. Nothing live changes until step 6; every failure before that leaves
+# the box exactly as it was. Two steps are ordered deliberately: the source
+# is fetched before the .env check (the migrations ship IN the release), and the backup is made
+# after the site stops (a backup made while it runs would lose, on a rollback, everything written
+# during the minutes of fetching and building).
+update_apply() { # update_apply [version] — that version only, when given (the Admin Panel's button)
+  local want="${1:-}" next prev snap h="" hrc=0 i
+  mkdir -p "$UPDATE_DIR" "$STATE"; chmod 700 "$UPDATE_DIR"
+  update_reconcile
+  exec 7>"$STATE/update.lock"
+  flock -n 7 || die "an update is already running"
+  trap update_stopped TERM INT HUP
+  trap update_exited EXIT
+  # Cleared only by the lock's holder: an update refused above must not take a running one's rollback snapshot.
+  rm -f "$STATE/backup-snapshot-last"
+  U_FROM=$(current_label); U_SINCE=$(now_utc); U_VERSION="${want:-?}"
+  ustep 1 "reading the release"
+  if ! update_check; then u_not_applied "the update feed could not be read: $U_REASON"; return 1; fi
+  case "$U_DECISION" in
+    newer) ;;
+    refused) u_not_applied "$U_REASON"; return 1 ;;
+    *) update_state idle 0 ""; info "up to date: $U_FROM is the newest release on the $(update_channel) channel"; return 0 ;;
+  esac
+  if [ -n "$want" ] && [ "$U_VERSION" != "$want" ]; then
+    u_not_applied "the newest release on the $(update_channel) channel is now $U_VERSION, not $want — check again"; return 1
+  fi
+  next="$BB_HOME/releases/$U_VERSION"
+  # A release's images are fetched and made beside the running ones: room first, not half-way.
+  local need free root
+  need="${BB_UPDATE_MIN_FREE_GB:-5}"; root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || true)
+  free=$(df -Pk "${root:-$BB_HOME}" 2>/dev/null | awk 'NR == 2 { printf "%d", $4 / 1048576 }')
+  if [[ "$need" =~ ^[0-9]{1,4}$ ]] && [[ "$free" =~ ^[0-9]+$ ]] && [ "$free" -lt "$need" ]; then
+    u_not_applied "only $free GB free where Docker keeps its data; an update needs about $need GB (docker image prune -a removes unused images)"; return 1
+  fi
+  ustep 2 "fetching $U_VERSION and checking it against the signed manifest"
+  if ! update_fetch_source "$next"; then u_not_applied "$U_ERR"; return 1; fi
+  ustep 3 "checking .env against $U_VERSION (a dry run on a copy)"
+  if ! update_env_next "$next"; then rm -rf "$next"; u_not_applied "$U_ERR"; return 1; fi
+  ustep 4 "fetching the images by digest and building $U_VERSION's"
+  if ! update_build "$next"; then u_not_applied "$U_ERR (nothing live was changed)"; return 1; fi
+
+  ustep 6 "stopping the site and backing up"
+  u_progress stopped
+  compose stop web stream-ingest stream-api mas synapse >/dev/null 2>&1 || true
+  if ! u_wait bb_backup >&2; then
+    u_not_started_again "the backup before the update failed, so nothing was changed (blackbranch backup says why)"; return 1
+  fi
+  snap=$(head -1 "$STATE/backup-snapshot-last" 2>/dev/null || true)
+  if ! [[ "$snap" =~ ^[0-9a-f]{8,64}$ ]]; then
+    u_not_started_again "the backup before the update gave no snapshot id, so nothing was changed"; return 1
+  fi
+  ustep 7 "switching to $U_VERSION and starting it"
+  prev=$(readlink "$BB_HOME/release")
+  if ! install -m 600 "$ENV_FILE" "$UPDATE_DIR/env.before" || ! cmp -s "$ENV_FILE" "$UPDATE_DIR/env.before"; then
+    rm -f "$UPDATE_DIR/env.before"
+    u_not_started_again "could not keep a copy of .env to go back to (is the disk full?), so nothing was changed"; return 1
+  fi
+  # Recorded BEFORE release/ moves: cut off from here on, the way back is the previous release and its data.
+  U_PREV="$prev"; U_SNAP="$snap"; u_progress switched "$prev" "$snap"
+  # Each step checks its own result: `a && b` is not stopped by `set -e` when `a` fails, and an update
+  # that carried on here ran the new release on the old .env — whose BB_RELEASE then named the
+  # previous release, so the cleanup after it dropped the release in use as "two releases back".
+  if ! { ln -sfn "releases/$U_VERSION" "$BB_HOME/release.new" && mv -Tf "$BB_HOME/release.new" "$BB_HOME/release"; }; then
+    u_rollback "$prev" "$snap" "could not switch to it (is the disk full?)" ""; return 1
+  fi
+  if ! { install -m 600 "$ENVN" "$BB_HOME/.env.next.$$" && mv -f "$BB_HOME/.env.next.$$" "$ENV_FILE"; }; then
+    rm -f "$BB_HOME/.env.next.$$"; u_rollback "$prev" "$snap" "could not put .env in place (is the disk full?)" ""; return 1
+  fi
+  install_files "$BB_HOME/release" >/dev/null
+  if ! u_wait "$BIN_DIR/blackbranch" up >&2; then u_rollback "$prev" "$snap" "did not start" ""; return 1; fi
+
+  ustep 8 "checking health, then restarting twice and checking again"
+  if ! u_wait update_health > "$UPDATE_DIR/health.out"; then hrc=1; fi
+  h=$(cat "$UPDATE_DIR/health.out" 2>/dev/null || true)
+  if [ "$hrc" = 0 ]; then
+    if u_wait u_restart_twice; then
+      if ! u_wait update_health > "$UPDATE_DIR/health.out"; then hrc=1; fi
+      h=$(cat "$UPDATE_DIR/health.out" 2>/dev/null || true)
+    else hrc=1; h='{"ok":false,"failed":["a restart: not every service came back"]}'; fi
+  fi
+  rm -f "$UPDATE_DIR/health.out"
+  if [ "$hrc" != 0 ]; then u_rollback "$prev" "$snap" "failed its health check" "$h"; return 1; fi
+  u_progress ""
+  U_DONE=1; U_HEALTH="$h"
+  local tidy=""
+  update_prune "${prev#releases/}" || tidy=" — but dropping older releases did not finish (their folders stay in releases/; the next update tries again)"
+  rm -f "$UPDATE_DIR/env.next" "$UPDATE_DIR/env.before"
+  # The feed again, read by the release now running: the page then says "up to date", not "available".
+  update_check >/dev/null 2>&1 || true
+  u_record updated "$U_FROM → $U_VERSION; the health check passed, and again after two restarts$tidy" "$h" "" "$snap"
+  update_state idle 0 ""
+  say "Updated: $U_FROM → $U_VERSION (backup ${snap:0:8} made before it)"
+}
+
+u_restart_twice() { # the update's two restarts, each waited out
+  local i rc=0
+  for i in 1 2; do
+    info "restart $i of 2"
+    compose restart stream-api stream-ingest web >/dev/null 2>&1 || rc=1
+    wait_healthy 240 stream-api stream-ingest web || rc=1
+  done
+  return "$rc"
+}
+
+# The nightly timer: read the feed; a security release applies itself, never while the stream is
+# live (it waits, polling, for the stream to end); a feature release only waits for the operator.
+stream_live() { # live | offline | unknown, from stream-api's own /stream/current
+  local v
+  v=$(compose exec -T stream-api node -e "fetch('http://127.0.0.1:3001/stream/current',{signal:AbortSignal.timeout(10000)}).then(r=>r.json()).then(j=>process.stdout.write(j&&j.live===true?'live':'offline'),()=>process.stdout.write('unknown'))" 2>/dev/null || true)
+  case "$v" in live|offline) printf '%s' "$v" ;; *) printf unknown ;; esac
+}
+update_auto() {
+  local poll="${BB_LIVE_POLL:-60}" max="${BB_LIVE_WAIT:-21600}" start
+  update_reconcile
+  update_check || return 1
+  update_check_summary
+  [ "$U_DECISION" = newer ] || return 0
+  [ "$U_SECURITY" = true ] || return 0
+  # A release that already failed here is not tried again by the timer (it would go down and back
+  # every night): it waits for a newer release, or for the operator to apply it by hand.
+  local last; last=$(cat "$BB_HOME/results/update-last.json" 2>/dev/null || true)
+  case "$(jfield "$last" result)" in
+    rolled-back|rollback-failed)
+      if [ "$(jfield "$last" to)" = "$U_VERSION" ]; then info "$U_VERSION failed its health check here before: the timer does not try it again (apply it by hand to retry)"; return 0; fi ;;
+  esac
+  start=$(date +%s); U_FROM=$(current_label); U_SINCE=$(now_utc)
+  # Unknown (stream-api not answering) is not live: nobody is watching a site that cannot say so,
+  # and the release may be the fix.
+  while [ "$(stream_live)" = live ]; do
+    if [ $(( $(date +%s) - start )) -ge "$max" ]; then
+      update_state idle 0 ""; info "the stream is still live after $(( max / 3600 )) h: $U_VERSION waits for the next quiet hour"; return 0
+    fi
+    update_state waiting 0 "the stream is live: security release $U_VERSION waits until it ends"
+    info "the stream is live: $U_VERSION waits (checking again in ${poll}s)"
+    sleep "$poll"
+  done
+  update_apply "$U_VERSION"
+}
+# The dry run stages in a folder of its own, never releases/<v> or env.next: an update running at the
+# same time may be using those, and removing them would delete the release that update switches to.
+update_dry_run() {
+  local scratch ok=0
+  update_check || return 1
+  update_check_summary
+  [ "$U_DECISION" = newer ] || return 0
+  scratch=$(mktemp -d "$UPDATE_DIR/dry-run.XXXXXX")
+  # shellcheck disable=SC2064 # the folder's name is fixed now
+  trap "rm -rf '$scratch'" EXIT
+  if update_fetch_source "$scratch/release" "$scratch" && update_env_next "$scratch/release" "$scratch/env.next"; then ok=1; fi
+  rm -rf "$scratch"; trap - EXIT
+  if [ "$ok" = 1 ]; then info "dry run: $U_VERSION can be applied — nothing was changed"; else die "dry run: $U_ERR — nothing was changed"; fi
+}
+start_update() { # the Admin Panel's button: the update runs as its own unit, so requests are not held up
+  if update_running; then echo "an update is already running"; return 1; fi
+  systemctl start --no-block "blackbranch-update@$1.service" || { echo "the update could not be started"; return 1; }
+  echo "the update to $1 has started; the Admin Panel shows its progress"
+}
+cmd_update() {
+  need_root update; need_install
+  local mode=ask want="" yes=0 ch="" a
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check) mode=check; shift ;;
+      --dry-run) mode=dry; shift ;;
+      --auto) mode=auto; shift ;;
+      --apply) mode=apply; want="${2:?--apply needs a version}"; shift 2 ;;
+      --channel) ch="${2:?--channel needs stable or beta}"; shift 2 ;;
+      --reconcile) mode=reconcile; shift ;;
+      --yes) yes=1; shift ;;
+      *) die "usage: blackbranch update [--check|--dry-run|--auto|--apply <version>|--reconcile] [--channel stable|beta] [--yes]" ;;
+    esac
+  done
+  if [ -n "$ch" ]; then
+    case "$ch" in stable|beta) ;; *) die "the channel is stable or beta" ;; esac
+    update_floor_adopt || die "could not keep the current channel's feed time (is the disk full?) — the channel was not changed"
+    env_set BB_UPDATE_CHANNEL "$ch" || die "the channel was not changed"; info "channel: $ch"
+    [ "$mode" != ask ] || mode=check
+  fi
+  if [ -n "$want" ] && ! [[ "$want" =~ $VERSION_RE ]]; then die "not a release version: $want"; fi
+  # Every update command first finishes one a power loss cut off (the boot unit runs only this).
+  mkdir -p "$UPDATE_DIR"; chmod 700 "$UPDATE_DIR"
+  # A site the last update could not start again is still down: a check may still read the feed;
+  # nothing else runs on top of it (and the boot unit shows failed).
+  if ! update_reconcile && [ "$mode" != check ]; then
+    die "the last update's site is still down (starting it again failed): blackbranch status says what runs"
+  fi
+  case "$mode" in
+    reconcile) ;;
+    check) update_check || exit 1; update_check_summary ;;
+    dry) update_dry_run ;;
+    auto) update_auto ;;
+    apply) update_apply "$want" ;;
+    ask)
+      update_check || exit 1
+      update_check_summary
+      [ "$U_DECISION" = newer ] || return 0
+      if [ "$yes" != 1 ]; then
+        ( : < /dev/tty ) 2>/dev/null || die "run it from a terminal, or add --yes"
+        printf '   Apply %s now? The site is down for a few minutes; a backup is made first. [y/N] ' "$U_VERSION"
+        read -r a < /dev/tty
+        case "$a" in y|Y|yes) ;; *) die "not applied" ;; esac
+      fi
+      update_apply "$U_VERSION" ;;
+  esac
+}
+
+# ── health (the update's check; also by hand) ────────────────────────────────────────────────
+# Every doctor check an update can affect (DOCTOR.UPDATE_CHECKS in config/doctor.mjs, evaluated by
+# this release's doctor), a WebSocket frame from stream-api, and a sign-in round trip: the site
+# starts a sign-in that MAS accepts, and a token MAS issues for the streamer works on the homeserver
+# (then ends). The last line is `BBHEALTH {json}`, the update's input. Exit 1 when anything fails.
+health_probe() {
+  if [ -n "${BB_PROBE_NODE:-}" ]; then "$BB_PROBE_NODE" "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/update/probe.mjs"; return; fi
+  compose run --rm --no-deps -T -v "$BB_HOME/release/install/update:/bbu:ro" --entrypoint node web /bbu/probe.mjs 2> >(grep -v '^ *Container ' >&2)
+}
+cmd_health() {
+  need_root health; need_install
+  local host site="" errf site_err="" setup=false header dout drc=0 dfail probe prc=0 owner="" lp token="" services=true ok=true
+  # shellcheck disable=SC2046
+  wait_healthy 240 $(expected_services) || services=false
+  host=$(doctor_host_facts)
+  errf=$(mktemp)
+  if ! site=$(doctor_site_facts 2>"$errf"); then site=""; site_err=$(head -1 "$errf" | tr -cd 'A-Za-z0-9 .:-' | cut -c1-80); fi
+  rm -f "$errf"
+  if postgres_up && [ -z "$(config_get setup.completedAt 2>/dev/null || true)" ] && [ -n "$(env_get SETUP_TOKEN_HASH)" ]; then setup=true; fi
+  header=$(printf '{"hostState":"ok","host":%s,"siteError":%s,"setupRunning":%s,"release":"%s","at":"%s"}' \
+    "$host" "$(jsn "$site_err")" "$setup" "$(current_label | tr -cd 'A-Za-z0-9._-')" "$(now_utc)")
+  say "Health: the doctor's checks an update can affect"
+  dout=$(printf '%s\n%s\n' "$header" "$site" | doctor_eval --health) || drc=$?
+  printf '%s\n' "$dout" | grep -v '^BBDOCTOR ' | sed 's/^/   /'
+  dfail=$(printf '%s\n' "$dout" | sed -n 's/^BBDOCTOR //p' | tail -n 1)
+  case "$dfail" in '['*']') ;; *) dfail='["the doctor gave no answer"]'; drc=1 ;; esac
+  say "Health: a WebSocket frame, and a sign-in round trip"
+  if postgres_up; then owner=$(config_get streamer.matrixId 2>/dev/null || true); fi
+  if [[ "$owner" =~ ^@([a-z0-9._=/-]+):[A-Za-z0-9.:-]+$ ]]; then
+    lp="${BASH_REMATCH[1]}"
+    token=$(compose exec -T mas mas-cli manage issue-compatibility-token "$lp" "BBHEALTH$(date +%s)" 2>&1 | grep -oE 'mct_[A-Za-z0-9_]+' | head -1 || true)
+  else owner=""; fi
+  probe=$(printf '%s %s\n' "$token" "$owner" | health_probe) || prc=$?
+  case "$probe" in '{'*'}') ;; *) probe='{"ws":{"ok":false,"detail":"the probe did not run"}}'; prc=1 ;; esac
+  printf '%s\n' "$probe" | grep -oE '"(ws|signin|whoami)":\{"ok":(true|false|null),"detail":"[^"]*"' \
+    | sed -E 's/^"([a-z]+)":\{"ok":([a-z]+),"detail":"(.*)"$/   [\2] \1 — \3/; s/\[true\]/[ok  ]/; s/\[false\]/[FAIL]/; s/\[null\]/[ -  ]/'
+  if [ "$services" != true ] || [ "$drc" != 0 ] || [ "$prc" != 0 ]; then ok=false; fi
+  printf 'BBHEALTH {"ok":%s,"services":%s,"failed":%s,"probes":%s}\n' "$ok" "$services" "$dfail" "$probe"
+  [ "$ok" = true ]
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  status)           cmd_status "$@" ;;
+  logs)             cmd_logs "$@" ;;
+  restart)          cmd_restart "$@" ;;
+  render)           cmd_render "$@" ;;
+  set)              cmd_set "$@" ;;
+  migrate)          cmd_migrate "$@" ;;
+  up)               cmd_up "$@" ;;
+  process-requests) cmd_process_requests "$@" ;;
+  matrix)           cmd_matrix "$@" ;;
+  federation)       cmd_federation "$@" ;;
+  setup-link)       cmd_setup_link "$@" ;;
+  apply-install)    cmd_apply_install "$@" ;;
+  doctor)           cmd_doctor "$@" ;;
+  backup)           cmd_backup "$@" ;;
+  restore)          cmd_restore "$@" ;;
+  update)           cmd_update "$@" ;;
+  health)           cmd_health "$@" ;;
+  install-files)    cmd_install_files "$@" ;;
+  user)             not_yet "$cmd" ;;
+  ""|help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
+  *) die "unknown command \"$cmd\" (blackbranch help)" ;;
+esac

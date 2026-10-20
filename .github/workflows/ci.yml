@@ -1,0 +1,122 @@
+# CI for every push and pull request: each package's gates, the whole tree's checks, every test suite,
+# and a real install of the bundle on a fresh runner.
+#
+# Hermetic: no job can reach a production database. Every suite runs through tools/public-suites.sh,
+# which removes DATABASE_URL and DB_PASSWORD from the environment first; the database tests get a
+# throwaway Postgres here, filled the way an install fills its own (install/migrate.sh: the baseline,
+# then every newer migration). CI=true turns a missing tool or database into a failure, never a skip.
+#
+# Actions are pinned by commit, and the token can only read the repository. A pull request's jobs run
+# its OWN code — the bundle job as root on the runner — so they run only on GitHub's throwaway runners
+# (never a self-hosted one), and outside contributors' runs need a maintainer's approval (a repository
+# setting).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: gates (${{ matrix.package }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [stream-api, stream-ingest, web]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+      - run: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
+      - run: npm run check:all
+
+  tree:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: No literal in any file (private-network addresses, home folders, personal email, live keys)
+        run: node tools/check-owner-literals.mjs --tree .
+      - name: The platform pages match the setup lists
+        run: node tools/gen-platform-docs.mjs --check
+      - name: Secrets scan (gitleaks, pinned by sha256)
+        run: tools/secrets-scan.sh .
+
+  suites:
+    name: suite (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [stream-api, stream-ingest, web, install]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: probe
+          POSTGRES_DB: stream
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stream"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - run: tools/public-suites.sh . ${{ matrix.suite }}
+        env:
+          SUITES_DB_URL: postgres://postgres:probe@localhost:5432/stream
+
+  bundle:
+    name: install the bundle on a fresh machine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The test domain resolves to this machine
+        run: echo "127.0.0.1 bb.test api.bb.test matrix.bb.test" | sudo tee -a /etc/hosts
+      - name: install.sh (lab mode — the box's own certificate authority, no public DNS)
+        run: sudo ./install/install.sh --domain bb.test --mode internal --site-name "CI Install" --no-swap
+      - name: Every service healthy, the setup page answers, and a second run changes nothing
+        run: |
+          sudo blackbranch status
+          curl -fsSk https://bb.test/setup | grep -q "CI Install"
+          curl -fsSk https://matrix.bb.test/_matrix/client/versions | grep -q '"versions"'
+          # One site image for every install: nothing builds the site at run time, and the name typed at
+          # install reaches pages the image was built without (it is read when the site starts).
+          if sudo docker compose --project-directory /opt/blackbranch config --services | grep -qx web-build; then echo "web-build is back"; exit 1; fi
+          sudo ./install/install.sh --domain bb.test --mode internal --site-name "CI Install" --no-swap
+      - name: Logs (on failure)
+        if: failure()
+        run: sudo docker compose --project-directory /opt/blackbranch logs --no-color --tail 150 || true

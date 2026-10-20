@@ -1,0 +1,42 @@
+name: Bug report
+description: Something on your install does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Security problems go to security@blackbranch.app, not here** (see SECURITY.md).
+        Never paste anything from `/opt/blackbranch/.env`.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      placeholder: "1. Open …\n2. Press …\n3. See …"
+  - type: textarea
+    id: report
+    attributes:
+      label: The doctor's report
+      description: |
+        On the server run `sudo blackbranch doctor --report` and attach the file it writes
+        (`doctor-report-<time>.txt` next to `.env`). It contains no secrets, chat text, viewer ids or domain.
+      placeholder: Drop the file here, or paste its contents.
+    validations:
+      required: true
+  - type: input
+    id: release
+    attributes:
+      label: Release
+      description: The first lines of `sudo blackbranch status`.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (optional)
+      description: "`sudo blackbranch logs <service>` for the part that failed. Read them first: remove names, addresses and anything private."
+      render: text

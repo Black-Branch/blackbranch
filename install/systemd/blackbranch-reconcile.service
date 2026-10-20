@@ -1,0 +1,18 @@
+# At boot: finish an update a power loss (or a killed unit) cut off — start the site it had
+# stopped for its backup, or go back to the previous release and its data if it had switched. Without
+# it the site stayed down: its services are `restart: unless-stopped`, so a stopped one stays stopped
+# across a reboot. Nothing to finish (the usual case): it ends at once. Enabled by `blackbranch
+# install-files` (install.sh and every update).
+[Unit]
+Description=Black Branch: finish an update that was cut off
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch update --reconcile
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,381 @@
+# The Black Branch bundle: one community's whole site on one box.
+#
+# Lives at /opt/blackbranch/compose.yaml beside the install's .env (mode 600), which is the ONLY
+# place an install's values and bootstrap secrets are written. Driven by the `blackbranch`
+# command; `docker compose` run from /opt/blackbranch works too (it reads .env there).
+#
+# One network. Nothing publishes a port except caddy, and caddy only in direct/internal mode
+# (compose.public.yaml, which .env's COMPOSE_FILE adds). Tunnel mode publishes nothing at all:
+# cloudflared dials out and hands every request to caddy:80.
+#
+# Each service gets exactly the variables it reads, spelled out below — no env_file, so no
+# process sees a secret it has no use for.
+#
+# stream-api, stream-ingest and the backup image are built here from the release's source
+# (./release → releases/<release>, install/Dockerfile) and tagged with the release (BB_RELEASE), so
+# an update keeps the previous release's images to go back to. The site (web) is ONE image for every
+# install: a published release names it by digest — tools/release.mjs writes it
+# into this file in place of web's `image` + `build` lines, as it does every other image's digest
+# — and the box pulls it; only a checkout builds it here. An update builds the next
+# release's images before switching (BB_RELEASE_DIR points at its source then).
+
+name: ${COMPOSE_PROJECT_NAME:-blackbranch}
+
+# This install's values for the site (web/app/lib/installValues.ts): web reads them from its
+# environment when it starts — nothing is built into the image — so a changed display value applies
+# when web is recreated (`blackbranch set`). web refuses to boot without the required ones.
+x-install-values: &install-values
+  SITE_NAME: ${SITE_NAME:?SITE_NAME is required}
+  SITE_DESCRIPTION: ${SITE_DESCRIPTION:-}
+  SITE_HOME_HEADING: ${SITE_HOME_HEADING:-}
+  SITE_HOME_INTRO: ${SITE_HOME_INTRO:-}
+  SITE_SHORT_NAME: ${SITE_SHORT_NAME:-}
+  SITE_TAGLINE: ${SITE_TAGLINE:-}
+  SITE_ICON_SET: ${SITE_ICON_SET:-}
+  SITE_ORIGIN: ${SITE_ORIGIN:?}
+  SITE_API_ORIGIN: ${SITE_API_ORIGIN:?}
+  SITE_API_WS_ORIGIN: ${SITE_API_WS_ORIGIN:?}
+  LEGAL_OPERATOR: ${LEGAL_OPERATOR:-}
+  LEGAL_CONTACT_EMAIL: ${LEGAL_CONTACT_EMAIL:-}
+  LEGAL_GOVERNING_LAW: ${LEGAL_GOVERNING_LAW:-}
+  LEGAL_EFFECTIVE_DATE: ${LEGAL_EFFECTIVE_DATE:-}
+  MATRIX_SERVER_NAME: ${MATRIX_SERVER_NAME:?}
+  MATRIX_HOMESERVER_URL: ${MATRIX_HOMESERVER_URL:?}
+  MATRIX_OAUTH_ISSUER: ${MATRIX_OAUTH_ISSUER:?}
+  MATRIX_OAUTH_CLIENT_ID: ${MATRIX_OAUTH_CLIENT_ID:?}
+  YOUTUBE_VOD_PLAYLIST: ${YOUTUBE_VOD_PLAYLIST:-none}
+  CURRENCY_NAME: ${CURRENCY_NAME:-}
+  CURRENCY_NAME_PLURAL: ${CURRENCY_NAME_PLURAL:-}
+  CURRENCY_SYMBOL: ${CURRENCY_SYMBOL:-}
+  CURRENCY_ICON: ${CURRENCY_ICON:-}
+  COMMUNITY_SCORE_NAME: ${COMMUNITY_SCORE_NAME:-}
+
+x-app: &app
+  restart: unless-stopped
+  logging:
+    driver: local
+    options: { max-size: 10m, max-file: "3" }
+
+services:
+  postgres:
+    <<: *app
+    image: pgvector/pgvector:pg18
+    command: ["postgres", "-c", "shared_buffers=256MB"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: postgres
+      STREAM_DB_PASSWORD: ${STREAM_DB_PASSWORD:?}
+      SYNAPSE_DB_PASSWORD: ${SYNAPSE_DB_PASSWORD:?}
+      MAS_DB_PASSWORD: ${MAS_DB_PASSWORD:?}
+    volumes:
+      - pg-data:/var/lib/postgresql
+      - ./release/install/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-databases.sh:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "stream", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # One-shot: baseline on an empty database, then any newer migration; "up to date" otherwise.
+  # Every platform service waits for it to finish successfully.
+  migrate:
+    image: pgvector/pgvector:pg18
+    restart: "no"
+    entrypoint: ["bash", "/install/migrate.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: stream
+      PGUSER: stream
+      PGPASSWORD: ${STREAM_DB_PASSWORD:?}
+      MIGRATE_ADMIN_USER: postgres
+      MIGRATE_ADMIN_PASSWORD: ${POSTGRES_PASSWORD:?}
+      MIGRATIONS_DIR: /migrations
+    volumes:
+      - ./release/migrations:/migrations:ro
+      - ./release/install/migrate.sh:/install/migrate.sh:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  stream-api:
+    <<: *app
+    image: blackbranch/stream-api:${BB_RELEASE:-local}
+    build: { context: "${BB_RELEASE_DIR:-./release}", dockerfile: install/Dockerfile, target: stream-api }
+    environment:
+      STREAM_API_HOST: 0.0.0.0
+      STREAM_API_PORT: "3001"
+      STREAM_API_SECRET: ${STREAM_API_SECRET:?}
+      STREAM_API_ENFORCE: "1"
+      INSTANCE_MASTER_KEY: ${INSTANCE_MASTER_KEY:?}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: stream
+      DB_USER: stream
+      DB_PASSWORD: ${STREAM_DB_PASSWORD:?}
+      MATRIX_SERVER_NAME: ${MATRIX_SERVER_NAME:?}
+      # Every viewer's WebSocket arrives from caddy, which sets CF-Connecting-IP to the client's
+      # address: stream-api believes that header from caddy's fixed address alone, and counts each
+      # viewer under their own address for its per-address cap (MAX_WS_PER_ADDRESS). Trusting nobody
+      # counted the whole audience as caddy's one address.
+      WS_TRUSTED_PROXIES: ${BB_CADDY_IP:-172.29.83.249}
+      TTS_TMP_DIR: /data/tts
+      TTS_CLIPS_DIR: /data/tts-clips
+    volumes:
+      - media:/data
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/stream/current').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  stream-ingest:
+    <<: *app
+    image: blackbranch/stream-ingest:${BB_RELEASE:-local}
+    build: { context: "${BB_RELEASE_DIR:-./release}", dockerfile: install/Dockerfile, target: stream-ingest }
+    # No PLATFORMS: unset = read no platform until the setup pages switch one on.
+    environment:
+      STREAM_API_URL: http://stream-api:3001
+      STREAM_API_SECRET: ${STREAM_API_SECRET:?}
+      SITE_NAME: ${SITE_NAME:?}
+      SITE_ORIGIN: ${SITE_ORIGIN:?}
+    depends_on:
+      stream-api: { condition: service_healthy }
+
+  # The site: the same image on every install (a release: by digest, pulled; a checkout: built here).
+  web:
+    <<: *app
+    image: blackbranch/web:${BB_RELEASE:-local}
+    build: { context: "${BB_RELEASE_DIR:-./release}", dockerfile: install/Dockerfile, target: web }
+    environment:
+      <<: *install-values
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      DATABASE_URL: postgresql://stream:${STREAM_DB_PASSWORD:?}@postgres:5432/stream
+      AUTH_SECRET: ${AUTH_SECRET:?}
+      TOKEN_ENC_KEY: ${TOKEN_ENC_KEY:?}
+      STREAM_API_URL: http://stream-api:3001
+      # Every request reaches the site from caddy, which SETS CF-Connecting-IP to the visitor's
+      # address (direct: the connecting address; tunnel: Cloudflare's header, believed from
+      # cloudflared alone): the site believes that header from caddy's fixed address only, and keys
+      # its per-address limits on it. Trusting nobody put every signed-out visitor in one bucket.
+      WEB_TRUSTED_PROXIES: ${BB_CADDY_IP:-172.29.83.249}
+      # MAS's admin API is on its internal listener only (the router never routes it).
+      MAS_ADMIN_URL: http://mas:8081/api/admin/v1
+      STREAM_API_SECRET: ${STREAM_API_SECRET:?}
+      MATRIX_OAUTH_CLIENT_SECRET: ${MATRIX_OAUTH_CLIENT_SECRET:?}
+      # First boot. The setup link's token as a hash only — the token itself stays in
+      # state/, root's. The recovery sheet says where .env is; the backup passphrase it shows once
+      # is NOT here: the site also chooses where backups go, so holding the key to open them would
+      # let a compromised site take every secret. Root hands it over during setup's recovery step
+      # through results/ (`blackbranch` recovery_sheet) and takes it back once setup moves on.
+      SETUP_TOKEN_HASH: ${SETUP_TOKEN_HASH:-}
+      BB_ENV_FILE: ${BB_HOME:-/opt/blackbranch}/.env
+    volumes:
+      - web-cache:/app/.next/cache
+      # The install's own files — its icons (SITE_ICON_SET=/site-files), its points icon
+      # (CURRENCY_ICON=/site-files/<file>) — served at /site-files/ without being in the image.
+      - ./site-files:/app/public/site-files:ro
+      # Where the site drops requests for the host: `blackbranch-requests.path` runs the
+      # matching fixed verb. The site never gets the Docker socket. Results come back through a
+      # directory only root writes; the site reads it.
+      - ./requests:/requests
+      - ./results:/request-results:ro
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      stream-api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/robots.txt').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # The ONE routing table: ./rendered/caddy/Caddyfile, written by `blackbranch render`.
+  caddy:
+    <<: *app
+    image: caddy:2.10.2-alpine
+    volumes:
+      # The directory, not the file: render replaces the file atomically, and a single-file bind
+      # mount would keep showing the old one. Its OWN directory: rendered/ also holds Synapse's and
+      # MAS's secrets, and the internet-facing router has no business reading them.
+      - ./rendered/caddy:/etc/caddy:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    # A fixed address: stream-api believes the client address caddy sends from this one alone.
+    networks:
+      default:
+        ipv4_address: ${BB_CADDY_IP:-172.29.83.249}
+    depends_on:
+      web: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # Tunnel mode (the default front door): outbound only. Started when .env sets
+  # COMPOSE_PROFILES=tunnel. Either a locally-managed tunnel (config + credentials that
+  # install.sh writes under ./cloudflared) or a dashboard token (CLOUDFLARE_TUNNEL_TOKEN).
+  cloudflared:
+    <<: *app
+    image: cloudflare/cloudflared:2025.9.1
+    profiles: ["tunnel"]
+    command: ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:20241", "--config", "/etc/cloudflared/config.yml", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    # A fixed address: caddy trusts this one address, and no other, to report the client's IP.
+    networks:
+      default:
+        ipv4_address: ${BB_CLOUDFLARED_IP:-172.29.83.250}
+    depends_on:
+      caddy: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  # ── The homeserver ──────────────────────────────────────────────────────────────────────
+  # Config rendered by `blackbranch render` (install/matrix/render.sh) from .env and the federation
+  # switch into ./rendered/{synapse,mas}/ — each readable only by the user its service runs as.
+  # The pair is the one CI boots on every push (job `matrix`); raise both together, and only after reading the upstream upgrade notes.
+  synapse:
+    <<: *app
+    image: ghcr.io/element-hq/synapse:v1.162.0
+    environment:
+      SYNAPSE_CONFIG_PATH: /config/homeserver.yaml
+      # The image's start script drops to this user; synapse-data (media, signing key) is its.
+      UID: "991"
+      GID: "991"
+    volumes:
+      - ./rendered/synapse:/config:ro
+      - synapse-data:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+      mas: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  # MAS applies its own database migrations and syncs the config's clients on every start. Its
+  # image has no shell, so `blackbranch` checks its /health from Synapse's container.
+  mas:
+    <<: *app
+    image: ghcr.io/element-hq/matrix-authentication-service:1.26.0
+    user: "65532:65532"
+    command: ["server"]
+    environment:
+      # Also read by every `mas-cli manage …` run through `docker compose exec mas`.
+      MAS_CONFIG: /config/config.yaml
+    volumes:
+      - ./rendered/mas:/config:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # The Discord bridge (1.0): only with the Discord module on.
+  mautrix-discord:
+    <<: *app
+    image: dock.mau.dev/mautrix/discord:v0.7.7
+    profiles: ["discord"]
+    volumes:
+      - bridge-data:/data
+    depends_on:
+      synapse: { condition: service_started }
+
+  # ── Backups ─────────────────────────────────────────────────────────────────────────────
+  # One-shots, run by `blackbranch backup` / `restore` and the nightly and weekly timers (profile
+  # backup keeps `up` from starting them). One image, install/backup/run.sh, three sets of rights:
+  #   backup          reads the three databases (superuser), Synapse's data and the install's own
+  #                   files — all read-only — and writes snapshots to the target
+  #   backup-verify   no database password and no live data at all: it restores a snapshot into
+  #                   /scratch and loads it into a Postgres of its own on a unix socket
+  #   backup-restore  the real restore: replaces the databases and writes into synapse-data
+  # The target's setting and keys arrive per run in the environment (`run -e`), never in this file
+  # or on a command line; run.sh checks the address (install/backup/target-check.mjs) before it
+  # becomes restic's. RESTIC_PASSWORD is the recovery sheet's passphrase.
+  backup:
+    image: blackbranch/backup:${BB_RELEASE:-local}
+    build: { context: "${BB_RELEASE_DIR:-./release}", dockerfile: install/Dockerfile, target: backup }
+    profiles: ["backup"]
+    restart: "no"
+    hostname: blackbranch-backup
+    environment: &backup-env
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      RESTIC_PASSWORD: ${BACKUP_PASSPHRASE:?}
+      # The backup address is checked against the settings layer's own rule (config/) and this network.
+      BB_CONFIG_DIR: /config
+      BB_SUBNET: ${BB_SUBNET:-172.29.83.0/24}
+    volumes:
+      - ./release/install/backup:/bb-backup:ro
+      - ./release/config:/config:ro
+      - ./backups:/backups
+      - ./backup-ssh:/bb-ssh
+      - backup-cache:/root/.cache/restic
+      - ./state/backup-db:/bb/db
+      - synapse-data:/bb/synapse:ro
+      - ./.env:/bb/home/.env:ro
+      - ./matrix:/bb/home/matrix:ro
+      - ./cloudflared:/bb/home/cloudflared:ro
+
+  backup-verify:
+    image: blackbranch/backup:${BB_RELEASE:-local}
+    profiles: ["backup"]
+    restart: "no"
+    hostname: blackbranch-backup
+    environment:
+      RESTIC_PASSWORD: ${BACKUP_PASSPHRASE:?}
+      BB_CONFIG_DIR: /config
+      BB_SUBNET: ${BB_SUBNET:-172.29.83.0/24}
+    volumes:
+      - ./release/install/backup:/bb-backup:ro
+      - ./release/config:/config:ro
+      - ./backups:/backups
+      - ./backup-ssh:/bb-ssh:ro
+      - backup-cache:/root/.cache/restic
+      - ./state/backup-scratch:/scratch
+
+  backup-restore:
+    image: blackbranch/backup:${BB_RELEASE:-local}
+    profiles: ["backup"]
+    restart: "no"
+    hostname: blackbranch-backup
+    environment: *backup-env
+    volumes:
+      - ./release/install/backup:/bb-backup:ro
+      - ./release/config:/config:ro
+      - ./backups:/backups
+      - ./backup-ssh:/bb-ssh:ro
+      - backup-cache:/root/.cache/restic
+      - ./state/backup-scratch:/scratch
+      - synapse-data:/bb/synapse
+
+networks:
+  default:
+    name: ${COMPOSE_PROJECT_NAME:-blackbranch}
+    # A fixed subnet so cloudflared's and caddy's addresses are known (each trusted alone, by the next
+    # hop). Change BB_SUBNET, BB_CLOUDFLARED_IP and BB_CADDY_IP together if it clashes with a network
+    # the box already has.
+    ipam:
+      config:
+        - subnet: ${BB_SUBNET:-172.29.83.0/24}
+
+volumes:
+  pg-data:
+  media:
+  web-cache:
+  caddy-data:
+  caddy-config:
+  synapse-data:
+  backup-cache:
+  bridge-data:

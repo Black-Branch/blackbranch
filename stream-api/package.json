@@ -1,0 +1,30 @@
+{
+  "name": "stream-api",
+  "version": "1.0.0",
+  "description": "Live Node backend for the site: WS hub, chat ingest, money/economics ledger, alerts, OBS/TTS, the bot's API, plugin routes.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test",
+    "lint": "eslint",
+    "check:orphans": "node ../tools/check-orphans.mjs stream-api",
+    "check:owner-literals": "node ../tools/check-owner-literals.mjs stream-api",
+    "check:all": "npm run lint && npm run check:orphans && npm run check:owner-literals && npm run check:owner-seam && npm run check:instance-schema",
+    "check:instance-schema": "node ../tools/gen-instance-schema.mjs --check stream-api",
+    "check:owner-seam": "node ../tools/check-owner-seam.mjs stream-api",
+    "baseline:check": "node ../tools/check-baseline.mjs",
+    "baseline:generate": "node ../tools/check-baseline.mjs --generate"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "obs-websocket-js": "^5.0.8",
+    "pg": "^8.11.3",
+    "socket.io-client": "^4.8.3",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.10.0"
+  }
+}

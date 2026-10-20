@@ -1,0 +1,17 @@
+# LAB MODE ONLY — internal TLS, not for production (.env's COMPOSE_FILE adds this file in internal
+# mode). Caddy's own CA signs the site's certificates, so the apps that call the site's public names
+# (web: sign-in discovery, the token exchange, the account server's admin API) trust that CA's root.
+# `blackbranch up` copies the root CERTIFICATE alone out of caddy's data into ./lab-ca/ — never a key
+# — and restarts these two when it changes. Until the first copy exists Node logs that it ignored
+# the file and carries on.
+services:
+  web:
+    environment:
+      NODE_EXTRA_CA_CERTS: /lab-ca/root.crt
+    volumes:
+      - ./lab-ca:/lab-ca:ro
+  stream-api:
+    environment:
+      NODE_EXTRA_CA_CERTS: /lab-ca/root.crt
+    volumes:
+      - ./lab-ca:/lab-ca:ro

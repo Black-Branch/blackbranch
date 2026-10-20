@@ -1,0 +1,11 @@
+# Watches the folder the site drops requests into. The site never gets the Docker
+# socket; a request file only names one of a few fixed verbs, which the service below runs.
+[Unit]
+Description=Black Branch: watch for requests from the site
+
+[Path]
+PathExistsGlob=/opt/blackbranch/requests/*.req
+Unit=blackbranch-requests.service
+
+[Install]
+WantedBy=multi-user.target

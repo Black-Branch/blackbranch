@@ -1,0 +1,19 @@
+name: Feature request
+description: Something you want your site or stream to do.
+labels: ["feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: On your stream or in your community — and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How you imagine it (optional)
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do instead today (optional)

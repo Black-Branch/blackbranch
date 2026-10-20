@@ -1,0 +1,9 @@
+{
+  "//": [
+    "Literal counts per file — the RATCHET tools/check-owner-literals.mjs enforces.",
+    "A count may only go DOWN. Lower one with: node tools/check-owner-literals.mjs --update",
+    "RAISING an entry, or adding a file, is a hand edit in the same commit, argued in review.",
+    "Every package has been held at zero since the owner split; an entry here is a raised count."
+  ],
+  "files": {}
+}

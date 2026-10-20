@@ -1,0 +1,24 @@
+# What may never be in a release or in the public cut — ONE list, read by install/release-copy.sh
+# (every release, and every copy install.sh makes) and by the public cut's file-by-file check.
+# One extended regular expression per line over a path relative to the tree's root; "#" lines are
+# comments; a line starting with "!" is an exception to the pattern above it (the env example).
+# A path is refused when a pattern matches it and none of that pattern's exceptions does.
+
+# Agent instructions.
+(^|/)(CLAUDE|AGENTS)\.md$
+# The owner folders.
+^(stream-api/owner|stream-ingest/owner|web/app/\(owner\))/
+# Agent, editor and build folders, at any depth. release-copy.sh also leaves out every folder these
+# two lines name (their last group), wherever it sits, so a copy never takes one in the first place.
+(^|/)(\.claude|\.codex|\.cursor|\.idea|\.superpowers|\.playwright-mcp|\.vscode|node_modules|\.next|\.git)/
+# A package's own CI folder (the public repo's root .github/ comes from public-root/, and is allowed).
+^(config|install|stream-api|stream-ingest|web)/(.+/)?(\.github)/
+# The bot's persona files (install content, written at run time).
+^stream-ingest/config/
+# The owner's literal list, operations and design notes.
+^tools/owner-literals\.json$
+^ops/
+^docs/superpowers/
+# Every .env file but the example.
+(^|/)\.env
+!(^|/)\.env\.example$

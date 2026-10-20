@@ -1,0 +1,1087 @@
+/* web/app/components/chrome/chrome.css
+   ALL styling for the chrome tab family, and nothing else lives here.
+   LAYERED on purpose: globals.css is unlayered (see check-layering.mjs), so a
+   chrome rule written there would silently beat any Tailwind utility on the
+   same element (an unlayered row-collapse rule can zero an inner min-height
+   and squash a bar). Inside @layer components, utilities keep winning, which
+   is the order we want.
+
+   Consumers do not write classes against these names; they render the
+   components in ./index.ts. check-chrome.mjs refuses tab chrome elsewhere.
+
+   Host-settable custom properties:
+     --chrome-band-shade  the band shade painted around the hole (named apart
+                     from the `.chrome-band` frame class on purpose)
+     --chrome-top-h  the top-bar height, and --chrome-bottom-h the bottom-bar
+                     one — both defined globally in globals.css :root; the
+                     literal in .chrome-sections is a fallback
+     --tab-size      the viewer's Tab-size setting (settingsRegistry "tabSize") */
+@layer components {
+  /* ── shared tab ─────────────────────────────────────────────────────── */
+  .chrome-tab {
+    position: relative;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: .375rem;
+    white-space: nowrap;
+    color: var(--color-muted);
+    font-family: var(--shell-font, inherit);
+    font-size: var(--tab-size, .875rem);
+    font-weight: 500;
+    line-height: 1;
+    transition: color var(--anim-default) var(--anim-ease), background-color var(--anim-default) var(--anim-ease);
+  }
+  .chrome-tab:hover { color: var(--color-body-dim); }
+  .chrome-tab[aria-selected="true"] { color: var(--color-strong); font-weight: 600; }
+  .chrome-tab:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: -2px; }
+  /* Reserve the bold width so the row does not shift when weight changes. */
+  .chrome-tab-label { display: inline-grid; }
+  .chrome-tab-label > span, .chrome-tab-label::after { grid-area: 1 / 1; }
+  .chrome-tab-label::after { content: attr(data-l); font-weight: 600; visibility: hidden; height: 0; overflow: hidden; }
+
+  /* ── Sections: the Console band ─────────────────────────────────────── */
+  /* The frame is the Band (Band.tsx — rendered by a Bar, by a Window band, or
+     by a standalone Sections that found no Band around it). It is a plain
+     positioning context: it carries --ind-x / --ind-w and --ind-x2 / --ind-w2
+     (both pairs written by Band.tsx from the band-space boxes its consumer
+     measured) and nothing else paints on it directly.
+     The band shade is its OWN layer, `.chrome-shade`, stacked BEHIND the tab
+     row and the cap (z-index 0 vs 1 and 3). A mask composites an element's
+     ENTIRE rendered subtree before masking — so if the mask sat on the frame,
+     the ancestor of both the tab row and the cap, the active label and the
+     cap would vanish into the hole along with the band, leaving a blank gap.
+     Giving the shade nothing to paint but itself is what keeps the hole
+     showing the host body while the label and the cap stay visible on top.
+     THREE mask layers, not two: `exclude` composites each layer with the
+     accumulated result below it, and the full-coverage gradient is written
+     FIRST, so it is the TOP layer — a full-coverage top layer XOR the two
+     disjoint boxes beneath it cuts two independent holes, one per pane in the
+     split view. A zero-width layer cuts nothing at all, which is what keeps every
+     single-hole consumer pixel-identical: --ind-w2 rests at 0px and only a
+     consumer that hands the Band a second box ever opens it. */
+  .chrome-band {
+    position: relative;
+    overflow: hidden;
+    --ind-x: 0px;
+    --ind-w: 0px;
+    --ind-x2: 0px;
+    --ind-w2: 0px;
+  }
+  .chrome-shade {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: var(--chrome-band-shade, var(--color-scrim));
+    mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    mask-size: 100% 100%, var(--ind-w) 100%, var(--ind-w2) 100%;
+    mask-position: 0 0, var(--ind-x) 0, var(--ind-x2) 0;
+    mask-repeat: no-repeat;
+    mask-composite: exclude;
+    transition: mask-position var(--anim-default) var(--anim-ease), mask-size var(--anim-default) var(--anim-ease);
+  }
+  /* The hairline runs under the strip and is covered only by the hole. */
+  .chrome-shade::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 1px;
+    background: var(--color-edge-strong);
+  }
+  /* The wrapper carries the strip's place in its container (and its stacking
+     level) so the chevrons can sit over the list's edges without scrolling
+     with it. `align-self: stretch` keeps a bar's `height: 100%` on the list
+     resolving against the bar; centred, a floating pill keeps its own height. */
+  .chrome-sections-wrap {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    min-width: 0;
+  }
+  .chrome-sections {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: stretch;
+    min-width: 0;
+    height: var(--chrome-top-h, 2.25rem);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .chrome-sections::-webkit-scrollbar { display: none; }
+  /* Overflow (Sections.tsx marks data-more from scroll/resize): a fade and a
+     chevron on exactly the sides that hold more tabs; nothing when everything
+     fits. 40px = STRIP_EDGE_PX (app/lib/chrome/stripOverflow.ts), the band the
+     active tab is scrolled clear of; the text is gone by 20px from the edge, so
+     the chevron's 12px glyph (centred 12px in) never sits on a letter. The always-on 28px end fade this replaces
+     faded a strip's last label even when nothing followed it. */
+  .chrome-sections-wrap[data-more="end"] > .chrome-sections { mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent calc(100% - 20px)); }
+  .chrome-sections-wrap[data-more="start"] > .chrome-sections { mask-image: linear-gradient(90deg, transparent 20px, #000 40px); }
+  .chrome-sections-wrap[data-more="both"] > .chrome-sections { mask-image: linear-gradient(90deg, transparent 20px, #000 40px, #000 calc(100% - 40px), transparent calc(100% - 20px)); }
+  /* The chevron: a 12px caret in a 1.5rem × full-height hit area (the house
+     size for a caret control — IconRail's), on the faded edge, no fill of its
+     own so the band shade shows through as it does under the tabs. */
+  .chrome-more {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    bottom: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    color: var(--color-secondary);
+    transition: color var(--anim-fast) var(--anim-ease);
+  }
+  .chrome-more:hover { color: var(--color-strong); }
+  .chrome-more-start { left: 0; }
+  .chrome-more-end { right: 0; }
+  .chrome-sections-wrap:is([data-more="start"], [data-more="both"]) > .chrome-more-start,
+  .chrome-sections-wrap:is([data-more="end"], [data-more="both"]) > .chrome-more-end { display: flex; }
+  .chrome-sections .chrome-tab {
+    padding: 0 .875rem;
+    border-right: 1px solid var(--color-edge);
+  }
+  /* Each cap: one element, moved by transform from a 100px base. Starts at
+     opacity 0 and is raised to .85 by the FIRST paint, which the strip's
+     ResizeObserver delivers as soon as it observes — the band frame is this
+     strip's ancestor, so its ref is not attached yet while the layout effects
+     run, and that initial observation is the first moment the geometry can be
+     measured at all. Starting hidden is what keeps the server-rendered cap
+     from flashing at x=0 until then.
+     TWO caps exist, A then B (source order matters: A is the one a
+     single-hole consumer lights). B rests at opacity 0 and is only raised by
+     a consumer that paints a second box — the split view's pane pair. */
+  .chrome-cap {
+    position: absolute;
+    z-index: 3;
+    top: 0;
+    left: 0;
+    width: 100px;
+    height: 2px;
+    transform-origin: 0 50%;
+    background: var(--color-strong);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform var(--anim-default) var(--anim-ease), opacity var(--anim-fast) var(--anim-ease);
+  }
+  .chrome-sections-floating { height: auto; gap: .125rem; }
+  .chrome-sections-floating .chrome-tab { padding: .125rem .5rem; border-right: 0; border-radius: 999px; }
+  .chrome-sections-floating .chrome-tab[aria-selected="true"] { background: var(--color-surface-4); }
+  /* Unseen dot + the ✕ on an active closable tab (the chat's content tabs, the dock's) */
+  .chrome-tab-dot { width: .5rem; height: .5rem; border-radius: 999px; background: var(--accent); border: 1px solid var(--color-canvas); flex: none; }
+  /* Behavior › Unread dots off. */
+  .chat-dots-off .chrome-tab-dot { display: none; }
+  .chrome-tab-close { position: relative; display: inline-flex; align-items: center; padding: .25rem; margin-right: -.25rem; color: var(--color-muted); border-radius: .25rem; }
+  .chrome-tab-close:hover { color: var(--color-strong); }
+  .chrome-tab-close:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: -2px; }
+  /* ── Rounded corners (settings "roundedCorners"; html.panels-square is the
+     OFF state). Radii sit on the outer .bb-panel frames; the strips do not
+     know about them, so without these rules the dock's first tab would start
+     under the video panel's bottom-left curve and the chat bar's trailing
+     button would sit in its top-right curve. A: inset by the radius
+     (the chat rule is scoped to the chat's OWN top bar at desktop width — the
+     panel holds Matrix's bars too, and a phone's top corners are square).
+     B (dock only): the open tab draws a rounded outline over the band's hole.
+     It paints NO colour of its own: the page behind the dock is a user-set
+     gradient (--bg-body-start/end, layout.tsx), so a painted tab could never
+     match it — the hole stays open and shows the real body through, and only
+     the tab's edge is rounded. ── */
+  html:not(.panels-square) [data-bar="dock"] .chrome-sections { padding-left: .75rem; }
+  @media (min-width: 768px) {
+    html:not(.panels-square) [data-bar="chat-top"] .chrome-bar-trail { padding-right: .5rem; }
+  }
+  html:not(.panels-square) [data-bar="dock"] .chrome-sections .chrome-tab[aria-selected="true"] { border-right-color: transparent; }
+  html:not(.panels-square) [data-bar="dock"] .chrome-sections .chrome-tab[aria-selected="true"]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    border: 1px solid var(--color-edge);
+    border-bottom: 0;
+    border-radius: .5rem .5rem 0 0;
+  }
+  /* Borrowed hit area, coarse pointers only — the same reasoning as globals.css's
+     .tap-hit-44: the ✕ renders ~19px, and a finger needs 24. On a FINE pointer
+     the invisible overhang would swallow clicks a mouse can aim between the ✕
+     and the label it sits beside. */
+  @media (pointer: coarse) {
+    .chrome-tab-close::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 24px;
+      height: 24px;
+      transform: translate(-50%, -50%);
+    }
+  }
+
+  /* ── Panes: the split header — two open pane headers, a hole each ────── */
+  /* The first cell is the LIVE COLUMN's width, in aside space, minus the
+     band-to-group distance Panes.tsx measures into --chrome-panes-offset — the
+     band starts at the bar's left edge, the group after its leading slot, so
+     without the subtraction the header's split line sits a leading slot to the
+     right of the real divider. The second cell takes whatever is left, and its
+     border-left IS that split line. */
+  .chrome-panes { display: flex; width: 100%; height: 100%; min-width: 0; }
+  .chrome-pane { display: flex; align-items: stretch; min-width: 0; flex: none; }
+  .chrome-pane + .chrome-pane { flex: 1 1 auto; border-left: 1px solid var(--color-edge); }
+  .chrome-pane > .chrome-tab { padding: 0 .875rem; }
+  /* Both panes are OPEN: the heavier ink without aria-selected (not a tablist). */
+  .chrome-pane > .chrome-tab[data-open] { color: var(--color-strong); font-weight: 600; }
+  /* The exit affordance: revealed by that pane's hover or keyboard focus. */
+  .chrome-pane-expand { opacity: 0; transition: opacity var(--anim-fast) var(--anim-ease); }
+  .chrome-pane:is(:hover, :focus-within) .chrome-pane-expand { opacity: 1; }
+
+  /* ── Segmented: equal-width track + thumb ───────────────────────────── */
+  .chrome-segmented {
+    position: relative;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    padding: 2px;
+    border-radius: .5rem;
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-edge);
+  }
+  .chrome-segmented .chrome-tab { justify-content: center; padding: .3rem .75rem; border-radius: .375rem; }
+  .chrome-segmented .chrome-thumb {
+    position: absolute;
+    z-index: 1;
+    top: 2px; bottom: 2px; left: 2px;
+    width: calc((100% - 4px) / var(--chrome-n, 1));
+    border-radius: .375rem;
+    background: var(--color-surface-3);
+    transform: translateX(calc(var(--chrome-i, 0) * 100%));
+    transition: transform var(--anim-default) var(--anim-ease);
+    pointer-events: none;
+  }
+
+  /* ── Chips: scrollable filters ──────────────────────────────────────── */
+  .chrome-chips {
+    display: flex;
+    gap: .375rem;
+    padding: .375rem .5rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+    mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  }
+  .chrome-chips::-webkit-scrollbar { display: none; }
+  .chrome-chips .chrome-tab {
+    flex: none;
+    padding: .3rem .7rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-edge);
+    color: var(--color-secondary);
+    font-size: calc(var(--tab-size, .875rem) * .9);
+  }
+  .chrome-chips .chrome-tab[aria-selected="true"] { background: var(--color-surface-3); border-color: transparent; }
+
+  /* ── IconRail: the video panel's mode switcher ─────────────────────── */
+  /* Icons carry STATE as colour. The active item is the
+     only one with a word; it grows in place. No transition on the tone — a
+     tone change is a fact, not an event (no pulse). */
+  /* The rail sits in a Bar slot beside a wordmark and a utility cluster, so on a
+     narrow video panel it has to give. The active item is the only one carrying
+     text, so it is the only one allowed to shrink: min-width:0 down the whole
+     chain (rail → active item → its tab) unlocks it, the inactive icons keep
+     `flex: none` at their icon width, and .chrome-iconrail-detail below is what
+     ellipsises. Without this chain the rail could neither shrink nor truncate —
+     a long detail pushed the cluster out of the bar. */
+  .chrome-iconrail { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: .5625rem; background: var(--color-surface-1); min-width: 0; }
+  /* Select and hover MOVE: the fill fades between items on a
+     select (the one leaving and the one arriving cross-fade), and an inactive
+     item shows the shared hover fill. Both are background-color only — the
+     tab's colour still transitions nothing, see the no-pulse rule below. */
+  .chrome-iconrail-item { display: flex; align-items: center; border-radius: .4375rem; flex: none; transition: background-color var(--anim-fast) var(--anim-ease); }
+  .chrome-iconrail-item:not([data-active]):hover { background: var(--color-surface-2); }
+  .chrome-iconrail-item[data-active] { background: var(--color-surface-3); flex: 0 1 auto; min-width: 0; }
+  /* The shared .chrome-tab rule (above) puts an unconditional `transition:
+     color …` on every tab, for the selection-driven colour changes the other
+     skins want. A tone here is a STATE, not a selection, so that inherited
+     transition would animate a data-tone flip on a mounted item (Live turning
+     red while the rail sits on Radio) into a pulse, which is ruled out — cascade is
+     per-property, so the tone rules below can't narrow it just by setting
+     `color`. Reset it here instead. */
+  /* The word is one step under a tab's (a full tab size reads large): it is a
+     mode label beside an icon, not a section title, so it takes .86 of the
+     viewer's tab-size rather than the whole of it. */
+  .chrome-iconrail .chrome-tab { gap: .375rem; padding: 0 .5rem; height: 1.625rem; border-radius: .4375rem; font-size: calc(var(--tab-size, .875rem) * .86); transition: none; }
+  .chrome-iconrail .chrome-tab[data-tone="off"]       { color: var(--color-muted); }
+  .chrome-iconrail .chrome-tab[data-tone="available"] { color: var(--color-strong); }
+  .chrome-iconrail .chrome-tab[data-tone="live"]      { color: #ef4444; }
+  .chrome-iconrail .chrome-tab[aria-selected="true"] { min-width: 0; }
+  .chrome-iconrail .chrome-tab[aria-selected="true"] .chrome-tab-label { color: var(--color-strong); }
+  /* The icon lifts on hover and dips on press — a transform on the icon
+     alone, so the tab's box (and the band beside it) never reflows. */
+  .chrome-iconrail-icon { display: inline-grid; place-items: center; width: 1rem; height: 1rem; line-height: 1; flex: none; transition: transform var(--anim-fast) var(--anim-ease); }
+  .chrome-iconrail .chrome-tab:hover .chrome-iconrail-icon { transform: scale(1.12); }
+  .chrome-iconrail .chrome-tab:active .chrome-iconrail-icon { transform: scale(.9); }
+  /* The one part of the rail that may lose characters. It is a flex item, so it
+     is blockified and `text-overflow` applies; `overflow: hidden` also makes its
+     automatic minimum size 0, which is what lets it shrink at all. The 10rem cap
+     keeps a long VOD title from claiming the whole bar before anything is even
+     tight. */
+  .chrome-iconrail-detail { color: var(--color-body-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 10rem; }
+  /* The caret is a control, sized like one: a 12px icon in a 1.5rem-wide hit
+     area — a 10px text glyph is too small to see or hit. */
+  .chrome-iconrail-caret { display: inline-flex; align-items: center; justify-content: center; height: 1.625rem; min-width: 1.5rem; padding: 0 .375rem 0 .25rem; color: var(--color-secondary); border-radius: 0 .4375rem .4375rem 0; transition: color var(--anim-fast) var(--anim-ease), background-color var(--anim-fast) var(--anim-ease); }
+  .chrome-iconrail-caret:hover, .chrome-iconrail-caret[aria-expanded="true"] { color: var(--color-strong); background: var(--color-surface-2); }
+  .chrome-iconrail-caret:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: -2px; }
+  /* Width pressure: under width pressure the buttons fall back to icons only,
+     keeping the drop-down arrow. The rail's host — the
+     StreamEmbedBar wrapper, `@container flex-1` — is the size container, so
+     these tiers measure the room the bar actually has, not the rail's own
+     width (a container query cannot match its own container). The detail is
+     the least important thing and goes first; the word goes next, VISUALLY
+     only — it is the active tab's accessible name (IconRail labels only the
+     inactive tabs), so it is clipped away rather than display:none'd. The
+     caret is never touched: a mode with options keeps its arrow at any width. */
+  @container (max-width: 300px) {
+    .chrome-iconrail-detail { display: none; }
+  }
+  @container (max-width: 200px) {
+    .chrome-iconrail .chrome-tab-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  }
+
+  /* ── Rail: vertical sections ────────────────────────────────────────── */
+  .chrome-rail-layout { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: .75rem; }
+  /* Fill (round 2b, the Appearance window): the layout takes the rest of a
+     fixed-frame window body and each column scrolls on its own, so the search
+     and header above it stay put. */
+  .chrome-rail-layout[data-fill] { flex: 1 1 auto; min-block-size: 0; grid-template-rows: minmax(0, 1fr); }
+  .chrome-rail-layout[data-fill] > * { min-block-size: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+  .chrome-rail { display: flex; flex-direction: column; gap: 1px; padding: .25rem 0; border-right: 1px solid var(--color-edge); }
+  .chrome-rail .chrome-tab {
+    justify-content: flex-start;
+    padding: .45rem .75rem;
+    border-left: 2px solid transparent;
+    font-size: calc(var(--tab-size, .875rem) * .92);
+    text-align: left;
+    white-space: normal;
+  }
+  .chrome-rail .chrome-tab[aria-selected="true"] { border-left-color: var(--color-strong); background: var(--color-surface-2); }
+  /* Groups + nesting. */
+  .chrome-rail-group { padding: .6rem .75rem .2rem; font-size: .6875rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--color-muted); }
+  .chrome-rail-group[data-first] { padding-top: .2rem; }
+  .chrome-rail .chrome-tab[data-depth="1"] { padding-left: 1.6rem; }
+  /* Phones: the rail becomes one-colour icons and the active
+     section's name heads the content. A CONTAINER query, not a device query:
+     the same panel is narrow on a phone and in a small window. The size
+     container is the layout's PARENT (the host declares it — ChatAppearanceBody),
+     never .chrome-rail-layout itself: a container query cannot match its own
+     container, so the grid-template-columns line below would never apply. */
+  .chrome-rail-icon { display: none; }
+  .chrome-rail-compact-heading { display: none; }
+  /* Icons whenever the labelled rail would squeeze the controls below their
+     436px design width: 160 rail + 12 gap + 436 = 608 — the same derivation as
+     PAGE_MIN_W.appearance. A lower breakpoint would leave a narrow browser's
+     settings PANEL (the site's phone layout, no width floor) with squeezed labels. */
+  @container (max-width: 607px) {
+    .chrome-rail-layout { grid-template-columns: 44px minmax(0, 1fr); }
+    .chrome-rail .chrome-tab { justify-content: center; padding: .55rem 0; }
+    .chrome-rail .chrome-tab-label { display: none; }
+    .chrome-rail-sub { display: none; }
+    .chrome-rail-icon { display: inline-flex; color: var(--color-secondary); }
+    .chrome-rail .chrome-tab[aria-selected="true"] .chrome-rail-icon { color: var(--color-strong); }
+    .chrome-rail-compact-heading { display: block; font-weight: 600; font-size: .875rem; color: var(--color-strong); margin-bottom: .5rem; }
+    /* Icons: a group is a thin rule, nesting is not indented (there is no label to indent). */
+    .chrome-rail-group { font-size: 0; padding: 0; margin: .3rem .5rem; border-top: 1px solid var(--color-edge); }
+    .chrome-rail-group[data-first] { display: none; }
+    .chrome-rail .chrome-tab[data-depth="1"] { padding-left: 0; }
+  }
+  /* Fold: a group heading is a button; a parent place shows a marker. */
+  .chrome-rail-group-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left; border-radius: .25rem; cursor: pointer; }
+  .chrome-rail-group-toggle:hover { color: var(--color-secondary); }
+  .chrome-rail-group-toggle:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: -2px; }
+  .chrome-rail-caret { font-size: .625rem; }
+  .chrome-rail-sub { margin-left: auto; padding-left: .25rem; color: var(--color-muted); }
+  /* Picker: wide = the ordinary rail, the picker button hidden. Narrow =
+     one column, the rail folded behind the picker button, shown labelled (never icons) when open. */
+  .chrome-rail-picker { display: none; }
+  @container (max-width: 607px) {
+    .chrome-rail-layout[data-compact="picker"] { grid-template-columns: minmax(0, 1fr); gap: .5rem; }
+    .chrome-rail-layout[data-compact="picker"][data-fill] { grid-template-rows: auto minmax(0, 1fr); }
+    .chrome-rail-layout[data-compact="picker"][data-fill][data-open] { grid-template-rows: auto auto minmax(0, 1fr); }
+    .chrome-rail-layout[data-compact="picker"] > .chrome-rail-picker {
+      display: flex; align-items: center; justify-content: space-between; gap: .5rem; width: 100%;
+      padding: .4rem .75rem; border: 1px solid var(--color-edge); border-radius: .5rem;
+      background: var(--color-surface-1); color: var(--color-strong); font-weight: 600; font-size: .875rem; text-align: left;
+    }
+    .chrome-rail-layout[data-compact="picker"] > .chrome-rail-picker:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: 1px; }
+    .chrome-rail-picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chrome-rail-layout[data-compact="picker"]:not([data-open]) > .chrome-rail { display: none; }
+    .chrome-rail-layout[data-compact="picker"] > .chrome-rail { max-height: 60vh; overflow-y: auto; border-right: 0; border: 1px solid var(--color-edge); border-radius: .5rem; padding: .25rem; }
+    .chrome-rail-layout[data-compact="picker"] .chrome-rail .chrome-tab { justify-content: flex-start; padding: .45rem .75rem; }
+    .chrome-rail-layout[data-compact="picker"] .chrome-rail .chrome-tab[data-depth="1"] { padding-left: 1.6rem; }
+    .chrome-rail-layout[data-compact="picker"] .chrome-rail .chrome-tab-label { display: inline-grid; }
+    .chrome-rail-layout[data-compact="picker"] .chrome-rail-icon { display: none; }
+    .chrome-rail-layout[data-compact="picker"] .chrome-rail-group { font-size: .6875rem; padding: .6rem .75rem .2rem; margin: 0; border-top: 0; }
+    .chrome-rail-layout[data-compact="picker"] .chrome-rail-group[data-first] { display: flex; padding-top: .2rem; }
+    .chrome-rail-layout[data-compact="picker"] [data-repeats-place] { display: none; }
+  }
+
+  /* ── Bar: a panel's top or bottom strip, exactly one token tall ─────── */
+  /* In flow at rest. Two hiding states, two DIFFERENT mechanisms, and that is
+     deliberate:
+       • HIDDEN = the bar's own height pulled out of the flow (negative edge
+         margin, animated on the shared tokens) so the content follows its edge
+         — one property. It stays IN FLOW, which is the only reason the
+         content can follow.
+       • OVERLAY = absolute at the panel's edge, revealed by `translate`.
+         The margin pull cannot serve overlay AT ALL: the pull is written as
+         one token, so it equals the height only while the bar IS one token. A
+         bar allowed to grow would be parked short, and clamping it back to the
+         token instead would give a compact composer a 35px content box — a
+         reply banner plus the main row (~76px) would spill over the hairline
+         and be clipped at the panel edge. Out of flow there is
+         nothing to measure: the park is `translate 100%` of the bar's OWN
+         height, whatever that height is, and the reveal is `translate 0 0`.
+         Every host is `position: relative` with `overflow: hidden` (the video
+         panel, the chat aside), so a parked bar is clipped by its own panel.
+     `translate` and `transform` are separate properties, so the compositing
+     promotion (translateZ) and the slide never fight. The longhands, not the
+     `transition` shorthand: this file is layered, but the rule is the same —
+     leave transition-delay to the reveal rule alone. */
+  .chrome-bar {
+    position: relative;
+    z-index: 10;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    min-width: 0;
+    padding-inline: .75rem;
+    box-sizing: border-box;
+    font-family: var(--shell-font, inherit);
+    transform: translateZ(0);
+    transition-property: margin-top, margin-bottom, translate, opacity;
+    transition-duration: var(--anim-default);
+    transition-timing-function: var(--anim-ease);
+  }
+  /* The hairline is an INSET shadow, not a border: a border sits inside the
+     token height, and the slots are `height: 100%` of the content box, so a
+     1px border would put every title and ✕ half a pixel off the bar's visual
+     centre. A shadow paints over the
+     content box without shrinking it — the box is the whole symmetric token
+     and the slots centre on the bar. (A padding that mirrors the border
+     centres the slots too, but pushes a band bar's shade 1px off the edge.) */
+  .chrome-bar-top    { height: var(--chrome-top-h);    box-shadow: inset 0 -1px 0 var(--color-edge-strong); }
+  .chrome-bar-bottom { height: var(--chrome-bottom-h); box-shadow: inset 0 1px 0 var(--color-edge-strong); padding-inline: .5rem; }
+  .chrome-bar-top[data-seam] { box-shadow: var(--seam-shade-box), inset 0 -1px 0 var(--color-edge-strong); }
+  /* A band bar runs edge to edge (its tabs pad themselves) and lets the
+     shade's own hairline — cut by the hole — replace the bar's; the seam
+     shade, when on, stays. Its edge controls (the compact toggle, the fold
+     arrow) get a small inset of their own, since the bar contributes none. */
+  .chrome-bar:has(> .chrome-band) { padding-inline: 0; }
+  .chrome-bar-top:has(> .chrome-band) { box-shadow: none; }
+  .chrome-bar-top[data-seam]:has(> .chrome-band) { box-shadow: var(--seam-shade-box); }
+  .chrome-bar:has(> .chrome-band) .chrome-bar-lead  { padding-left: .25rem; }
+  .chrome-bar:has(> .chrome-band) .chrome-bar-trail { padding-right: .25rem; }
+  .chrome-bar > .chrome-band { flex: 1 1 auto; min-width: 0; height: 100%; display: flex; align-items: center; }
+  .chrome-bar-lead, .chrome-bar-trail { position: relative; z-index: 2; flex: none; display: flex; align-items: center; height: 100%; gap: .25rem; }
+  .chrome-bar-center { position: relative; z-index: 1; flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: .5rem; height: 100%; }
+  .chrome-bar .chrome-sections { height: 100%; }
+  /* Hidden: the whole height is the distance. */
+  .chrome-bar-top[data-state="hidden"]    { margin-top:    calc(-1 * var(--chrome-top-h));    opacity: 0; }
+  .chrome-bar-bottom[data-state="hidden"] { margin-bottom: calc(-1 * var(--chrome-bottom-h)); opacity: 0; }
+  /* Overlay: parked past the edge and OUT OF FLOW; coordinate-driven
+     proximity (Bar.tsx — a pointermove listener with hysteresis),
+     the bar's own hover, keyboard focus or `revealed` slides it back over
+     the content. 150ms on the reveal only — the pointer arriving near the
+     edge must not flash the bar; hiding stays immediate (one size, one delay).
+     `margin-*: 0` states the boundary rather than tidying: overlay parks by
+     TRANSLATE alone. If both mechanisms ever applied at once the bar would park
+     two heights away and leave a hole where it used to be.
+     An overlay bar slides OVER the panel's content, and that content has its own
+     positioned children at z 10 (the player's "Beta player" button) — a tie
+     would let them paint over the revealed bar. In flow a bar stays at 10 so the
+     mobile seam (z 11) still outranks it; overlay is desktop-only and the seam
+     mobile-only, so 30 never meets the seam. */
+  .chrome-bar[data-state="overlay"] { position: absolute; inset-inline: 0; z-index: 30; }
+  .chrome-bar-top[data-state="overlay"]    { top: 0;    margin-top: 0;    translate: 0 -100%; }
+  .chrome-bar-bottom[data-state="overlay"] { bottom: 0; margin-bottom: 0; translate: 0 100%; }
+  .chrome-bar-top[data-state="overlay"]:is(:hover, :has(:focus-visible), [data-revealed])    { translate: 0 0; transition-delay: 150ms; }
+  .chrome-bar-bottom[data-state="overlay"]:is(:hover, :has(:focus-visible), [data-revealed]) { translate: 0 0; transition-delay: 150ms; }
+  /* Proximity reveal is coordinate-driven inside Bar (a pointermove listener
+     with hysteresis) — an element-based zone would intercept clicks over the
+     host's content and oscillate. */
+  /* Growth is opt-in and NAMED: an element inside a bottom bar that needs
+     more than the token (the expanded composer field, a status line, the
+     reply banner, the spend chip, an edit banner) says so with
+     `data-chrome-grow`. Everything else is exactly one token. */
+  /* The padding is the token's own leftover around one composer row, so a
+     grown bar holding ONE line is exactly the token — typing the first letter
+     adds nothing; only real extra lines grow it. */
+  .chrome-bar-bottom:has([data-chrome-grow]) { height: auto; padding-block: calc((var(--chrome-bottom-h) - var(--composer-ctl)) / 2); }
+  /* …but a HIDDEN bar is exactly the token, however grown it was: its distance
+     is one token of negative margin, so the pull must equal the height or the
+     bar leaves a hole (grown) — and a hidden bar shows nothing anyway, so the
+     reset costs nothing. `padding-block: 0` goes with it: the grow rule's
+     .375rem would otherwise survive into a box the height reset has already
+     fixed, and squeeze the content it was added to make room for.
+     An OVERLAY bar is deliberately NOT reset. It is absolute, so a grown one
+     simply reveals taller — the composer's growth (a reply banner, an expanded
+     field) works in desktop compact exactly as it does at rest. Clamping it
+     here would give a 76px composer a 35px content box.
+     Equal specificity to the grow rule (a class plus an attribute either way),
+     so this only wins by coming AFTER it — do not reorder these two. */
+  .chrome-bar-bottom[data-state="hidden"] { height: var(--chrome-bottom-h); padding-block: 0; }
+
+  /* ── Window ───────────────────────────────────────────────────────────
+     One shell, two presentations. The band is a Bar (band mode when tabs
+     are present, so Sections cuts the Console hole); the body is the ONE
+     scroll container. No min-height anywhere here (gate rule 3): the
+     body's overflow already zeroes its automatic flex minimum, which is all
+     a min-h-0 would do. */
+  .chrome-window {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    color: var(--color-strong);
+    outline: none;
+  }
+  /* Radius and shadow ride as utilities on the element (rounded-xl,
+     shadow-2xl) — this file is layered, so utilities win anyway, and
+     check-tokens admits raw values only in globals.css. */
+  .chrome-window-floating {
+    position: fixed;
+    z-index: var(--z-float);
+  }
+  .chrome-window-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* Content that scrolls INSIDE itself (marks its root data-scroll-inner —
+     the Appearance window, round 2b: search and the header stay put, the rail
+     and list scroll) turns the body into a fixed frame. Every other window
+     keeps the body as its one scroller. */
+  .chrome-window .chrome-window-body:has(> [data-scroll-inner]) { display: flex; flex-direction: column; overflow: hidden; }
+  .chrome-window-body > [data-scroll-inner] { flex: 1 1 auto; min-block-size: 0; display: flex; flex-direction: column; }
+  /* The whole band is floating's drag handle. touch-action returns to the
+     Sections strip so its own horizontal touch-scroll survives the handle. */
+  .chrome-window-grab { flex: none; touch-action: none; user-select: none; cursor: grab; }
+  .chrome-window-grab:active { cursor: grabbing; }
+  .chrome-window-grab .chrome-sections { touch-action: pan-x; }
+  /* A PANEL window's handle arbitrates with the pager by CSS alone:
+     horizontal pans stay native and chain to the pager's scroll-snap
+     row; vertical movement is claimed by pointer capture in usePanelDrag.ts,
+     which sees a `pointercancel` the moment the browser takes a horizontal
+     pan. No gesture-race code. The floating window's `none` stays: it has no
+     pager to yield to. */
+  .chrome-window-panel > .chrome-window-grab { touch-action: pan-x; }
+  /* The grabber pill — the visible affordance of the handle. Slim headers
+     (round 2a): the pill sits INSIDE the band along its top edge instead of on
+     a 12px row of its own. The grab wrapper is still the one drag surface, so
+     the pill is decoration only (pointer-events: none) and z 20 keeps it above
+     the bar's own paint (.chrome-bar is z 10); isolation keeps that 20 local. */
+  .chrome-window-panel > .chrome-window-grab { position: relative; isolation: isolate; }
+  .chrome-window-grabber {
+    position: absolute;
+    top: .25rem;
+    left: 50%;
+    translate: -50% 0;
+    z-index: 20;
+    pointer-events: none;
+    width: 2.25rem;
+    height: .25rem;
+    border-radius: 9999px;
+    background: var(--color-edge);
+  }
+  .chrome-window-title {
+    font-size: .75rem;
+    font-weight: 600;
+    color: var(--color-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chrome-window-mark { display: inline-flex; align-items: center; color: var(--color-secondary); }
+  /* The one bar control: the ✕, popout, back arrow and fold arrow in every
+     top/bottom bar — and every icon toggle beside them
+     (the gear and theatre buttons, the chat tab bar's compact / split / fold,
+     the folded pill's three). Named for what it is rather than where it
+     started. Its geometry is the mode rail item's (1.625rem tall, .4375rem
+     radius), its hover fill the rail's hover fill, its on-state
+     (`data-active`, set by BarButton's `active`) the rail's selected fill, and
+     its press the same dip — one universal button style, so a phone sees the
+     same buttons as the player top bar. */
+  .chrome-bar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 1.625rem;
+    min-width: 1.625rem;
+    padding: 0 .3rem;
+    border-radius: .4375rem;
+    color: var(--color-muted);
+    transition: color var(--anim-fast) var(--anim-ease), background-color var(--anim-fast) var(--anim-ease), transform var(--anim-fast) var(--anim-ease);
+  }
+  .chrome-bar-btn:hover { color: var(--color-strong); background: var(--color-surface-2); }
+  .chrome-bar-btn[data-active] { color: var(--color-strong); background: var(--color-surface-3); }
+  .chrome-bar-btn:active { transform: scale(.92); }
+  .chrome-bar-btn:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: -2px; }
+  /* Slim window headers: the band reads its own fixed token (the override is
+     ON the band so a tabbed window's .chrome-sections inherits it), 30px in a
+     phone panel (declared in .chrome-window-panel's own block). Band buttons
+     are 24px; on touch each carries a wide hit area (below). */
+  .chrome-bar-top[data-bar="window"] { --chrome-top-h: var(--chrome-window-h); }
+  [data-bar="window"] .chrome-bar-btn { height: 1.5rem; min-width: 1.5rem; }
+  /* The band is fixed, so its tabs (the mod panel's) stop following Tab size
+     at 1rem — at the slider's top a 28px tab label filled a 28px band. */
+  [data-bar="window"] .chrome-tab { font-size: min(var(--tab-size, .875rem), 1rem); }
+  /* Touch: each button's hit area is 44px WIDE and exactly the band TALL. The
+     20px gap makes the pitch 44px, so neighbours never overlap — with the
+     plain 4px gap the ✕'s area (a later sibling, painted on top) took the
+     popout's right edge. Band-tall, not 44px: a taller area spilled 7px into
+     the window body, where a tap under the ✕ closed the window (review). */
+  @media (pointer: coarse) {
+    [data-bar="window"] .chrome-bar-lead, [data-bar="window"] .chrome-bar-trail { gap: 1.25rem; }
+    [data-bar="window"] .chrome-bar-btn { position: relative; }
+    [data-bar="window"] .chrome-bar-btn::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 44px;
+      height: var(--chrome-top-h);
+      transform: translate(-50%, -50%);
+    }
+  }
+  .chrome-window-grip { position: absolute; width: .875rem; height: .875rem; touch-action: none; user-select: none; }
+  .chrome-window-grip[data-corner="nw"] { top: 0; left: 0; cursor: nwse-resize; }
+  .chrome-window-grip[data-corner="ne"] { top: 0; right: 0; cursor: nesw-resize; }
+  .chrome-window-grip[data-corner="sw"] { bottom: 0; left: 0; cursor: nesw-resize; }
+  .chrome-window-grip[data-corner="se"] { bottom: 0; right: 0; cursor: nwse-resize; }
+  /* Dialog: scrim at --z-modal — ONE layer for every dialog, with no
+     per-caller z overrides.
+     The keyframes (backdrop-in, modal-in) live in globals.css and are
+     global by name; three nudges still use .modal-in, so the class stays
+     there — this file only references the names. */
+  .chrome-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* .modal-overlay hard-coded rgb(0 0 0 / 0.6); the scrim scale's nearest
+       token is 0.50, and the token wins (check-tokens admits raw values only
+       in globals.css). A deliberate snap to the token, not a drift. */
+    background: var(--color-scrim-strong);
+    padding: 1rem;
+    animation: backdrop-in var(--anim-fast) var(--anim-ease) both;
+  }
+  .chrome-window-dialog {
+    width: 100%;
+    max-width: 28rem;
+    max-height: 100%;
+    animation: modal-in var(--anim-default) var(--anim-ease) both;
+  }
+
+  /* Page: the phone shape. Opaque canvas, never
+     .glass — a full-viewport backdrop-blur is the phone-heat trap. inset:0
+     tracks the dynamic viewport; the band clears the notch itself because
+     standalone has no browser chrome to absorb it. Entry rides the shared
+     modal-in keyframes (globals.css). */
+  .chrome-window-page {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-float);
+    background: var(--color-canvas);
+    padding-top: env(safe-area-inset-top);
+    animation: modal-in var(--anim-default) var(--anim-ease) both;
+  }
+
+  /* Sheet: not a Window presentation of its own — this class serves
+     ONLY PanelWindow's peek-kind FALLBACK, when no pane layer is registered
+     (community page, /mod, the popout document): the phone shape for a
+     surface whose purpose is the content BEHIND it — bottom-anchored,
+     content-fit to 55dvh, non-modal: no
+     scrim, no inert, the chat above stays live. Opaque canvas for the same
+     phone-heat reason as page. Radius rides as a utility on the element
+     (rounded-t-xl). Entry rides the sheet-in keyframes (globals.css, beside
+     modal-in). */
+  .chrome-window-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-float);
+    max-height: 55dvh;
+    background: var(--color-canvas);
+    /* Upward-biased (token in globals.css) — the separation this shadow
+       exists for is the seam against the live chat ABOVE the sheet. */
+    box-shadow: var(--sheet-shadow);
+    animation: sheet-in var(--anim-default) var(--anim-ease) both;
+  }
+  .chrome-window-sheet .chrome-window-body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Panel window: lives INSIDE a pane's
+     window layer — absolute against the layer, whose bottom edge IS the
+     composer's top by flex construction — or the AutomodHoldBar's when that
+     mod-only row sits between the body wrapper and the composer (ChatSidebar's
+     live pane); either way the composer itself is never covered. K-lift,
+     panel clipping, and the grown-composer push all arrive by DOM
+     inheritance; nothing here is measured. Entry EMERGES from the composer
+     seam: translateY(100%) fully clipped by the layer's overflow (a
+     body-portal slide could never be clean). */
+  .chrome-window-layer {
+    position: absolute;
+    inset: 0;
+    /* THE CEILING — a calc(), never a measurement.
+         --kb-lift           K, published by useKeyboardLift on the element it
+                             translates; 0 when no keyboard.
+         --pane-ceiling-rise how far the chrome that stays PAINTED above the
+                             lift rises itself (the video column's keyboard ramp),
+                             declared by the host that owns that ramp.
+         --pane-chrome-above the host's own in-flow chrome between the lifted
+                             top and this layer — the chat tab bar — declared
+                             from the SAME state that hides it, so it drops to
+                             0 exactly when the bar leaves.
+       Why not JS: a distance measured at the K commit is a snapshot, and every
+       term here moves on its own 200ms curve — the bar hides by animating
+       `margin-top`, the column ramps by transform. A snapshot would be stale
+       before it was applied: a bounce at the top of the range, and a gap under
+       the video panel when the tab bar is closed. And the bar's height is
+       `--chrome-top-h` = `--tab-size + 22px`, a USER SETTING: no measured
+       constant survives a chat-size change. A calc() over the tokens re-solves
+       itself, for free, whenever any of them moves.
+       Floored at 0: a panel never rises above its layer's own resting top.
+
+       Declared as a TOKEN the panel subtracts, not as this layer's `top`,
+       and nothing here transitions. `top` is a LAYOUT property, so a
+       `transition: top` would run on the main thread, and the panel's
+       `max-height: 100%` would re-resolve against it every frame while the
+       lift itself (the chat panel's transform, the column's ramp) runs on the
+       compositor. The panel's top edge would be the SUM of a compositor-smooth
+       term and a main-thread term, so every late frame would show as the edge
+       oscillating. The ceiling lands in ONE layout at the K commit;
+       PanelWindow's lift-follow (Window.tsx) turns that one jump into a
+       compositor `translate` eased on the lift's own curve. This box never
+       changes size: there is nothing left here to animate. */
+    --pane-ceiling: max(0px, calc(var(--kb-lift) - var(--pane-ceiling-rise) - var(--pane-chrome-above)));
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 30;
+  }
+  .chrome-window-panel {
+    --chrome-window-h: 30px; /* slim window header on a phone (round 2a) */
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    /* No reserve at the top: the panel fills its layer up to the ceiling,
+       which already lands it exactly under whatever chrome is painted above
+       the pane — the video column's lower bar with the keyboard up, the chat
+       tab bar without it. A top inset here would only be a gap.
+       The band is visible because the panel STOPS at the ceiling, not because
+       a strip was held back below it.
+       The ceiling is subtracted HERE, from the panel's own bound, rather than
+       taken off the layer's top edge: the layer's box then never changes, no
+       layout animates, and a ceiling change is one jump of this box that the
+       lift-follow turns into motion. */
+    max-height: calc(100% - var(--pane-ceiling));
+    /* The pop-up surface, like a floating window: slide windows use the same
+       colours as pop-up windows — the Pop-up
+       colour / see-through / blur settings, through the one glass switch. One
+       pane-sized box at a time — the phone-heat trap is a FULL-VIEWPORT blur,
+       which is why the page shape below stays opaque. */
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-filter);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--sheet-shadow);
+    animation: panel-seam-in var(--anim-default) var(--anim-ease) both;
+    /* The lift-follow's curve (Window.tsx, PanelWindow): a ceiling change is
+       ONE layout jump, and this is what turns it into motion — the panel is
+       translated back to where it was and eased to 0 on the same token curve
+       the lift and the ramp use, so all three move as one, all on the
+       compositor. `translate`, not `transform`: panel-seam-in/out own
+       `transform`, and their `both` fill would override an inline transform
+       for the panel's whole life. The two independent properties add. */
+    transition: translate var(--anim-default) var(--anim-ease);
+  }
+  .chrome-window-panel[data-kind="task"] { height: calc(100% - var(--pane-ceiling)); }
+  /* Lift-follow, SHRINK direction (Window.tsx holds this for the transition's
+     life): the panel is top-anchored AT the ceiling and uncapped, so its box
+     keeps the height it had and overhangs the layer's bottom, where the
+     layer's overflow clips it at the composer's edge — an edge that rides the
+     lift's own compositor transform. Band and content stay rigid while the
+     composer covers the bottom; when the transition ends the resting rule
+     (bottom-anchored, capped) takes over at the SAME clip edge, so the switch
+     paints nothing new — only the body's scroll range appears. A GROW (the
+     keyboard leaving) needs none of this: the resting box then overhangs the
+     bottom by itself until the translate eases out. */
+  .chrome-window-panel[data-lifting] { top: var(--pane-ceiling); bottom: auto; max-height: none; }
+  /* Every box that is CAP height — a task, a panel resting at the cap
+     detent, a parked panel, a panel mid-gesture — is held at the full pane height instead,
+     because "the height it had" was the OLD cap and the token now says the
+     new one; a held box that shrank with the new cap would lift off the
+     composer and open a seam gap for the transition's life. */
+  .chrome-window-panel[data-lifting]:is([data-kind="task"], [data-detent="cap"], [data-detent="free"], [data-drag]) { height: 100%; }
+  /* The gesture (usePanelDrag.ts): ONE scalar, the
+     panel's translate, on a box held at CAP height. 0 = the cap; `fit` =
+     contentFit, where the cap box's visible region is exactly the resting
+     content-fit box's (the overhang is clipped); below `fit` = a free
+     position, and under MIN_VISIBLE_PX of it showing, a dismiss. `data-drag`
+     lives from the press through the release transition; `data-detent="cap"`
+     is the resting box after a snap to the cap; `data-detent="free"` is a
+     PARKED box — the cap box kept at whatever translate the finger left it
+     (its position IS its translate; it has no resting rule of its own). None
+     of them transitions height — the scalar moves, the box does not. */
+  .chrome-window-panel[data-drag] { height: calc(100% - var(--pane-ceiling)); }
+  .chrome-window-panel[data-detent="cap"] { height: calc(100% - var(--pane-ceiling)); }
+  .chrome-window-panel[data-detent="free"] { height: calc(100% - var(--pane-ceiling)); }
+  .chrome-window-panel[data-closing] {
+    animation: panel-seam-out var(--anim-default) var(--anim-ease) both;
+  }
+  /* A TOP panel (Window.tsx `fromTop`, Settings › Behavior ›
+     Windows): anchored at the ceiling instead of the composer, so it covers the
+     OLDER messages and leaves the bottom clear. --top-room is that clear strip:
+     30% of what is visible of the pane, never under ~3 rows (96px) nor over
+     240px — the newest messages and the composer always show. A task stops at
+     the same line. It drops in from above and leaves upward, clipped by the
+     layer's top edge the way the bottom panel is by the composer's. None of the
+     keyboard-hold / drag / detent rules above ever apply: Window.tsx takes no
+     hold for a top box, and usePanelPull moves only its translate. */
+  .chrome-window-panel[data-from="top"] {
+    --top-room: clamp(96px, calc((100% - var(--pane-ceiling)) * 0.3), 240px);
+    top: var(--pane-ceiling);
+    bottom: auto;
+    max-height: calc(100% - var(--pane-ceiling) - var(--top-room));
+    animation-name: panel-drop-in;
+  }
+  /* A task from the top opens at HALF its full size; the pull
+     (usePanelPull.ts, topCap) still sizes it up to the full size — the same
+     100% − ceiling − --top-room — or down to closed. */
+  .chrome-window-panel[data-from="top"][data-kind="task"] { height: calc((100% - var(--pane-ceiling) - var(--top-room)) / 2); }
+  /* FILLED (Window `fill` — the chat TUI has the window): it slides all the way
+     down and replaces the typing bar: no clear strip, the
+     pane's whole height — and the host folds the chat box away (chatTakeover.ts,
+     composerReplaced), so the pane itself reaches the column's bottom edge. The pull
+     (usePanelPull.ts, topCap `full`) sizes it anywhere from closed to that edge. A window that
+     CAN fill eases its height on every change — the half ⇄ full flip, a let-go pulled size —
+     on the chrome's one curve: a layout transition, once per flip, never per gesture frame
+     (the pull sets `transition: none` inline for its life). */
+  .chrome-window-panel[data-from="top"][data-fill] { max-height: calc(100% - var(--pane-ceiling)); }
+  .chrome-window-panel[data-from="top"][data-kind="task"][data-fill] { height: calc(100% - var(--pane-ceiling)); }
+  .chrome-window-panel[data-from="top"][data-fillable] { transition: height var(--anim-default) var(--anim-ease), translate var(--anim-default) var(--anim-ease); }
+  /* …but never during a lift: the ceiling's jump is ONE layout
+     change that the lift-follow eases as a translate (Window.tsx marks the box from the lift's
+     `before` until the follow ends). Easing the height as well would re-lay the box out every
+     frame of a keyboard open. */
+  .chrome-window-panel[data-from="top"][data-fillable][data-lift-follow] { transition: translate var(--anim-default) var(--anim-ease); }
+  /* The top task you are TYPING IN, with the phone's keyboard up: the whole
+     visible pane — no clear strip, no half. With the keyboard up the visible pane can be ~213px,
+     and half of it minus the strip would leave the terminal a header and a thumb.
+     Tap the chat box, or close the keyboard, and the usual half with the newest messages under it
+     is back. A size pulled by hand is an inline height and stays the user's. */
+  html.kb-open .chrome-window-panel[data-from="top"][data-kind="task"]:focus-within { height: calc(100% - var(--pane-ceiling)); max-height: calc(100% - var(--pane-ceiling)); }
+  .chrome-window-panel[data-from="top"][data-closing] { animation-name: panel-drop-out; }
+  /* A thumb's height, so the touch region is easy to slide, with a wider
+     pill centred in it. */
+  .chrome-window-foot {
+    position: relative;
+    flex: none;
+    height: 1.75rem;
+    touch-action: pan-x;
+    cursor: grab;
+  }
+  .chrome-window-foot > .chrome-window-grabber { top: .75rem; width: 3rem; }
+  .chrome-window-panel .chrome-window-body {
+    flex: 1;
+    /* Logical form on purpose, NOT `min-height` — composerLayout.test.ts bans
+       that literal token file-wide (the composer/meta-bar "floor" bug: a
+       min-height let a bottom bar grow a second row past its baseline).
+       This is the unrelated, standard flex-scroll-child fix — a flex item's
+       default auto min-size is its CONTENT's, which would push scrollable
+       chat past the panel's bound instead of scrolling inside it — and the
+       block-size axis is the vertical one here regardless of writing mode. */
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  /* A PARKED panel keeps the CAP box and is pushed down by its
+     translate, so its bottom `--panel-park` pixels live past the layer's clip
+     edge. The body is sized by the BOX, not by what is visible of it — so its
+     scroll range ends with those pixels still hidden, and the end of the
+     content cannot be reached at all (on the tip panel that is the pay
+     button: pulled halfway down, the bottom is unreachable without pulling it
+     back up).
+     Padding the scrollable CONTENT by the clipped depth ends the scroll range
+     where the visible region ends. Padding, not a height or a max-height: the
+     box must not change — the scalar moves, the box does not — and this is
+     set at REST only (panelFollow.ts `setParkPad`), never per drag frame. */
+  .chrome-window-panel[data-detent="free"] .chrome-window-body {
+    padding-block-end: var(--panel-park, 0);
+  }
+
+  /* In-window loading (Window.tsx WindowLoading): a
+     content-shaped placeholder at the expected contentFit. `min-block-size`,
+     not a height: content taller than the estimate must not clip when it
+     arrives, and the content-growth follow animates the difference. It is set
+     inline by WindowLoading — and it is `min-block-size` rather than
+     `min-height` for a second reason: check-chrome.mjs rule 3 bans
+     `min-height` / `minHeight` / `min-h-*` anywhere inside this module, so the
+     logical property is also what keeps the build green. */
+  .chrome-window-loading { display: flex; flex-direction: column; gap: .75rem; padding: .75rem 1rem; }
+  .chrome-window-skeleton { display: flex; flex-direction: column; gap: .5rem; }
+  .chrome-window-skeleton-line { display: block; height: .75rem; border-radius: .25rem; width: 100%; }
+  .chrome-window-skeleton-line[data-short] { width: 60%; }
+
+  /* The boot sequence (BootSequence.tsx):
+     a subsystem's stages as a rail of marks; status is a data attribute per
+     row. The only motion is the ACTIVE mark's pulse — opacity + scale, the
+     compositor's — and a mark's fill easing on the house token when its
+     stage completes. The active label's ellipsis is drawn here so the labels
+     stay sentence-case nouns. Never a bare spinner: the rail says WHAT is
+     being prepared. */
+  .chrome-boot { display: flex; flex-direction: column; gap: .5rem; padding: 1rem 1.25rem; color: var(--color-muted); font-size: .875rem; }
+  .chrome-boot[data-compact] { padding: 0; gap: .375rem; }
+  .chrome-boot-eyebrow { margin: 0; font-size: .6875rem; text-transform: uppercase; letter-spacing: .08em; color: var(--color-faint); }
+  .chrome-boot-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .375rem; }
+  .chrome-boot-stage { display: grid; grid-template-columns: .75rem 1fr; column-gap: .625rem; align-items: baseline; }
+  .chrome-boot-mark { width: .5rem; height: .5rem; border-radius: 9999px; border: 1px solid var(--color-edge-strong); background: transparent; transition: background var(--anim-default) var(--anim-ease), border-color var(--anim-default) var(--anim-ease); }
+  .chrome-boot-stage[data-status="done"] .chrome-boot-mark { background: var(--color-strong); border-color: var(--color-strong); }
+  .chrome-boot-stage[data-status="active"] .chrome-boot-mark { border-color: var(--color-accent); animation: chrome-boot-pulse 1.2s var(--anim-ease) infinite; }
+  .chrome-boot-stage[data-status="error"] .chrome-boot-mark { background: var(--color-accent); border-color: var(--color-accent); }
+  .chrome-boot-stage[data-status="done"] .chrome-boot-label { color: var(--color-secondary); }
+  .chrome-boot-stage[data-status="active"] .chrome-boot-label { color: var(--color-strong); }
+  .chrome-boot-stage[data-status="active"] .chrome-boot-label::after { content: "…"; }
+  .chrome-boot-stage[data-status="error"] .chrome-boot-label { color: var(--color-strong); }
+  .chrome-boot-detail { grid-column: 2; font-size: .75rem; color: var(--color-secondary); }
+  .chrome-boot-retry { align-self: flex-start; margin-top: .25rem; font-size: .875rem; font-weight: 500; color: var(--color-strong); background: var(--color-surface-2); border: 1px solid var(--color-edge); border-radius: .375rem; padding: .375rem 1rem; }
+  .chrome-boot-retry:hover { background: var(--color-surface-3); }
+  @keyframes chrome-boot-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: .45; transform: scale(.7); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chrome-tab, .chrome-cap, .chrome-thumb, .chrome-shade, .chrome-bar, .chrome-pane-expand,
+    .chrome-iconrail-item, .chrome-iconrail-icon, .chrome-iconrail-caret, .chrome-bar-btn,
+    .chrome-window-panel { transition: none; }
+    /* The lift/dip rules are (0,4,0); a bare .chrome-iconrail-icon reset
+       would lose to them on specificity and the icon would still jump. */
+    .chrome-iconrail .chrome-tab:hover .chrome-iconrail-icon, .chrome-iconrail .chrome-tab:active .chrome-iconrail-icon, .chrome-bar-btn:active { transform: none; }
+    .chrome-boot-mark { animation: none; transition: none; }
+  }
+
+  /* The player fold. Both bars stay in flow — a folded panel whose
+     only child is absolute collapses to its borders and strands the bar — so
+     what collapses is the region BETWEEN them. 1fr→0fr on a grid track needs no
+     measurement and no JS height, which is the rule here: --video-chrome is a
+     CSS sum for the same reason. */
+  .player-fold-region {
+    display: grid;
+    grid-template-rows: 1fr;
+    overflow: hidden;
+    transition: grid-template-rows var(--anim-slow) var(--anim-ease);
+  }
+  .player-fold-region[data-folding] { grid-template-rows: 0fr; }
+  /* A grid item's automatic minimum size is content-based unless the item's
+     OWN overflow is non-visible, in which case it drops to 0 — the standard
+     way to let a 0fr row actually reach zero. `min-height: 0` is the more
+     common spelling of this, but check-chrome.mjs rule 3 bans that token
+     anywhere in this file (a Bar is exactly its token tall, never a floor);
+     `overflow: hidden` is the spec-equivalent route to the same zero.
+     This is NOT a restatement of the parent's clip two lines up: the parent
+     clips at the REGION's box, this clips at the grid item's OWN box, and the
+     two differ the moment an item overflows itself. Currently none does — the
+     player's contents are `absolute inset-0` inside `.player-box` — so the
+     extra clip has no visible effect. Re-check it if the player area ever
+     grows a self-overflowing child. */
+  .player-fold-region > * { overflow: hidden; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .player-fold-region { transition: none; }
+  }
+
+  /* The community panel's arrival. The regions are at their resting
+     appearance already — this only slides them the last few pixels, staggered,
+     so "ready" reads as an arrival rather than a single fill-in. A failed or
+     skipped animation therefore leaves a correct panel, not an empty one.
+
+     TWO selectors, enumerated, not a descendant combinator — `.matrix-
+     entrance` sits on the pager's OUTER root (matrixPager.test.ts pins the inner
+     `mxScrollerRef` wrapper's own tag byte-for-byte, so the attribute cannot
+     live there). Off the pager (ordinary desktop) that wrapper is `display:
+     contents` — no paintable box of its own — and `> .contents > *` reaches
+     through it to the real boxes one hop down (the rail, the directory column,
+     the resize dividers, the empty-centre placeholder, the members column).
+     `> *:not(.contents)` stays too, for the pager skin, where that same
+     wrapper IS a real box and animates as the one thing it is. The
+     `:not(.contents)` is load-bearing, not tidiness: without it the one-hop
+     rule also animates the boxless wrapper off the pager, which paints
+     nothing and fires an `animationend` before any real box has moved.
+
+     There is NO THIRD depth here, and there must not be one. The
+     timeline pane nests a SECOND `display: contents` wrapper one level
+     inside the first (`key="timeline"`, MatrixView.tsx), so its real box —
+     the room-KEYED `key={selected.roomId}` div — sits two contents-hops
+     down. A `> .contents > .contents > *` rule WOULD select it, but could
+     never actually animate it: that div carries `.panel-slide-in`, which is
+     defined in `globals.css` — UNLAYERED — while every rule in this file
+     sits inside `@layer components` (deliberately, see this file's header,
+     so Tailwind utilities keep winning over chrome rules). An unlayered
+     declaration beats a layered one for the same property on the same
+     element regardless of selector specificity or source order, always —
+     so `matrix-enter` can never win the `animation` property there no
+     matter how the selector is written. A third-depth rule would therefore
+     be dead code that LOOKS load-bearing.
+     This is not a gap. `.panel-slide-in` already runs its own `panel-in`
+     keyframe on that div's mount — including its first mount around the
+     ready transition — so the timeline pane already has an arrival; it is
+     just `.panel-slide-in`'s, not this file's. Every region of the panel
+     therefore animates in: the one-hop regions via `matrix-enter`, the
+     timeline via `panel-in`. (If that div ever loses `.panel-slide-in`, it
+     would animate via NEITHER mechanism.)
+     Do not "fix" this by moving `.panel-slide-in` into a layer, raising its
+     specificity, or reaching for `!important`: that class's precedence is
+     load-bearing everywhere else it competes with Tailwind utilities.
+
+     `data-entered` is a PURE derivation of `status` in MatrixView.tsx and stays
+     present for the whole ready lifetime. "Plays once" follows from the
+     selectors below, not from clearing the attribute: a CSS animation runs
+     when its selector STARTS matching, so an attribute that never toggles
+     replays nothing on a re-render. Clearing it from an `onAnimationEnd`
+     handler on the root would be wrong — `animationend` bubbles, so the
+     first child to finish would cancel its still-delayed siblings and the
+     stagger would become a pop.
+     Nothing the two rules below can reach remounts inside a ready session: the
+     one-hop child is the pager scroller, the two-hop children are the rail,
+     the directory column, the dividers and the members column, and the
+     timeline's room-KEYED div sits one hop past the two-hop wrapper, out of
+     reach (see the paragraph above). `:not(.contents)` on the one-hop rule is what keeps it to
+     real boxes — off the pager the wrapper is `display: contents` and has no
+     box, so animating it would paint nothing while still firing the earliest
+     `animationend` of all. */
+  @keyframes matrix-enter {
+    from { transform: translateY(.375rem); opacity: .001; }
+    to   { transform: none; opacity: 1; }
+  }
+  .matrix-entrance[data-entered] > *:not(.contents),
+  .matrix-entrance[data-entered] > .contents > * {
+    animation: matrix-enter var(--anim-slow) var(--anim-ease) both;
+  }
+  .matrix-entrance[data-entered] > *:not(.contents):nth-child(2),
+  .matrix-entrance[data-entered] > .contents > *:nth-child(2) { animation-delay: 60ms; }
+  .matrix-entrance[data-entered] > *:not(.contents):nth-child(3),
+  .matrix-entrance[data-entered] > .contents > *:nth-child(3) { animation-delay: 120ms; }
+  .matrix-entrance[data-entered] > *:not(.contents):nth-child(4),
+  .matrix-entrance[data-entered] > .contents > *:nth-child(4) { animation-delay: 180ms; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .matrix-entrance[data-entered] > *:not(.contents),
+    .matrix-entrance[data-entered] > .contents > * { animation: none; }
+  }
+}

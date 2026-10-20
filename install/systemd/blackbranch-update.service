@@ -1,0 +1,18 @@
+# The nightly update check, started by blackbranch-update.timer at the quiet hour (the
+# timer is rendered by `blackbranch render` from updates.quietHour and site.timeZone). It reads the
+# signed feed; a SECURITY release applies itself — never while the stream is live: it waits for the
+# stream to end — and a feature release only waits for the Admin Panel's button. Results land in
+# /opt/blackbranch/results/update-*.json, which the doctor and the Admin Panel read.
+[Unit]
+Description=Black Branch: read the update feed; apply a security release
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch update --auto
+# A stop (a shutdown, `systemctl stop`) signals the updater alone, and gives it time: its trap
+# starts the site it stopped again, or goes back to the previous release and its data
+# (`blackbranch` update_stopped) — a restore takes minutes. The rest of the unit is killed after.
+KillMode=mixed
+TimeoutStopSec=30min

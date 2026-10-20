@@ -1,0 +1,14 @@
+# Runs the requests the site dropped, then removes them; results go to /opt/blackbranch/results/
+# (root-only, outside the site's drop box).
+# Verbs: rebuild · restart-<stream-api|stream-ingest|web> · render · matrix-bootstrap · apply-install
+# · doctor · backup · backup-test · backup-key · update-check · update-v<version> (starts
+# blackbranch-update@<version>.service). Anything else
+# is refused.
+[Unit]
+Description=Black Branch: run the site's requests (fixed verbs only)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch process-requests

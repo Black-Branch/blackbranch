@@ -1,0 +1,32 @@
+{
+  "name": "stream-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Server-side 24/7 multi-platform chat ingestion + normalization, and host process for the owner plugin's bot. Owns platform tokens, viewer poll, and stream lifecycle.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test",
+    "lint": "eslint",
+    "check:orphans": "node ../tools/check-orphans.mjs stream-ingest",
+    "check:owner-literals": "node ../tools/check-owner-literals.mjs stream-ingest",
+    "check:all": "npm run lint && npm run check:orphans && npm run check:owner-literals && npm run check:owner-seam && npm run check:instance-schema",
+    "check:instance-schema": "node ../tools/gen-instance-schema.mjs --check stream-ingest",
+    "check:owner-seam": "node ../tools/check-owner-seam.mjs stream-ingest"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.48.0",
+    "tmi.js": "^1.8.5",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.10.0"
+  }
+}

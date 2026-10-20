@@ -1,0 +1,19 @@
+# Direct and internal TLS modes only (.env's COMPOSE_FILE adds this file): caddy takes ports 80
+# and 443 on the box. Tunnel mode leaves this file out and publishes nothing.
+#
+# Every container on the bundle network resolves the site's three names to caddy, which holds their
+# certificates — so the site's own calls to them (sign-in reaches the homeserver at matrix.<domain>)
+# stay on the box and need no hairpin through the router. Tunnel mode has no certificates inside the
+# box (TLS ends at Cloudflare), so there the names resolve publicly and the calls go out and back in.
+services:
+  caddy:
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    networks:
+      default:
+        aliases:
+          - ${BB_DOMAIN:?}
+          - api.${BB_DOMAIN:?}
+          - matrix.${BB_DOMAIN:?}

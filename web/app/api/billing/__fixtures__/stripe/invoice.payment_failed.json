@@ -1,0 +1,9 @@
+{
+  "id": "evt_1PLACEHOLDERinvoice", "object": "event", "created": 1758499700,
+  "type": "invoice.payment_failed",
+  "data": { "object": {
+    "id": "in_1PLACEHOLDER", "object": "invoice", "amount_due": 500, "currency": "usd",
+    "customer": "cus_PLACEHOLDER2",
+    "parent": { "subscription_details": { "subscription": "sub_1PLACEHOLDER" } }
+  } }
+}

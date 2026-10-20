@@ -1,0 +1,103 @@
+{
+  "//": [
+    "The literal gate's configuration, read by tools/check-owner-literals.mjs. Two kinds of pattern:",
+    "the NEUTRAL ones below, which ship with the public repo and catch what no project should",
+    "publish (a private-network address, a home folder, a personal email address, a live key); and",
+    "an install owner's own names (domain, people, channel ids), which live in a separate file that",
+    "never ships — tools/owner-literals.json — and are added when that file is present. A tree that",
+    "has owner folders must have that file too, or the gate refuses to run.",
+    "Comments are COUNTED on purpose: a public reader sees them. Every pattern is matched",
+    "case-insensitively (unless it says caseSensitive) and counted per occurrence; a match listed in `allow` is not counted."
+  ],
+  "patterns": [
+    { "name": "private-network address",
+      "re": "\\b(?:10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|172\\.(?:1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}|100\\.(?:6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.\\d{1,3}\\.\\d{1,3})\\b",
+      "why": "an address inside someone's own network (RFC 1918, carrier-grade NAT): a real host on a contributor's LAN does not belong in public code",
+      "allow": {
+        "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.0$": "a network's own address, written as the start of a range (the backup-target blocklist names its ranges this way)",
+        "^172\\.29\\.83\\.\\d{1,3}$": "the bundle's own Docker network (install/compose.yaml, BB_SUBNET) — the same on every install",
+        "^10\\.0\\.0\\.[1-9]$": "the example LAN hosts tests and placeholders use (a self-hosted model server, a peer that is not trusted)",
+        "^192\\.168\\.1\\.(?:1|20)$": "example LAN hosts the SSRF and backup-target tests use",
+        "^172\\.16\\.5\\.5$": "an example host in the 172.16/12 range for the SSRF tests",
+        "^172\\.17\\.0\\.1$": "Docker's default bridge gateway, which the backup-target check refuses",
+        "^100\\.64\\.0\\.1$|^100\\.127\\.255\\.254$": "the first and last host of carrier-grade NAT, for the backup-target tests",
+        "^100\\.100\\.100\\.200$": "a cloud provider's metadata address the backup-target check refuses"
+      } },
+    { "name": "home folder path",
+      "re": "(?<![\\w.~${}-])/home/[a-z_][a-z0-9_.-]*/|(?<![\\w.~${}-])/Users/[A-Za-z0-9_.-]+/", "caseSensitive": true,
+      "why": "a path inside one person's home folder — the code must not depend on where a contributor keeps it",
+      "allow": {
+        "^/home/nonroot/$": "the unprivileged user of distroless container images",
+        "^/home/node/$": "the unprivileged user of the official node image"
+      } },
+    { "name": "personal email address",
+      "re": "\\b[a-z0-9._%+-]+@(?:[a-z0-9-]+\\.)+[a-z]{2,}\\b",
+      "why": "a person's real address; examples use a reserved domain (example.*, .test, .invalid, .arpa)",
+      "allow": {
+        "@(?:[a-z0-9-]+\\.)*example(?:\\.[a-z]+)?$": "a reserved example domain (RFC 2606), or example.<any> by the same convention",
+        "\\.(?:test|invalid|localhost|arpa)$": "a reserved top-level name (RFC 2606, RFC 6761)",
+        "@paypal\\.com$": "PayPal's own sender addresses, which its webhook payloads carry",
+        "@blackbranch\\.app$": "the project's own addresses",
+        "\\.service$": "a systemd template unit (name@instance.service), not an address",
+        "^git@": "an ssh git remote, not an address"
+      } },
+    { "name": "live payment key",
+      "re": "\\b(?:sk|rk)_live_[a-z0-9]{12,}",
+      "why": "a live Stripe secret or restricted key — tests use test-mode or obviously fake values" },
+    { "name": "private key block",
+      "re": "-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----(?:\\s|\\\\n)*[A-Za-z0-9+/=]{40,}",
+      "why": "a private key — its header followed by key material; keys are generated on the box or in the test, never written into the tree (a test's placeholder body is not key material)" },
+    { "name": "private IPv6 host address",
+      "re": "(?<![0-9a-f:])(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f])(?:(?::[0-9a-f]{1,4}){3,7}|(?::[0-9a-f]{1,4}){0,6}::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?![0-9a-f:])",
+      "why": "a whole host address inside someone's own network (IPv6 unique-local fc00::/7, or link-local fe80::/10), written out or compressed (`::` anywhere) — the IPv6 twin of the private-network address; a range (fc00::/7, fd12:3456::/64) has no host part and is not one",
+      "allow": {
+        "^fe80::1$": "the link-local example the address guards and their tests name (the SSRF guard, the backup-target check)",
+        "^fc00::[15]$": "unique-local examples the address guards and their tests name",
+        "^fd12:3456::1$": "a unique-local example the backup-target tests name",
+        "^fd00:ec2::254$": "a cloud provider's IPv6 metadata address, which the backup-target check refuses"
+      } },
+    { "name": "signed token",
+      "re": "\\beyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{20,}", "caseSensitive": true,
+      "why": "a signed JWT (header, claims, signature) — a session or API credential; tests build their own tokens at run time" },
+    { "name": "chat webhook URL",
+      "re": "https?://(?:(?:ptb|canary)\\.)?discord(?:app)?\\.com/api/webhooks/\\d{5,}/[A-Za-z0-9_-]{20,}|https?://hooks\\.slack\\.com/(?:services|workflows|triggers)/T[A-Z0-9]+/[A-Za-z0-9/_-]{10,}",
+      "why": "a Discord or Slack webhook URL — the URL is the credential: whoever has it can post as the hook" }
+  ],
+
+  "packages": ["web", "stream-api", "stream-ingest"],
+
+  "ownerRoots": {
+    "//": "Exempt — the private build's home for owner-only code and content. The public cut drops these folders, so a literal inside one never ships. web's is the route group (owner): owner pages and API routes keep their URLs, and deleting the folder deletes them. tools/check-owner-seam.mjs reads this list too: product code reaches each folder only through its package's one seam file.",
+    "paths": ["web/app/(owner)/", "stream-api/owner/", "stream-ingest/owner/"]
+  },
+
+  "zeroPaths": {
+    "//": "Folders outside the packages that ship as they are and must hold NO literal at all — no baseline, no ratchet, zero. Checked on EVERY run of the scanner, whichever package it was pointed at, so no package script or CI line can forget them. No exclusion applies inside one: a README, a test or a comment here is published as it is. A path that does not exist is reported and passes. The whole public tree is checked the same way by `--tree` (every file, no exclusion).",
+    "migrations/baseline/": "the fresh-install baseline schema + seeds: the database every new install starts from",
+    "install/": "the installer and bundle: runs on every install's box",
+    "config/": "the shared definitions every package generates its copies from",
+    "docs/public/": "the public documentation",
+    "public-root/": "the files the public cut places at the root of the public repo (README, SECURITY, CONTRIBUTING, .github)"
+  },
+
+  "notScanned": {
+    "//": "Exclusions for the per-package RATCHET only — `--tree` and the zero paths apply none of them. Every exclusion states its reason.",
+    "segments": {
+      "node_modules": "third-party code",
+      ".next": "web's build output — compiled copies of the source being scanned",
+      ".claude": "agent tooling, not product",
+      ".superpowers": "agent tooling, not product",
+      "vendor": "third-party code",
+      "__fixtures__": "recorded provider payloads (Stripe test mode, PayPal, feeds) — test data that must stay byte-for-byte what the provider sent"
+    },
+    "prefixes": {
+      "stream-ingest/config/": "the bot's persona files — install content, not code, and not part of the public cut. A prefix, not a segment: web/app/api/billing/paypal/config/ is code and IS scanned"
+    },
+    "files": {
+      "\\.(test|probe)\\.[cm]?[jt]sx?$": "tests: the ratchet counts product code; the whole public tree, tests included, is held at zero by `--tree`",
+      "\\.md$": "documentation — held at zero in the public tree by `--tree`",
+      "(^|/)package-lock\\.json$": "generated by npm",
+      "\\.(mp3|png|jpe?g|gif|webp|ico|woff2?|ttf|otf)$": "binary media"
+    }
+  }
+}

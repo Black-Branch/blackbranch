@@ -1,0 +1,11 @@
+# The weekly check that the newest backup restores, started by blackbranch-verify.timer.
+# It restores the snapshot into a scratch database inside a throwaway container — nothing live is
+# touched — and writes /opt/blackbranch/results/backup-verify-last.json, which the doctor reads.
+[Unit]
+Description=Black Branch: check that the newest backup restores
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch restore latest --verify --scheduled

@@ -1,0 +1,86 @@
+<!doctype html>
+<!-- Sticker overlay — OBS browser source (add http://<stream-api host>:3001/overlay/sticker).
+     Transparent; idle until a showSticker frame arrives on the public WS (a coin
+     store sticker spend — see /chat/event kind 'sticker'). Stickers queue and
+     play one at a time: pop in, hold ~5s, fade out. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sticker</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; }
+  #stage {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+    gap: 10px;
+  }
+  #wrap { display: none; text-align: center; }
+  #wrap.show { display: block; animation: pop-in 380ms cubic-bezier(.2,1.6,.4,1); }
+  #wrap.hide { animation: fade-out 450ms ease-in forwards; }
+  @keyframes pop-in { from { opacity: 0; transform: scale(.4) translateY(24px); } to { opacity: 1; transform: none; } }
+  @keyframes fade-out { to { opacity: 0; transform: scale(.85); } }
+  #img { max-width: 70vw; max-height: 60vh; image-rendering: auto; filter: drop-shadow(0 6px 18px rgba(0,0,0,.55)); }
+  #who {
+    display: inline-block; margin-top: 4px; padding: 3px 10px; border-radius: 999px;
+    background: rgba(12,12,16,.85); border: 1px solid rgba(234,179,8,.45);
+    color: #fff; font-family: "Segoe UI", system-ui, sans-serif; font-size: 15px; font-weight: 600;
+  }
+  #who .n { color: #eab308; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="wrap">
+    <img id="img" alt="">
+    <div><span id="who"><span class="n"></span> sent a sticker</span></div>
+  </div>
+</div>
+<script>
+(function () {
+  var wrap = document.getElementById('wrap');
+  var img = document.getElementById('img');
+  var who = document.querySelector('#who .n');
+  var queue = [];
+  var busy = false;
+
+  var HOLD_MS = 5000;
+  var FADE_MS = 450;
+
+  function playNext() {
+    var s = queue.shift();
+    if (!s) { busy = false; return; }
+    busy = true;
+    img.onload = function () {
+      wrap.className = 'show';
+      setTimeout(function () {
+        wrap.className = 'show hide';
+        setTimeout(function () { wrap.className = ''; playNext(); }, FADE_MS);
+      }, HOLD_MS);
+    };
+    img.onerror = function () { wrap.className = ''; playNext(); };
+    who.textContent = s.username || 'Someone';
+    img.src = s.emoteUrl;
+  }
+
+  function enqueue(s) {
+    if (!s || !s.emoteUrl) return;
+    if (queue.length >= 5) return; // sanity cap — never build an endless backlog
+    queue.push(s);
+    if (!busy) playNext();
+  }
+
+  function connect() {
+    var ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+    ws.onmessage = function (ev) {
+      var f; try { f = JSON.parse(ev.data); } catch (e) { return; }
+      if (f.type === 'showSticker') enqueue(f);
+    };
+    ws.onclose = function () { setTimeout(connect, 3000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) { /* noop */ } };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>
