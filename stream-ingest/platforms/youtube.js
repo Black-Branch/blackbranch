@@ -63,7 +63,7 @@ function ytRunUrl(run) {
   if (!raw) return '';
   try {
     const u = new URL(raw, 'https://www.youtube.com');
-    if (u.hostname.endsWith('youtube.com') && u.pathname === '/redirect') {
+    if ((u.hostname === 'youtube.com' || u.hostname.endsWith('.youtube.com')) && u.pathname === '/redirect') {
       return u.searchParams.get('q') || u.href;
     }
     return u.href;

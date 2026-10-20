@@ -9,6 +9,7 @@ import pool from "@/lib/db";
 import { createTtlCache } from "./ttlCache";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { instanceString } from "./instanceConfigServer.ts";
+import { decodeHtmlEntities } from "@/app/lib/htmlEntities";
 
 export type CommunityStatus = {
   display_name: string;
@@ -70,12 +71,6 @@ const avatarCache = new Map<string, { url: string | null; ts: number; ttlMs: num
 const AVATAR_CACHE_MS = 24 * 60 * 60 * 1000;
 const AVATAR_FAIL_CACHE_MS = 5 * 60 * 1000;
 
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-}
-
 // Live check via the channel's public /live page — zero API quota. The old
 // search.list call cost 100 units each against a 100-queries/DAY limit, so
 // the rotation died ~8h after the key was provisioned ("worked once").
@@ -106,7 +101,7 @@ async function checkYouTubeLive(channelId: string) {
       const m =
         /<meta name="title" content="([^"]*)"/.exec(html) ??
         /<title>([^<]*)<\/title>/.exec(html);
-      title = decodeEntities(m?.[1] ?? "").replace(/ - YouTube$/, "");
+      title = decodeHtmlEntities(m?.[1] ?? "").replace(/ - YouTube$/, "");
       // The canonical link IS the live stream — "videoId" occurrences also
       // cover related videos, so they can't be used directly
       videoId =

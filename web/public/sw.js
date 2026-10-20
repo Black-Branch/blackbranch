@@ -177,7 +177,7 @@ self.addEventListener("fetch", (event) => {
   if (!EMOTE_HOSTS.test(url.host)) return;
   // jtvnw.net also serves Twitch PROFILE PICTURES; only emotes belong in this cache
   // (pfps churned it — every chatter ever seen, competing with the emotes).
-  if (url.host.endsWith("jtvnw.net") && !url.pathname.startsWith("/emoticons/")) return;
+  if (/(?:^|\.)jtvnw\.net$/.test(url.hostname) && !url.pathname.startsWith("/emoticons/")) return;
 
   event.respondWith(emoteCacheFirst(url.href, req));
 });

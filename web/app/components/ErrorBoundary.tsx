@@ -11,7 +11,6 @@ interface Props {
 
 interface State {
   hasError: boolean;
-  message: string;
 }
 
 /** sessionStorage, or null where touching it throws (private mode, blocked site
@@ -28,11 +27,11 @@ function safeSessionStorage(): Storage | null {
 export class ErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, message: "" };
+    this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(err: Error): State {
-    return { hasError: true, message: err.message };
+  static getDerivedStateFromError(): State {
+    return { hasError: true };
   }
 
   componentDidCatch(err: Error, info: React.ErrorInfo) {
@@ -57,7 +56,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
             <p className="text-secondary text-sm mb-2">Something went wrong here.</p>
             <button
               className="text-xs text-muted hover:text-secondary underline"
-              onClick={() => this.setState({ hasError: false, message: "" })}
+              onClick={() => this.setState({ hasError: false })}
             >
               Try again
             </button>

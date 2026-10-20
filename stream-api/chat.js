@@ -811,7 +811,7 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
     try {
       // The install's bot account posts here without ever signing in to the site, so it may have
       // no account row yet — and chat_messages references one. Created on its first line only.
-      if (matrixId && matrixId === botMatrixId()) {
+      if (matrixId === botMatrixId()) {
         await pool.query(
           `INSERT INTO site.users (matrix_id, display_name, is_bot) VALUES ($1, $2, true) ON CONFLICT (matrix_id) DO NOTHING`,
           [matrixId, String(username || '').slice(0, 64) || null]);

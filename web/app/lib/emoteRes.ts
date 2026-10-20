@@ -50,6 +50,22 @@ export function emoteCrossOrigin(url: string): "anonymous" | undefined {
 
 type Ladder ={ tokens: string[]; mult: number[]; h1: number };
 
+/** The lowercased hostname of an emote URL (absolute or protocol-relative), or "" when it does not parse. */
+function emoteHost(url: string): string {
+  try {
+    return new URL(url, "https://emote.invalid").hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/** Is this emote URL served from `domain` or a subdomain of it? The parsed host, never a substring
+ *  of the whole URL: `https://evil.test/jtvnw.net/1.0` is not Twitch. */
+export function emoteUrlOnHost(url: string, domain: string): boolean {
+  const host = emoteHost(url);
+  return host === domain || host.endsWith("." + domain);
+}
+
 // `tokens[i]` is the substring in the URL for rung i; its native height is mult[i] × h1.
 const STV: Ladder = { tokens: ["1x", "2x", "3x", "4x"], mult: [1, 2, 3, 4], h1: 32 };
 const TWITCH: Ladder = { tokens: ["1.0", "2.0", "3.0"], mult: [1, 2, 4], h1: 28 };
@@ -62,7 +78,7 @@ const BTTV: Ladder = { tokens: ["1x", "2x", "3x"], mult: [1, 2, 3], h1: 25 };
 // One descriptor per provider whose URL carries a size rung: how to recognize it,
 // its ladder, how to read the current rung token, and how to swap in another.
 type Provider = {
-  match: (url: string) => boolean;
+  domains: string[]; // the URL's host is one of these or beneath one
   ladder: Ladder;
   token: RegExp; // capture group 1 = the current rung token (a ladder token)
   swap: (url: string, token: string) => string;
@@ -70,25 +86,25 @@ type Provider = {
 
 const PROVIDERS: Provider[] = [
   { // 7TV — .../<id>/<Nx>[_static].<ext>
-    match: (u) => u.includes("7tv.app") || u.includes("7tv.io"),
+    domains: ["7tv.app", "7tv.io"],
     ladder: STV,
     token: /\/([1-4]x)(?:_static)?\.(?:webp|gif|avif|png)(?:\?|$)/,
     swap: (u, t) => u.replace(/\/[1-4]x((?:_static)?\.(?:webp|gif|avif|png))/, `/${t}$1`),
   },
   { // Twitch — .../dark/<N.0>
-    match: (u) => u.includes("jtvnw.net"),
+    domains: ["jtvnw.net"],
     ladder: TWITCH,
     token: /\/([1-3]\.0)(?:\?|$)/,
     swap: (u, t) => u.replace(/\/[1-3]\.0(\?|$)/, `/${t}$1`),
   },
   { // FFZ — .../emote/<id>/<1|2|4>
-    match: (u) => u.includes("frankerfacez.com"),
+    domains: ["frankerfacez.com"],
     ladder: FFZ,
     token: /\/([124])(?:\?|$)/,
     swap: (u, t) => u.replace(/\/[124](\?|$)/, `/${t}$1`),
   },
   { // BTTV — .../emote/<id>/[static/]<Nx>[.<ext>]
-    match: (u) => u.includes("betterttv.net"),
+    domains: ["betterttv.net"],
     ladder: BTTV,
     token: /\/([1-3]x)(?:\.\w+)?(?:\?|$)/,
     swap: (u, t) => u.replace(/\/[1-3]x((?:\.\w+)?(?:\?|$))/, `/${t}$1`),
@@ -97,7 +113,7 @@ const PROVIDERS: Provider[] = [
 // Anything unrecognized has no rung in the URL → left untouched.
 
 function providerFor(url: string): Provider | null {
-  for (const p of PROVIDERS) if (p.match(url)) return p;
+  for (const p of PROVIDERS) if (p.domains.some((d) => emoteUrlOnHost(url, d))) return p;
   return null;
 }
 

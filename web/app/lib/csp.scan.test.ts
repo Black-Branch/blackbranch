@@ -25,8 +25,11 @@ function directive(name: string): string {
   return m[0];
 }
 
+/** The directive's sources as tokens, so an origin is matched whole (never a prefix of a longer host). */
+const sources = (name: string): string[] => directive(name).slice(1, -1).split(/\s+/);
+
 test("script-src allows the PayPal SDK host and its objects host", () => {
-  const d = directive("script-src");
+  const d = sources("script-src");
   assert.ok(d.includes("https://www.paypal.com"), "script-src missing https://www.paypal.com — the SDK script tag would be blocked and the button simply would not appear");
   assert.ok(d.includes("https://www.paypalobjects.com"), "script-src missing https://www.paypalobjects.com");
 });
@@ -40,7 +43,7 @@ test("form-action is 'self': no form may post a viewer's input to another origin
 });
 
 test("frame-src allows BOTH the live and sandbox PayPal hosts", () => {
-  const d = directive("frame-src");
+  const d = sources("frame-src");
   assert.ok(d.includes("https://www.paypal.com"), "frame-src missing https://www.paypal.com");
   // The button renders inside a www.sandbox.paypal.com iframe under
   // sandbox credentials — the environment it is verified in — so

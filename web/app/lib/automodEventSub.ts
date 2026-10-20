@@ -17,9 +17,9 @@
 import pool from "@/lib/db";
 import { getBroadcasterToken } from "@/app/lib/platformMod/shared";
 import { twitchClientId } from "@/app/lib/twitch";
+import { EVENTSUB_WS_URL, isEventSubReconnectUrl } from "@/app/lib/twitchEventSubUrl";
 
 const SCOPE_AUTOMOD = "moderator:manage:automod";
-const WS_URL = "wss://eventsub.wss.twitch.tv/ws";
 
 let started = false;
 let ws: WebSocket | null = null;
@@ -27,6 +27,7 @@ let keepaliveTimer: ReturnType<typeof setTimeout> | null = null;
 let keepaliveMs = 30_000;
 let backoffMs = 1_000;
 let dormantLogged = false;
+let badReconnectLogged = false;
 
 type EventSubFrame = {
   metadata?: { message_type?: string };
@@ -72,7 +73,7 @@ async function ensure(): Promise<void> {
     return;
   }
   dormantLogged = false;
-  connect(WS_URL, false);
+  connect(EVENTSUB_WS_URL, false);
 }
 
 function connect(url: string, isReconnect: boolean): void {
@@ -106,11 +107,20 @@ function connect(url: string, isReconnect: boolean): void {
       if (!isReconnect && s?.id) void subscribe(s.id, socket);
     } else if (type === "session_reconnect") {
       const next = frame.payload?.session?.reconnect_url;
-      if (next) {
+      if (isEventSubReconnectUrl(next)) {
         // Twitch keeps delivering on the old socket until the new one gets its
         // welcome; it then closes the old one — our close handler ignores
         // sockets that are no longer current.
         connect(next, true);
+      } else if (next) {
+        // Not Twitch's EventSub host: never dial it. Start a fresh session on the
+        // fixed address instead (it subscribes again) and drop the old socket.
+        if (!badReconnectLogged) {
+          console.warn("[automod] session_reconnect named an address off Twitch's EventSub host — starting a fresh session instead");
+          badReconnectLogged = true;
+        }
+        connect(EVENTSUB_WS_URL, false);
+        try { socket.close(); } catch { /* already closing */ }
       }
     } else if (type === "notification") {
       void handleNotification(frame);

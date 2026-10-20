@@ -51,7 +51,9 @@ function createAuth({
   }
 
   function hasValidSecret(req) {
-    const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+    // The token starts at a non-space, so `\s+` and the token cannot trade characters:
+    // `\s+(.+)` backtracked quadratically on a long run of whitespace.
+    const m = /^Bearer\s+(\S.*)$/i.exec(req.get('authorization') || '');
     const token = m ? m[1] : '';
     if (!STREAM_API_SECRET || !token) return false;
     const a = Buffer.from(token), b = Buffer.from(STREAM_API_SECRET);

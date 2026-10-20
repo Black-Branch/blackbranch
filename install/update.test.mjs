@@ -710,6 +710,7 @@ test("the Admin Panel's request: the version in the request's name, checked; the
     b.publish("1.2.0");
     writeFileSync(path.join(b.home, "requests/update-check.req"), "");
     r = await b.run(["process-requests"]);
+    assert.equal(r.status, 0, r.stderr);
     assert.match(b.file("results/update-feed.json"), /"version":"1\.2\.0"/);
     assert.match(b.file("results/update-check.json"), /"verb":"update check","ok":true,.*"message":"1\.2\.0 is available/, "the request's own answer, beside the record");
     assert.match(read("systemd/blackbranch-update@.service"), /^ExecStart=\/usr\/local\/bin\/blackbranch update --apply %i$/m);

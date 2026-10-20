@@ -571,7 +571,7 @@ function createAlert({ broadcast, bufferPush, supportBar, obs, tts, lights, logS
         return true;
       } catch (e) {
         console.error('[alert] could not even record the failed event — %s/%s event=%s amount=%s %s: %s',
-          platform, eventType, eventId || '?', amountNative, currency, e.message);
+          platform, eventType, eventId, amountNative, currency, e.message);
       }
     }
     console.error('[alert] UNRECORDED payment — %s/%s event=%s amount=%s %s userId=%s: reconcile BY HAND from this line',

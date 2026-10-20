@@ -94,7 +94,11 @@ test("the rail's wrapper is the width-pressure container: the rail's @container 
   // rail measures against) would be 0px wide. A container query cannot match
   // its own container, which is why this lives on the wrapper and not on
   // .chrome-iconrail itself.
-  assert.match(bar, /<div ref=\{railRef\} className="[^"]*(?:^|\s)@container\s[^"]*\bflex-1\b[^"]*"/, "the rail wrapper is a container with a width");
+  // Read as class TOKENS, wherever they sit in the list: `@container` exactly (a named
+  // `@container/x` is another container) and `flex-1`.
+  const wrapperClasses = /<div ref=\{railRef\} className="([^"]*)"/.exec(bar)?.[1]?.split(/\s+/) ?? [];
+  assert.ok(wrapperClasses.includes("@container"), `the rail wrapper is a size container: ${wrapperClasses.join(" ")}`);
+  assert.ok(wrapperClasses.includes("flex-1"), `the rail wrapper has a width: ${wrapperClasses.join(" ")}`);
   // …and precisely because it is flex-1 (spanning the empty bar), the menu's
   // outside-click anchor is the RAIL's own box inside it, never the wrapper:
   // anchored to the wrapper, a press in the empty stretch kept the menu open.

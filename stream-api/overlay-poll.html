@@ -92,9 +92,11 @@
     state.options.forEach(function (o) {
       var d = document.createElement('div');
       d.className = 'opt';
+      // Static markup only: every value from the socket goes in as text, never as HTML.
       d.innerHTML = '<div class="fill"></div>' +
-        '<div class="row"><span class="num">' + o.n + '</span>' +
+        '<div class="row"><span class="num"></span>' +
         '<span class="txt"></span><span class="pct"></span><span class="cnt"></span></div>';
+      d.querySelector('.num').textContent = o.n;
       d.querySelector('.txt').textContent = o.text;
       optsEl.appendChild(d);
       rows[o.n] = { root: d, fill: d.querySelector('.fill'),

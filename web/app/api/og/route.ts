@@ -6,6 +6,7 @@ import { createSlidingWindowLimiter, ipKey } from "@/app/lib/rateLimit";
 import { tweetIdFromUrl } from "@/app/lib/tweetId";
 import { tweetCardFromFx } from "@/app/lib/tweetCard";
 import { authOrigin } from "@/app/lib/authOrigin";
+import { decodeHtmlEntities } from "@/app/lib/htmlEntities";
 
 // Made on first use, not at load: the origin is this install's, read when the server starts (a
 // module evaluated during `next build` has none).
@@ -25,7 +26,7 @@ const isRateLimited = createSlidingWindowLimiter(60_000, 30);
 function extractMeta(html: string, ...selectors: RegExp[]): string | null {
   for (const sel of selectors) {
     const m = html.match(sel);
-    if (m?.[1]) return m[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#039;/g, "'").trim();
+    if (m?.[1]) return decodeHtmlEntities(m[1]).trim();
   }
   return null;
 }
@@ -61,13 +62,14 @@ export async function GET(req: NextRequest) {
   }
 
   // x.com hands a server-side fetcher a JS shell with no OG tags, so a tweet
-  // link goes to FxTwitter's JSON API by id — the id is digits or nothing
-  // (tweetIdFromUrl), so this URL is never built from user input, and there is
-  // no fall-through to the generic scrape: a missing tweet is no card.
+  // link goes to FxTwitter's JSON API by id. The id is digits (tweetIdFromUrl),
+  // checked again here where the URL is built, so only a number ever reaches the
+  // path. There is no fall-through to the generic scrape: a missing tweet is no card.
   const tweetId = tweetIdFromUrl(url);
-  if (tweetId) {
+  if (tweetId !== null) {
+    if (!/^\d{1,25}$/.test(tweetId)) return Response.json(null);
     try {
-      const fx = await fetch(`https://api.fxtwitter.com/status/${tweetId}`, {
+      const fx = await fetch(`https://api.fxtwitter.com/status/${encodeURIComponent(tweetId)}`, {
         headers: { "User-Agent": ogUserAgent(), Accept: "application/json" },
         signal: AbortSignal.timeout(6000),
       });

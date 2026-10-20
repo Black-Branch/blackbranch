@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderAll, setupLists } from "../tools/gen-platform-docs.mjs";
+import { renderAll, renderIndex, setupLists } from "../tools/gen-platform-docs.mjs";
 
 const REPO = join(fileURLToPath(import.meta.url), "..", "..");
 
@@ -25,6 +25,13 @@ test("every setup list has its page, and the index links each one", () => {
   }
   // A value to paste is shown for an example domain, never with a hole in it.
   for (const [f, text] of Object.entries(files)) assert.doesNotMatch(text, /\{(origin|apiOrigin|domain|matrixOrigin|serverName)\}/, f);
+});
+
+test("an index description keeps its pipes and backslashes inside its own cell", () => {
+  const row = renderIndex([{ id: "x", label: "X", kind: "module", description: String.raw`a | b \| c \ d` }])
+    .split("\n").find((l) => l.startsWith("| [X]"));
+  // Escaped: `\\` for each backslash, then `\|` for each pipe — so the table splitter sees no bare pipe.
+  assert.equal(row, String.raw`| [X](x.md) | module (switch) | a \| b \\\| c \\ d |`);
 });
 
 test("the committed pages are exactly what the setup lists make", () => {

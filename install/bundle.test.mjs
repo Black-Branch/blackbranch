@@ -436,6 +436,7 @@ test("setup link: one token, root-only, its sha256 in .env for the site; reprint
     assert.doesNotMatch(h.calls().slice(before), /compose up/);
     // --new: a different token, and the hash follows it.
     r = h.run("setup-link", "--new");
+    assert.equal(r.status, 0, r.stderr);
     const token2 = readFileSync(tokenFile, "utf8").trim();
     assert.notEqual(token2, token);
     assert.equal(envValue(h.env(), "SETUP_TOKEN_HASH"), execFileSync("sha256sum", { input: token2, encoding: "utf8" }).split(" ")[0]);

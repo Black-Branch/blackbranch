@@ -11,6 +11,7 @@
 import type { EmoteMap } from "./emoteMap";
 import { emoteQuery } from "./emoteSearch.ts";
 import { groupPersonalEntries } from "./personalEmotes.ts";
+import { emoteUrlOnHost } from "./emoteRes.ts";
 
 export type PickerCategory = "all" | "7tv" | "bttv" | "twitch" | "ffz" | "mine";
 type Provider = Exclude<PickerCategory, "all" | "mine">;
@@ -23,9 +24,9 @@ const OTHER_CHANNELS_LABEL = "Other channels";
 const GLOBALS_LABEL = "Twitch globals";
 
 function detectProvider(url: string): Provider {
-  if (url.includes("cdn.7tv.app")) return "7tv";
-  if (url.includes("cdn.betterttv.net")) return "bttv";
-  if (url.includes("jtvnw.net")) return "twitch";
+  if (emoteUrlOnHost(url, "cdn.7tv.app")) return "7tv";
+  if (emoteUrlOnHost(url, "cdn.betterttv.net")) return "bttv";
+  if (emoteUrlOnHost(url, "jtvnw.net")) return "twitch";
   return "ffz";
 }
 

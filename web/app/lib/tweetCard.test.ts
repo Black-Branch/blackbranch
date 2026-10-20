@@ -86,7 +86,9 @@ test("the og route asks FxTwitter BEFORE the generic scrape and never scrapes x.
   const fx = src.indexOf("const tweetId = tweetIdFromUrl(url);");
   const scrape = src.indexOf("await safeFetch(url");
   assert.ok(fx > 0 && scrape > fx, "the tweet branch must sit before the generic scrape");
-  assert.match(src, /`https:\/\/api\.fxtwitter\.com\/status\/\$\{tweetId\}`/);
+  // Only a digits-only id reaches the fixed FxTwitter host, encoded.
+  assert.match(src, /if \(!\/\^\\d\{1,25\}\$\/\.test\(tweetId\)\) return Response\.json\(null\);/);
+  assert.match(src, /`https:\/\/api\.fxtwitter\.com\/status\/\$\{encodeURIComponent\(tweetId\)\}`/);
   assert.match(src, /if \(!fx\.ok\) return Response\.json\(null\);/);
   assert.match(src, /const json = await readJsonCapped\(fx, \d[\d *]*\);\s*return Response\.json\(json === null \? null : tweetCardFromFx\(json, url\)\);/);
   const lp = stripComments(readFileSync(join(webRoot, "app/components/LinkPreview.tsx"), "utf8"));

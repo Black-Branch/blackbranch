@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sizeEmoteUrl, stepDownEmoteUrl, lowerResEmoteUrl, stickerResEmoteUrl, twitchStillUrl, rungHeight, baselineEmoteUrl } from "./emoteRes.ts";
+import { sizeEmoteUrl, stepDownEmoteUrl, lowerResEmoteUrl, stickerResEmoteUrl, twitchStillUrl, rungHeight, baselineEmoteUrl, emoteUrlOnHost } from "./emoteRes.ts";
 
 const STV = "https://cdn.7tv.app/emote/01F/2x.webp";
 const TW = "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0";
@@ -152,4 +152,23 @@ test("twitchStillUrl: a message's Twitch emote pauses via the static format", ()
   assert.equal(twitchStillUrl("https://static-cdn.jtvnw.net/emoticons/v2/25/animated/dark/1.0"),
     "https://static-cdn.jtvnw.net/emoticons/v2/25/static/dark/1.0");
   assert.equal(twitchStillUrl("https://cdn.7tv.app/emote/01F/2x.webp"), undefined);
+});
+
+test("a provider is recognised by the URL's HOST, never by a substring anywhere in it", () => {
+  assert.equal(emoteUrlOnHost("https://cdn.7tv.app/emote/a/2x.webp", "7tv.app"), true);
+  assert.equal(emoteUrlOnHost("https://7tv.app/x", "7tv.app"), true);
+  assert.equal(emoteUrlOnHost("//static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0", "jtvnw.net"), true, "protocol-relative");
+  assert.equal(emoteUrlOnHost("https://CDN.FrankerFaceZ.com/emote/1/2", "frankerfacez.com"), true, "case-insensitive");
+  for (const lookalike of [
+    "https://evil.test/7tv.app/emote/a/2x.webp",
+    "https://7tv.app.evil.test/emote/a/2x.webp",
+    "https://not7tv.app/emote/a/2x.webp",
+    "https://evil.test/?u=cdn.7tv.app",
+    "", "not a url",
+  ]) {
+    assert.equal(emoteUrlOnHost(lookalike, "7tv.app"), false, lookalike);
+  }
+  // …so a lookalike gets no rung treatment at all.
+  assert.equal(sizeEmoteUrl("https://evil.test/7tv.app/emote/a/2x.webp", 128), "https://evil.test/7tv.app/emote/a/2x.webp");
+  assert.equal(stepDownEmoteUrl("https://evil.test/jtvnw.net/2.0"), null);
 });

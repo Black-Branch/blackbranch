@@ -115,7 +115,7 @@ test("the request name: only a release version rides in it", async () => {
   // The host accepts the same shape (install/blackbranch VERSION_RE): the two patterns agree.
   const host = readFileSync(join(WEB, "..", "install", "blackbranch"), "utf8").match(/^VERSION_RE='(.*)'$/m)?.[1];
   assert.ok(host, "the host's pattern");
-  const hostRe = new RegExp(host.replace(/\\\./g, "\\."));
+  const hostRe = new RegExp(host); // the shell's ERE is written in JS regex syntax too
   for (const v of ["1.2.0", "1.2.0-beta.1", "0.0.0", "1.2", "1.2.0+x", "01.2.0", "1.2.0-Beta"]) assert.equal(hostRe.test(v), RELEASE_VERSION.test(v), v);
 });
 

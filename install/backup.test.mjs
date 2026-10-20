@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync, execFileSync } from "node:child_process";
 import { createCipheriv, randomBytes, createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, existsSync, statSync, symlinkSync, openSync, writeSync, closeSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, existsSync, statSync, symlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -267,6 +267,7 @@ test("the request verbs: backup, backup-test (a backup, then a verify of it), ba
     writeFileSync(path.join(h.fake, "run-out-verify"), `BBRESULT ${JSON.stringify(verdict((x) => { x.signingKey = null; }))}\n`);
     writeFileSync(path.join(h.home, "requests/backup-test.req"), "");
     r = h.runWith({ BB_BACKUP_TARGET_FILE: file, FAKE_RUN_STATUS: "0" }, "process-requests");
+    assert.equal(r.status, 0, r.stderr); // the request was handled; its answer says the test failed
     const res2 = JSON.parse(readFileSync(path.join(h.home, "results/backup-test.json"), "utf8"));
     assert.equal(res2.ok, false); assert.match(res2.message, /VERIFY FAILED: .*signingKey/);
     assert.equal(JSON.parse(readFileSync(path.join(h.home, "results/backup-verify-last.json"), "utf8")).ok, false);
@@ -329,6 +330,8 @@ test("install verification pass: a new box whose .env was lost — the recovery 
     const sk = "S3-" + randomBytes(8).toString("hex");
     writeFileSync(path.join(h.fake, "run-out-check"), 'BBRESULT {"ok":true,"repo":"ok"}\n');
     r = tt({ BB_S3_ACCESS_KEY_ID: "AKID", BB_S3_SECRET_ACCESS_KEY: sk }, "restore", "latest", "--verify", "--from", "s3:https://s3.example.test/b");
+    // Past the key check (no verify verdict is faked here, so the run itself ends in VERIFY FAILED).
+    assert.doesNotMatch(r.stderr, /set BB_S3_ACCESS_KEY_ID/, r.stderr);
     assert.match(readFileSync(path.join(h.fake, "env"), "utf8"), new RegExp(`AWS_SECRET_ACCESS_KEY=${sk}`));
     assert.ok(!h.calls().includes(sk));
   } finally { rmSync(h.home, { recursive: true, force: true }); }

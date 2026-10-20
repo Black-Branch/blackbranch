@@ -74,9 +74,9 @@ function registerChatMod(app, { pool, msgBuffer, broadcast, redactBuffered, requ
     // deletion instead of resurrecting the message.
     const b = msgBuffer.find(x => x.type === 'message'
       && String(x.id) === String(messageId)
-      && (x.platform || null) === (platform || null));
+      && x.platform === platform);
     redactBuffered(b);
-    broadcast({ type: 'delete', messageId, platform: platform || null });
+    broadcast({ type: 'delete', messageId, platform });
     dropSpotlightIf((p, id) => p === platform && id === String(messageId));
     res.json({ ok: true });
   }));

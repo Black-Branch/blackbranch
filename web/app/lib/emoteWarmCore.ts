@@ -3,6 +3,7 @@
 // in emoteWarmCore.test.ts. See emoteWarmer.ts for the why.
 
 import type { EmoteInfo, EmoteMap } from "./emoteMap";
+import { emoteUrlOnHost } from "./emoteRes.ts";
 
 /** The 300 most-used ≈ 90 % of uses (30-day measurement). */
 const HOT_RANKS = 300;
@@ -11,7 +12,7 @@ const RECORD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export type WarmNet = { saveData?: boolean; effectiveType?: string };
 export type WarmPlan = { hot: string[]; tail: string[] };
 
-const isChannelTwitch = (info: EmoteInfo) => info.url.includes("jtvnw.net");
+const isChannelTwitch = (info: EmoteInfo) => emoteUrlOnHost(info.url, "jtvnw.net");
 
 /**
  * Pure: which URLs to warm, in which tier and order. `size` maps a URL (+ the

@@ -138,7 +138,7 @@ test("the STORED message is never rewritten", () => {
     "app/lib/blocklistReview.ts",
   ];
   for (const f of senders) {
-    const src = readFileSync(join(HERE, "..", "..", f.replace(/^app\//, "app/")), "utf8");
+    const src = readFileSync(join(HERE, "..", "..", f), "utf8");
     assert.doesNotMatch(src, /stripTracking/,
       `${f} strips tracking params before storing — the stored link must stay as typed`);
   }

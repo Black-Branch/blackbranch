@@ -157,7 +157,9 @@ async function deliver({ msg, raw, clean, words, isBot, isCommand, opts }) {
       login: msg.login || undefined,
     });
   } catch (err) {
-    console.warn(`[pipeline] POST /chat failed (${logWho(msg)}):`, err.message);
+    // The platform and user id come from the platform: they ride as an argument, never in the
+    // format string, so a `%` in them cannot consume err.message.
+    console.warn('[pipeline] POST /chat failed (%s):', logWho(msg), err.message);
     // This return drops a chat message. `deliver` is called un-awaited from every
     // platform adapter, so nothing upstream can tell — the viewer's line never
     // reaches the site, the overlay, the log or the bot. The run alarm makes a

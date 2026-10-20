@@ -156,3 +156,18 @@ test('enforcing with no secret refuses to START rather than half-working', () =>
   createAuth({ env: { STREAM_API_ENFORCE: '0' }, exit: (c) => ok.push(c), ...quiet });
   assert.deepEqual(ok, [], 'startup fatal fires on a valid config');
 });
+
+test('the bearer parse is linear: a long run of whitespace with no token is refused at once', () => {
+  const auth = createAuth({ env: { STREAM_API_SECRET: 'topsecret' }, ...quiet });
+  // `^Bearer\s+(.+)$` backtracked quadratically on this (about 1.3 s at this length).
+  const t0 = process.hrtime.bigint();
+  const { res, nexted } = run(auth, { authorization: 'Bearer ' + ' '.repeat(50_000) + '\n' });
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.equal(nexted, false);
+  assert.equal(res.statusCode, 401);
+  assert.ok(ms < 100, `the parse took ${ms.toFixed(0)} ms`);
+  // Whitespace still separates the secret from "Bearer", and only exactly the secret passes.
+  assert.equal(run(auth, { authorization: 'bearer \t topsecret' }).nexted, true);
+  assert.equal(run(auth, { authorization: 'Bearer topsecret ' }).nexted, false);
+  assert.equal(run(auth, { authorization: 'Bearer    ' }).nexted, false);
+});

@@ -144,3 +144,21 @@ test("the abort signal reaches the fetch", async () => {
   assert.deepEqual(out, { ok: false, error: "timeout" });
   assert.ok(seen?.aborted, "the fetch must be given a signal that the deadline aborts");
 });
+
+test("hostile markup in an article comes out inert (sanitize-html's iframe-fallback and noscript paths)", async () => {
+  const hostile = `<!doctype html><html><head><title>T</title></head><body><article><h1>T</h1><p>${
+    "A paragraph long enough for the reader view to keep this article as its main content. ".repeat(8)
+  }<img src="https://i.test/a.png" onerror="alert(1)"><a href="javascript:alert(2)">x</a></p>` +
+    `<iframe><img src="https://i.test/b.png" onerror="alert(3)"><script>alert(4)</script></iframe>` +
+    `<noscript><p></noscript><img src="https://i.test/c.png" onerror="alert(5)"></p></noscript>` +
+    `<p>${"More plain text so the article stays the main content of the page. ".repeat(6)}</p></article></body></html>`;
+  const x = make(async () => page(hostile));
+  const out = await x.extract("https://news.test/hostile");
+  assert.ok(out && out.ok, JSON.stringify(out));
+  const html = out.data.html;
+  assert.match(html, /A paragraph long enough/, "the article itself survived");
+  for (const bad of [/onerror/i, /javascript:/i, /<script/i, /<iframe/i, /<noscript/i, /alert\(4\)/]) {
+    assert.doesNotMatch(html, bad, `${bad} reached the reader: ${html}`);
+  }
+});
+

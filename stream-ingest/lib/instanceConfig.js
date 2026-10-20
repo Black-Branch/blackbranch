@@ -129,7 +129,7 @@ export function createInstanceConfig({
       unreadable = new Set(Array.isArray(sec?.unreadable) ? sec.unreadable : []);
       if (con) {
         const next = {};
-        for (const [k, v] of Object.entries(con && typeof con.content === 'object' && con.content ? con.content : {})) {
+        for (const [k, v] of Object.entries(typeof con.content === 'object' && con.content ? con.content : {})) {
           if (v && typeof v.body === 'string') next[k] = v.body;
         }
         content = next;

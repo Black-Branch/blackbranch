@@ -17,7 +17,9 @@ const SOURCES = [...OVERLAY_SOURCES, ...RIG_OVERLAYS.sources];
 const { default: OverlayDirectory } = await import("../components/OverlayDirectory.tsx");
 
 const html = renderToStaticMarkup(createElement(OverlayDirectory));
-const unescape = (s: string) => s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
+// One pass, so a value React escaped TWICE (`&amp;quot;`) does not read back as correct.
+const ENTITY: Record<string, string> = { "&amp;": "&", "&quot;": '"', "&#x27;": "'" };
+const unescape = (s: string) => s.replace(/&amp;|&quot;|&#x27;/g, (e) => ENTITY[e]!);
 
 test("every source is on the page with its name and what OBS is given", () => {
   const text = unescape(html);

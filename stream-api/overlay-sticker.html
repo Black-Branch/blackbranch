@@ -59,13 +59,23 @@
     };
     img.onerror = function () { wrap.className = ''; playNext(); };
     who.textContent = s.username || 'Someone';
-    img.src = s.emoteUrl;
+    img.src = s.src;
   }
 
-  function enqueue(s) {
-    if (!s || !s.emoteUrl) return;
+  // The image address comes off the public socket, so only an https: URL is loaded —
+  // never javascript:, data: or a plain-http address. Anything else is skipped.
+  function httpsUrl(raw) {
+    try {
+      var u = new URL(String(raw));
+      return u.protocol === 'https:' ? u.href : null;
+    } catch (e) { return null; }
+  }
+
+  function enqueue(f) {
+    var src = f && httpsUrl(f.emoteUrl);
+    if (!src) return;
     if (queue.length >= 5) return; // sanity cap — never build an endless backlog
-    queue.push(s);
+    queue.push({ src: src, username: f.username });
     if (!busy) playNext();
   }
 

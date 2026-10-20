@@ -36,7 +36,8 @@ export function splitTokens(text: string): string[] {
   const out: string[] = [];
   let i = 0;
   while (i <= text.length) {
-    if (text[i] === "[") {
+    // i reaches text.length on purpose (a trailing space yields a final "" token, like split).
+    if (i < text.length && text[i] === "[") {
       const m = MD_LINK_HEAD_RE.exec(text.slice(i));
       if (m) {
         const end = i + m[0].length;

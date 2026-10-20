@@ -313,7 +313,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // (a `COOLDOWN_MS` in web) keep a genuinely dead export alive. A bare word
   // match cannot tell two same-named symbols apart; requiring the file to
   // import the package is what can.
-  const importsPkg = new RegExp(`(?:require\\(|from\\s+)["'][^"']*${pkg}/`);
+  const pkgRe = pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // a folder name, matched literally
+  const importsPkg = new RegExp(`(?:require\\(|from\\s+)["'][^"']*${pkgRe}/`);
   const world = { ...own };
   for (const [path, text] of Object.entries(readTree(REPO, REPO, ANY_SOURCE))) {
     if (!path.startsWith(`${pkg}/`) && importsPkg.test(text)) world[path] = text;

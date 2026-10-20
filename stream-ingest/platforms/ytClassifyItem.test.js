@@ -99,3 +99,16 @@ test("an unrecognised renderer is 'other', which is expected and not a loss", ()
   assert.equal(ytClassifyItem({}).kind, 'other');
   assert.equal(ytClassifyItem(null).kind, 'other');
 });
+
+test("a link run is unwrapped only from YouTube's own redirect shim", () => {
+  const link = (url) => ytClassifyItem(textItem({ message: { runs: [
+    { text: 'https://site.test/a…', navigationEndpoint: { urlEndpoint: { url } } },
+  ] } })).data.text;
+  const target = 'https://site.test/a/long/path';
+  const q = `?q=${encodeURIComponent(target)}`;
+  assert.equal(link(`https://www.youtube.com/redirect${q}`), target);
+  assert.equal(link(`https://youtube.com/redirect${q}`), target);
+  // A host that merely ends in "youtube.com" is not YouTube's shim: nothing is unwrapped, so the
+  // run keeps its display text.
+  assert.equal(link(`https://notyoutube.com/redirect${q}`), 'https://site.test/a…');
+});

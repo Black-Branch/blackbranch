@@ -6,6 +6,7 @@
 // Run: node --test lib/pipelineLogs.test.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { format } from 'node:util';
 
 // postChat goes through fetch to STREAM_API_URL — a made-up address, and fetch is stubbed.
 process.env.STREAM_API_URL = 'http://stream-api.site.test';
@@ -18,7 +19,7 @@ async function run(msg, opts, respond) {
   const orig = {};
   for (const k of ['log', 'info', 'warn', 'error', 'debug']) {
     orig[k] = console[k];
-    console[k] = (...a) => lines.push(a.map(String).join(' '));
+    console[k] = (...a) => lines.push(format(...a)); // what console itself prints
   }
   const realFetch = global.fetch;
   let done;
@@ -107,4 +108,12 @@ test('an over-long command word is cut, so a pasted line cannot ride in as the "
   const line = lines.find((l) => l.includes('SKIPPED'));
   const cmd = line.match(/cmd=(\S+)/)[1];
   assert.ok(cmd.length <= 24, `command word is ${cmd.length} chars`);
+});
+
+test('a platform user id carrying format specifiers is printed as written and does not eat the error', async () => {
+  const lines = await run({ platform: 'twitch', userId: '%s%o%d', username: 'casey', message: 'hi' }, {},
+    () => new Response('boom', { status: 500 }));
+  const line = lines.find((l) => l.includes('POST /chat failed'));
+  assert.ok(line, lines.join('\n'));
+  assert.match(line, /\(twitch user=%s%o%d\): \S/, `the id was read as a format string: ${line}`);
 });

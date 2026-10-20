@@ -61,7 +61,7 @@ test("a stale release (the previous holder's own release fn, after it lost the s
   const dm2 = tenant("dm2");
   const releaseDm = bindComposer(dm.sendTo("dm:@peer:site.test", "peer"));
   bindComposer(dm2.sendTo("dm:@other:site.test", "other"));
-  assert.equal(releaseDm(), undefined);
+  releaseDm(); // the first window's own release, after it lost the slot
   assert.equal(releaseComposer("dm"), false, "dm no longer holds the slot");
   assert.equal(currentBinding()?.windowId, "dm2", "the second DM's binding is intact");
   assert.equal(dm2.closes, 0);

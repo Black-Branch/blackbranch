@@ -129,9 +129,15 @@ test('a 401 that survives the re-mint is unknown, never offline', async () => {
 
 test('Twitch unavailable: an HTTP 5xx, a network error, or a token endpoint that fails is unknown', async () => {
   let w = world({ token: mint, helix: () => json({ message: 'unavailable' }, 503) });
-  try { assert.equal((await twitchStatus()).state, 'unknown'); } finally { global.fetch = realFetch; }
+  try {
+    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.ok(w.helixCalls.length >= 1, 'Twitch was asked, and its 503 is the answer');
+  } finally { global.fetch = realFetch; }
   w = world({ token: mint, helix: () => { throw new Error('ETIMEDOUT'); } });
-  try { assert.equal((await twitchStatus()).state, 'unknown'); } finally { global.fetch = realFetch; }
+  try {
+    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.ok(w.helixCalls.length >= 1, 'Twitch was asked, and the network error is the answer');
+  } finally { global.fetch = realFetch; }
   // Force a re-mint (a 401), then have the token endpoint fail.
   w = world({ token: () => json({ message: 'down' }, 500), helix: () => json({ status: 401 }, 401) });
   try {
