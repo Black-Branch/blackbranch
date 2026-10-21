@@ -207,7 +207,9 @@ export function createPaypalSubscriptions(deps: Deps) {
     try {
       client = await deps.pool.connect();
       await client.query("BEGIN");
-      let locked = before?.matrix_id ?? null;
+      // The viewer already locked: the pre-read row's. observe() handles ONE subscription, so a viewer
+      // first seen below takes their lock once and nothing reads the variable after.
+      const locked = before?.matrix_id ?? null;
       if (locked) await lockViewer(client, locked);
       let sub = ctx.preRead ?? await deps.api.getSubscription(subId);
       if (!sub) {
@@ -240,7 +242,6 @@ export function createPaypalSubscriptions(deps: Deps) {
         // First sight of the viewer: take their lock, then read again, so the state written was
         // read under it (§4.3). A re-check's own read is already stamped with its start.
         await lockViewer(client, viewer);
-        locked = viewer;
         if (!ctx.preRead) sub = (await deps.api.getSubscription(subId)) ?? sub;
       }
 

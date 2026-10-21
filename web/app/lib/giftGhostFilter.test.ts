@@ -70,7 +70,8 @@ function sqlStartingWith(head: string): string {
   const end = src.indexOf("`", at + 1);
   // The one interpolation these use: the records' entitlement fragment (community recipients skip
   // anyone already a Supporter), expanded exactly as the runtime builds it.
-  const body = src.slice(at + 1, end).replace('${columnEntitledSql("u.matrix_id", "$5")}', () => columnEntitledSql("u.matrix_id", "$5"));
+  const marker = "$" + '{columnEntitledSql("u.matrix_id", "$5")}'; // the interpolation's SOURCE text, not a template
+  const body = src.slice(at + 1, end).replace(marker, () => columnEntitledSql("u.matrix_id", "$5"));
   assert.ok(!body.includes("${"), "this query interpolates — the extractor would mis-read it");
   // Template-literal cooking for the only escapes these use: `\\` → `\`.
   assert.ok(!/\\[nrtux0-9]/.test(body), "an escape this cooker does not handle");

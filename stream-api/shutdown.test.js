@@ -154,7 +154,7 @@ test('the aggregate rebuild is stopped and awaited before the pool ends', () => 
   const iBoot = src.indexOf('await Promise.allSettled(bootLoads)');
   assert.ok(iBoot > 0 && iBoot < iPoolEnd, 'the boot reads are not awaited before the pool ends');
   for (const load of ['content.load()', 'sponsors.init()', 'supportBar.init()', 'pollEngine.init()']) {
-    assert.ok(new RegExp(`bootLoads\\.push\\([^;]*${load.replace(/[.()]/g, '\\$&')}`, 's').test(src), `${load} is not held in bootLoads`);
+    assert.ok(new RegExp(`bootLoads\\.push\\([^;]*${RegExp.escape(load)}`, 's').test(src), `${load} is not held in bootLoads`);
   }
 });
 

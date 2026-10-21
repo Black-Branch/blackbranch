@@ -22,7 +22,7 @@ const PAGES = ['overlay-alert.html', 'overlay-support-bar.html', 'overlay-meter.
 function inlineScript(file) {
   const html = fs.readFileSync(path.join(__dirname, file), 'utf8');
   assert.match(html, /<\/html>\s*$/, `${file}: read to its end`);
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
   assert.equal(scripts.length, 1, `${file}: one inline script`);
   assert.match(scripts[0], /\}\)\(\);\s*$/, `${file}: script read whole`);
   return scripts[0];
