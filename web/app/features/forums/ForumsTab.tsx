@@ -83,7 +83,7 @@ export function ForumsTab({ active, signedIn, openThread, onThreadConsumed }: {
     postJsonOrThrow<{ score: number; myVote: number | null }>("/api/forum/vote", { roomId: p.roomId, eventId: p.id, vote: next })
       .then((d) => posts.patch(p.id, (x) => ({ ...x, score: Number(d.score), myVote: d.myVote === 1 || d.myVote === -1 ? d.myVote : null })))
       // A refused vote is SAID — a lit arrow that quietly unlights reads as a
-      // broken site (final review). The list refreshes to the server's truth.
+      // broken site. The list refreshes to the server's truth.
       .catch(() => { setHint("Couldn't vote right now."); posts.refresh(); });
   };
   const onTogglePin = (p: ForumPostView) => {

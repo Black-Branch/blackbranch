@@ -5,6 +5,7 @@ import { postJson } from "@/app/lib/http";
 import { LoadingState } from "@/app/components/Spinner";
 import { rememberPayMethod } from "./payMethod";
 import { paypalSandbox } from "@/app/lib/paypalSdkEnv";
+import { paypalCurrencyCode } from "@/app/lib/moneyFormat";
 import type { TipDraft } from "./types";
 
 // PayPal's own gold/blue button, the PayPal/Venmo half of the split tip
@@ -56,7 +57,7 @@ const SCRIPT_ID = "paypal-sdk-script";
 function sdkUrl(clientId: string): string {
   const params = new URLSearchParams({
     "client-id": clientId,
-    currency: "USD",
+    currency: paypalCurrencyCode(),
     intent: "capture",
     components: "buttons",
     "enable-funding": "venmo",

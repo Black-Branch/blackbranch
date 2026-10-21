@@ -94,7 +94,7 @@ export default memo(function ChatMessage({
   /** Hover/focus the reply line: show (element) or hide (null) the whole
    *  replied-to message. */
   onReplyPreview?: (msg: ChatMsg, anchor: HTMLElement | null) => void;
-  /** Spend `amount` Qorm boosting the sticker rooted at `originalMessageId`.
+  /** Spend `amount` points boosting the sticker rooted at `originalMessageId`.
    *  Throws (HttpError) on failure — the boost popover surfaces the message. */
   onBoost?: (originalMessageId: number, amount: number) => Promise<void>;
   compact?: boolean;
@@ -344,7 +344,7 @@ export default memo(function ChatMessage({
   const score = msg.score ?? 0;
   const isEventRow = !!msg.system && msg.system !== "poll" && msg.system !== "sticker";
   // The highlight card — two ways onto it, one look:
-  //   • the purchased highlight (the 50-Qorm product, `system: "highlight"`)
+  //   • the purchased highlight (the 50-point product, `system: "highlight"`)
   //   • the streamer's spotlight (chatSpotlight.ts): the message being
   //     answered on stream, picked by a click, shown to everyone
   // The row must VISIBLY stand out — including on the OBS chat overlay, where
@@ -649,8 +649,8 @@ export default memo(function ChatMessage({
           // The sender's own line reached the site but missed a platform for a
           // passing reason (undeliveredLines.ts; a persistent refusal is the
           // composer's one note instead). INLINE and zero line-height: it never
-          // adds a row or height to the line — the old row under every refused
-          // line was the noise the U1 rework removed.
+          // adds a row or height to the line — a row under every refused line
+          // would be noise.
           <span
             data-undelivered
             role="img"

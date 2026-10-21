@@ -8,7 +8,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import "./testTsx.ts";
 import { MODULES } from "./instanceSchema.generated.mjs";
-import { setSupportModulesOff, type FlowNode } from "./support/flows.ts";
+import { setSupportFacts, type FlowNode } from "./support/flows.ts";
+
+/** The facts for an install that shows everything but `off` — the subscription is a Stripe part,
+ *  so it goes with Stripe. Every other fact on, so only the module decides. */
+function setSupportModulesOff(off: string[]): void {
+  setSupportFacts({ off, purchasable: true, subscriptions: !off.includes("stripe"), tts: true, freeText: true });
+}
 const flows = await import("./support/flows.ts");
 const { AboutFeatures } = await import("../about/AboutFeatures.tsx");
 // What the panel offers before any page has said which modules it shows.

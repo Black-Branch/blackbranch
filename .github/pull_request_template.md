@@ -1,0 +1,1 @@
+Thank you for taking the time. Code contributions are not open yet, so pull requests cannot be accepted at this stage — please open an issue instead (CONTRIBUTING.md says how). This will change once the preview settles.

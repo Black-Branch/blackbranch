@@ -2,7 +2,7 @@
 //
 // The support bar's `onAdd` IS `publish` — the bar banks the money, broadcasts its frame and
 // credits the timer first (supportbar.js's ORDER invariant), and only then tells the listeners.
-// A listener is anything that can be absent: the sponsor credit pool (core), or an owner plugin's
+// A listener is anything that can be absent: the sponsor credit pool (core), or a site plugin's
 // module that subscribes only when switched on (e.g. a funding meter).
 //
 // Each subscriber is guarded on its own, synchronous throw AND rejected promise, so one

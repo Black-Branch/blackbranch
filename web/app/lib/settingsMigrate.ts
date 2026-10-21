@@ -7,9 +7,9 @@
 // blob into the current one and stamps it, so every place converts to the SAME
 // result exactly once. Viewers never see the stamp.
 //
-// PURE and import-free on purpose: node --test imports it directly, the
-// server routes call it, and web/scripts/migrate-settings-v2.mjs runs the same
-// function against the DB. One converter, not three that must agree.
+// PURE and import-free on purpose: node --test imports it directly, and the
+// server routes and any one-off database conversion call the same function.
+// One converter, not several that must agree.
 
 export const SETTINGS_VERSION_KEY = "settingsVersion";
 // @test-only exported so tests can assert the current stamp value without

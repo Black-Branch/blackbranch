@@ -4,7 +4,7 @@
 // WebSocket. A caller is trusted if it presents the shared secret OR connects
 // from an internal source IP the tunnel cannot impersonate.
 //
-// IMPORTANT: the tunnel connector's host is the tunnel's egress IP, so it is NOT in
+// The tunnel connector's host is the tunnel's egress IP, so it is NOT in
 // the IP allowlist — a web server there must use the secret instead.
 // Co-located local services (anything on 127.0.0.1) pass on IP alone.
 //

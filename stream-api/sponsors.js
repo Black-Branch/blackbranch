@@ -26,9 +26,9 @@
 //
 // The name on the wire is the name the money arrived under — the platform's donation name —
 // unless the person has chosen to show their linked platforms (site.users.show_links, v153). The
-// link between a platform account and a site account is shown only where the person shows it
-// (owner decision 2026-10-17): naming a Twitch donation by the site account behind it, or listing
-// a person's other donation names beside it, published that link to everyone watching the credit
+// link between a platform account and a site account is shown only where the person shows it:
+// naming a Twitch donation by the site account behind it, or listing a person's other donation
+// names beside it, publishes that link to everyone watching the credit
 // line. So a donor who has NOT opted in is credited one row per donation name, each under that
 // name, with no aliases; a donor who HAS opted in is credited under their site display_name with
 // their donation names riding along as `aliases`, so a chat line sent from the donating platform
@@ -38,7 +38,7 @@
 // Anonymous donations are stored with username 'Anonymous' and are excluded
 // from the pool everywhere identity is keyed, live and replayed alike.
 //
-// Qorm-spend rows (cheer/sticker/…, index.js's SPEND_EVENT_TYPES) are excluded
+// Currency-spend rows (cheer/sticker/…, index.js's SPEND_EVENT_TYPES) are excluded
 // from every read here: a spend is spectacle, not support, and never lights a
 // clock.
 
@@ -462,7 +462,7 @@ function createSponsors({ pool, broadcast, timer, getStreamId, excludeEventTypes
     // Platform-scoped like every other fold here: the site-platform test is
     // load-bearing, not decoration — a session whose ONLY row is an external
     // platform's donation carrying event_type='cheer' (a coincidence, not a
-    // Qorm spend) must still count as supported.
+    // currency spend) must still count as supported.
     const r = await pool.query(
       `SELECT s.stream_id FROM stream.sessions s
         WHERE s.ended_at IS NOT NULL

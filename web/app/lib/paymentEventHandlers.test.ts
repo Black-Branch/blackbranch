@@ -216,7 +216,7 @@ test("a recordPaymentEvent throw propagates — the webhook route needs it to 50
   );
 });
 
-// ── Qorm clawback / restore ─────────────────────────────────────────────────
+// ── Coin clawback / restore ─────────────────────────────────────────────────
 
 test("refund.created claws back the refunded amount, keyed on the refund id", async () => {
   const { pool } = fakePool([
@@ -364,7 +364,7 @@ test("charge.dispute.closed with status lost does nothing more", async () => {
 //
 // A refund that later fails or is canceled never actually moved money back
 // to the buyer, but refund.created already ran the clawback — so the wallet
-// must get its Qorm back, the same way a won dispute does.
+// must get its coins back, the same way a won dispute does.
 
 test("refund.updated with status failed restores the clawback taken on refund.created", async () => {
   const { pool } = fakePool([

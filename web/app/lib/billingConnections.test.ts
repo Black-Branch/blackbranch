@@ -5,8 +5,8 @@
 // it and the webhook was refused, so every member's status change waited on
 // Stripe's redelivery backoff.
 //
-// The reconciler used to take a pool connection first and then wait for the
-// viewer's lock and for Stripe, so ten events for one viewer held ten
+// A reconciler that takes a pool connection first and then waits for the
+// viewer's lock and for Stripe lets ten events for one viewer hold ten
 // connections — the whole pool — while one waited on Stripe and nine on the
 // lock. Mock pool and fake Stripe: the property is how many connections are
 // asked for, which needs no database.

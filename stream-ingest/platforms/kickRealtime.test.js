@@ -207,8 +207,10 @@ test('home: env ids skip the lookup, monetization channel is subscribed too', as
   let h;
   try {
     h = await startKick();
+    assert.equal(h.health().state, 'starting', '/health: not reading chat yet');
     const conn = await waitFor(() => server.conns[0], 'connection');
     await waitFor(() => conn.cmds.filter((c) => c.subscribe).length === 2, 'two subscribes');
+    await waitFor(() => h.health().state === 'running', '/health running once chat is subscribed');
     assert.deepEqual(conn.cmds.filter((c) => c.subscribe).map((c) => c.subscribe.channel), [`chatrooms.${CHATROOM_ID}.v2`, `channel.${CHANNEL_ID}`]);
     assert.equal(http.calls.lookup.length, 0, 'both env ids set: no lookup');
     await waitFor(() => out.has(new RegExp(`\\[kick\\] subscribed channel\\.${CHANNEL_ID} for monetization`)), 'monetization subscribe logged');
@@ -233,7 +235,7 @@ test('home: a chatroom id without a channel id still looks both up — the descr
     await waitFor(() => server.conns[0], 'connection');
     assert.equal(http.calls.lookup.length, 1);
     assert.match(http.calls.descriptor[0].url, new RegExp(`/channels/${CHANNEL_ID}/`));
-    assert.ok(out.has(/KICK_CHATROOM_ID is set without KICK_CHANNEL_ID/, 'warn'));
+    assert.ok(out.has(/only one of "Kick chatroom id" \/ "Kick channel id" is set/, 'warn'));
   } finally {
     h?.stop();
     delete process.env.KICK_CHATROOM_ID;

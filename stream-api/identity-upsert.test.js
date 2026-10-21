@@ -48,8 +48,8 @@ function freshIdentity(pool) {
 }
 
 // Both create-path branches must be exercised: the fresh-canonical branch and
-// the linked-account branch. The linked branch was already guarded when the H9
-// regression shipped — which is exactly why the unguarded twin went unnoticed.
+// the linked-account branch. Guarding only one lets its unguarded twin regress
+// unnoticed.
 async function runFreshCreate() {
   const pool = capturePool();
   const id = await freshIdentity(pool).resolveOrCreate('kick', 'kick-123', 'SomeHandle');
@@ -84,7 +84,7 @@ for (const table of ['stream.nameidx', 'stream.links']) {
 }
 
 test('no username-match adoption — nameidx is never read to resolve', async () => {
-  // Behavioral form of the H9 guard: even with a same-handle stranger, the
+  // Behavioral form of the nameidx guard: even with a same-handle stranger, the
   // resolve path must never CONSULT nameidx — identity requires proof (a
   // stream.links row or an OAuth-linked account). If adoption returns, this
   // captures the SELECT and fails.

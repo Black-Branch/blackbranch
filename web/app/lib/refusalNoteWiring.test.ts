@@ -1,4 +1,4 @@
-// The U1 rework's wiring in the two components the runner cannot mount with
+// The refusal note's wiring in the two components the runner cannot mount with
 // their whole context (ChatInput, ChatMessage) — source scans with END anchors.
 // The behaviour itself is RUN in platformRefusals.test.ts, sendDeliveryHook.test.ts,
 // SendToButton.render.test.ts and ChatComposerField.note.render.test.ts.

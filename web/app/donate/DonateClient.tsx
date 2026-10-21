@@ -22,7 +22,7 @@ import { TipForm, type TipDraft, checkoutRequestFor } from "@/app/features/suppo
 //
 // Signed-out is the FIRST-CLASS case here: nothing on this page ever
 // REQUIRES an account — no sign-in wall, ever. A guest does see one one-line
-// nudge under the amount — "Sign in to also get N Qorm with this tip" — while
+// nudge under the amount — "Sign in to also get N points with this tip" — while
 // tipping itself still asks nothing of them. TipForm owns that line
 // (`signedIn` prop, below); this page's only job is answering it honestly.
 //
@@ -55,8 +55,8 @@ export function DonateClient({
   initialName: string;
   /** `Boolean(session?.user?.id)` from page.tsx's own `auth()` call — passed
    *  straight through to TipForm's required `signedIn` prop (see there) and
-   *  used here to gate the done view's "N Qorm is on its way" line, since
-   *  Qorm crediting needs a matrix_id and a guest tip has none. */
+   *  used here to gate the done view's "N points is on its way" line, since
+   *  crediting the currency needs a matrix_id and a guest tip has none. */
   signedIn: boolean;
   /** From process.env.PAYPAL_CLIENT_ID, read server-side in page.tsx (a
    *  server component) rather than a NEXT_PUBLIC_* build-time var — the
@@ -69,7 +69,7 @@ export function DonateClient({
    *  the SDK URL then carries PayPal's sandbox-only buyer-country=US. */
   paypalSandbox?: boolean;
 }) {
-  // Either provider opens the page (k, 2026-10-19): an install with PayPal/Venmo
+  // Either provider opens the page: an install with PayPal/Venmo
   // only must still take a tip. The server half's PayPal id is the first answer,
   // so a PayPal-only page never flashes "isn't configured".
   const { stripe: stripeOn, paypalClientId } = useBillingAvailability(serverPaypalClientId, paypalSandbox);
@@ -204,7 +204,7 @@ export function DonateClient({
         <div className="flex flex-col items-center gap-3 rounded-xl border border-raised bg-panel/60 py-8 text-center">
           <span className="text-3xl">♥</span>
           <p className="text-sm text-body">{draft && !draft.announce ? "Purchase complete — thank you!" : "Thank you for the support!"}</p>
-          {/* Only for a signed-in tipper — Qorm crediting needs a matrix_id,
+          {/* Only for a signed-in tipper — crediting points needs a matrix_id,
               and "on its way" (not "landed"): the webhook credits it, usually
               within seconds, but this view never claims it already has. */}
           {signedIn && draft && (

@@ -1,10 +1,10 @@
 // The process's lifetime, run for real: index.js against a stand-in stream-api (HTTP + its
 // WebSocket), on an install with no platform set up (PLATFORMS=none) — the shape of a fresh install.
 //
-// Found by the release-candidate rehearsal (install/ci/release-candidate.sh, 2026-10-18): there the
-// internal socket to stream-api was the process's ONLY live handle — every timer is unref'd — so when
-// stream-api closed it (a restart, an update's two restarts) the event loop emptied and node exited 0;
-// Docker restarted it (9 restarts in 45 s). The process must outlive the socket and reconnect.
+// There the internal socket to stream-api is the process's ONLY live handle — every timer is
+// unref'd — so when stream-api closes it (a restart, an update's two restarts) the event loop
+// could empty, node exit 0, and Docker restart-loop it. The process must outlive the socket and
+// reconnect.
 // Run: node --test processLifetime.test.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -70,6 +70,9 @@ test('🔴 stream-api closing the internal socket does not end the process: it k
     assert.equal(exited, null, `the process EXITED (${JSON.stringify(exited)}) when stream-api closed its socket (restart ${n}):\n${out}`);
   }
   assert.equal(sockets.length, 4, 'it connected again after every restart');
+  // The plugin line is one plain statement on every install, never an alarm-looking "not present".
+  assert.match(out, /^\[main\] site plugin: (loaded|none)$/m, out);
+  assert.doesNotMatch(out, /owner plugin/, out);
 
   // And it still stops cleanly when asked.
   child.kill('SIGTERM');

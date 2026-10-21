@@ -31,7 +31,7 @@ test("menu semantics: one menuitemradio per option, the current one checked", ()
 });
 
 test("plain names only — no header, no descriptions", () => {
-  for (const label of [`${siteName()} player`, "stream.place", "YouTube", "Twitch"]) assert.match(html, new RegExp(label));
+  for (const label of [`${siteName()} player`, "Streamplace", "YouTube", "Twitch"]) assert.match(html, new RegExp(label));
   assert.doesNotMatch(html, /Watch \S+ on|delay|ads|behind/i);
 });
 

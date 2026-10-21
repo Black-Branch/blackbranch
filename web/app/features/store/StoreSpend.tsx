@@ -141,7 +141,7 @@ export default function StoreSpend() {
       .then((d) => d.prices && setStylePrices(d.prices)).catch(() => {});
   }, []);
 
-  // Admin: set E — the Qorm a median engaged viewer earns per stream. Every
+  // Admin: set E — the points a median engaged viewer earns per stream. Every
   // store price is stored as a NUMBER OF STREAMS and rendered against E, so
   // this one number moves the whole table at once.
   //
@@ -169,7 +169,7 @@ export default function StoreSpend() {
       const pd = (await preview.json().catch(() => ({}))) as
         { changes?: PriceChange[]; current?: number; error?: string };
       if (!preview.ok) {
-        setErr((prev) => ({ ...prev, earnRate: pd.error === "bad_e" ? "That is outside the sane range (5–500)." : "Could not read the change." }));
+        setErr((prev) => ({ ...prev, earnRate: pd.error === "bad_e" ? "That is outside the allowed range (5–500)." : "Could not read the change." }));
         return;
       }
       const changes = pd.changes ?? [];
@@ -535,7 +535,7 @@ export default function StoreSpend() {
       </section>
 
       {/* Voice messages and the soundboard are not store items.
-            · Read aloud is a fixed 150-Qorm product armed from the composer's
+            · Read aloud is a fixed 150-point product armed from the composer's
               tools menu / `/tts`, not a store item, so it has no entry here.
               site.store_prices carries its `tts` row, and stream-api's
               `tts_msg` sink speaks its message — `tts_msg` is live and

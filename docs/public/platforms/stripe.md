@@ -2,7 +2,7 @@
 
 # Card payments (Stripe)
 
-Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, and Stripe's webhook address answers "not found", so Stripe keeps its events and retries them for about three days.
+Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers "not found" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them — cancel their subscriptions in Stripe first, or switch back on.
 
 This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel → Site → Modules — it is off on a new install. Its setup page then appears with the steps below.
 
@@ -22,7 +22,7 @@ Copy into the provider's page:
 | What | Value |
 |---|---|
 | Permissions: Write | `Checkout Sessions · Customers · Customer portal` |
-| Permissions: Read | `Subscriptions · Invoices · PaymentIntents · Webhook Endpoints · Account` |
+| Permissions: Read | `Subscriptions · Invoices · PaymentIntents · Webhook Endpoints · Account · Prices` |
 
 This step fills:
 

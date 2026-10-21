@@ -61,8 +61,8 @@ export async function clockActiveFor(matrixId: string, nowMs: number = Date.now(
       const body = (await res.json()) as { ok?: unknown; active?: unknown };
       if (body.ok !== true || typeof body.active !== "boolean") {
         // A 200 with valid JSON but the wrong shape (a route/field rename on
-        // the stream-api side, say) used to fall through the checks below and
-        // silently answer false with nothing to notice — see
+        // the stream-api side, say) would otherwise fall through the checks below
+        // and silently answer false with nothing to notice — see
         // sponsorClockParity.test.ts. Still pays 1x; this only makes it loud.
         console.warn("[coins] clock lookup 200'd with an unexpected body shape — paying 1x: %s", JSON.stringify(body));
       }

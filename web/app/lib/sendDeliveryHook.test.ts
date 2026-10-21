@@ -2,12 +2,12 @@
 // answers — the shapes the send route returns (route.ts, `failed` / `posted` /
 // `id` / `pollVote`), plus a source check that the route builds them.
 //
-// The U1 rework (k 2026-10-18): a line that went up on the site and was refused
+// A line that went up on the site and was refused
 // by a platform is never "message not sent" and is never an error per message.
 // A PERSISTENT refusal (followers-only, banned there…) is explained ONCE in the
 // composer's note and the platform is skipped for the session; a TRANSIENT
 // failure is noted at most once per platform per window. The three acceptance
-// tests k named are marked ACCEPTANCE below.
+// tests are marked ACCEPTANCE below.
 //
 // Run: node --test app/lib/sendDeliveryHook.test.ts
 import test from "node:test";
@@ -143,7 +143,7 @@ test("ACCEPTANCE: a transient failure shows at most once per window", async (t) 
   await v.unmount();
 });
 
-// ── Infrastructure: YouTube's quota is out (ticket #184) ─────────────────────
+// ── Infrastructure: YouTube's quota is out ───────────────────────────────────
 
 /**
  * The send route on a quota-out night: the site line goes up, YouTube answers

@@ -1,7 +1,7 @@
 "use client";
 // A moderator's view of who a chat line is: its canonical id and linked site account, resolved
 // from the line's public id (POST /api/mod/identity/resolve). Chat lines carry only per-platform
-// public ids (owner decision 2026-10-17); the moderation tools act by canonical and site account.
+// public ids; the moderation tools act by canonical and site account.
 //
 // Resolved when the line is RENDERED for a moderator, not when a control is clicked: every id on
 // screen joins one batched request per tick, and the answer is cached for the page, so a mod's

@@ -84,6 +84,35 @@ test("a handler throw inside the switch answers 500 — never a swallowed error"
   assert.match(src.slice(catchAt, catchAt + 300), /status: 500/, "a handler throw must 500 so PayPal retries");
 });
 
+test("subscriptions (S3): every BILLING.SUBSCRIPTION.* type reads state through the adapter; each sale type has its own handler", () => {
+  for (const t of ["CREATED", "ACTIVATED", "UPDATED", "EXPIRED", "CANCELLED", "SUSPENDED", "PAYMENT.FAILED"]) {
+    const at = src.indexOf(`case "BILLING.SUBSCRIPTION.${t}":`);
+    assert.ok(at > 0, `missing case for BILLING.SUBSCRIPTION.${t}`);
+    assert.ok(src.slice(at, src.indexOf("break;", at)).includes("onPaypalSubscriptionEvent(event)"), `BILLING.SUBSCRIPTION.${t} must reach the adapter`);
+  }
+  for (const [type, fn] of [
+    ["PAYMENT.SALE.COMPLETED", "onPaypalSaleCompleted"],
+    ["PAYMENT.SALE.REFUNDED", "onPaypalSaleRefunded"],
+    ["PAYMENT.SALE.REVERSED", "onPaypalSaleReversed"],
+    ["CUSTOMER.DISPUTE.RESOLVED", "onPaypalSaleDisputeResolved"],
+  ] as const) {
+    const at = src.indexOf(`case "${type}":`);
+    assert.ok(at > 0, `missing case for ${type}`);
+    assert.ok(src.slice(at, src.indexOf("break;", at)).includes(`${fn}(event)`), `case "${type}" must call ${fn}(event)`);
+  }
+  // Inside the try whose catch answers 500: a subscription handler's throw is redelivered.
+  const switchAt = src.indexOf("switch (event.event_type)");
+  const call = src.indexOf("onPaypalSubscriptionEvent(event)");
+  assert.ok(call > switchAt && call < src.indexOf("} catch (e) {", switchAt));
+});
+
+test("attack: an unauthenticated POST cannot make the site call PayPal — the cheap header/cert check answers 400 before the body is read or verify is asked", () => {
+  const gate = src.indexOf("if (!plausiblePaypalDelivery(req.headers))");
+  assert.ok(gate > src.indexOf("paypalWebhookConfigured()"), "after the configuration gate");
+  assert.ok(gate < src.indexOf("req.text()") && gate < src.indexOf("verifyPaypalWebhook("), "before the body and the verify call");
+  assert.match(src.slice(gate, gate + 300), /status: 400/);
+});
+
 test("the raw body is never logged", () => {
   assert.doesNotMatch(src, /console\.(?:error|warn|log)\([^)]*\braw\b/, "a log statement references the raw webhook body");
 });

@@ -8,7 +8,7 @@ const css = readFileSync(join(process.cwd(), "app/components/chrome/chrome.css")
 test("with rounded corners on, the dock's strip starts past the video panel's curve and the chat bar's trailing group clears its curve", () => {
   assert.match(css, /html:not\(\.panels-square\) \[data-bar="dock"\] \.chrome-sections \{ padding-left: \.75rem; \}/);
   // Scoped to the chat's OWN top bar at desktop width: the panel holds Matrix's
-  // bars too, and on a phone that corner is square (final review).
+  // bars too, and on a phone that corner is square.
   assert.match(css, /@media \(min-width: 768px\) \{\s*html:not\(\.panels-square\) \[data-bar="chat-top"\] \.chrome-bar-trail \{ padding-right: \.5rem; \}\s*\}/);
   assert.doesNotMatch(css, /\.bb-chat-panel \.chrome-bar-top \.chrome-bar-trail/);
 });
@@ -16,7 +16,7 @@ test("with rounded corners on, the dock's strip starts past the video panel's cu
 test("the dock's open tab becomes a folder tab: a rounded outline over the band's hole, painting NO colour of its own", () => {
   // The page behind the dock is a user-set gradient (--bg-body-start/end), so a
   // painted tab can never match it; the hole stays open and shows the real
-  // body through, and the tab only draws its rounded edge (final review, Important 4).
+  // body through, and the tab only draws its rounded edge.
   const start = css.indexOf("Rounded corners (settings");
   const block = css.slice(start, css.indexOf("Borrowed hit area", start));
   assert.ok(start > 0 && block.length > 0, "the rounded-corners block precedes the borrowed-hit-area rules");

@@ -8,6 +8,7 @@ import { matchesBlacklist } from "@/app/lib/blacklist";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { transcriptRole } from "@/app/lib/support/validate";
 import { NextRequest } from "next/server";
+import { shutdownSignal } from "@/app/lib/shutdownSignal";
 
 export const runtime = "nodejs";
 
@@ -73,8 +74,10 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ matrixId, username: identity.username, text, history, account }),
       // The relay holds up to 30 s (its ask timeout answers 504); this is the
-      // hard cap above it so a wedged socket can't pin the route forever.
-      signal: AbortSignal.timeout(35_000),
+      // hard cap above it so a wedged socket can't pin the route forever. And it
+      // ends at once when the process is told to stop (contract 5): a held ask
+      // must not hold the shutdown past Docker's grace.
+      signal: AbortSignal.any([AbortSignal.timeout(35_000), shutdownSignal()]),
     });
     if (!res.ok) return Response.json({ error: "unavailable" }, { status: 503 });
     const d = (await res.json().catch(() => null)) as { text?: string } | null;

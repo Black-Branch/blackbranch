@@ -41,12 +41,12 @@ test('start schedules the prune a minute after boot, then every 24 h, both unref
   assert.ok(prune, 'the first run did not prune');
   assert.match(prune.sql, /held_at < now\(\) - make_interval\(days => \$1::int\)/);
   assert.deepEqual(prune.params, [AUTOMOD_HELD_RETENTION_DAYS]);
-  assert.doesNotMatch(prune.sql, /status|source/, 'the prune is limited by status or source — k: whatever their status');
+  assert.doesNotMatch(prune.sql, /status|source/, 'the prune is limited by status or source — it must apply whatever their status');
   const daily = timers.made.find((t) => t.kind === 'interval' && t.ms === 24 * 60 * 60 * 1000);
   assert.ok(daily, 'no daily prune after the first');
   assert.ok(daily.unrefd, 'the daily prune holds the process open');
   const sweep = queries.findIndex((q) => /DELETE FROM site\.user_marks/.test(q.sql));
-  assert.ok(sweep > queries.indexOf(prune), 'the first run did not sweep the marks AFTER the held rows (round 6 D-E)');
+  assert.ok(sweep > queries.indexOf(prune), 'the first run did not sweep the marks AFTER the held rows');
   queries.length = 0;
   await daily.fn();
   assert.ok(queries.some((q) => /DELETE FROM site\.automod_held/.test(q.sql)), 'the daily run did not prune');
@@ -55,7 +55,7 @@ test('start schedules the prune a minute after boot, then every 24 h, both unref
   assert.ok(first.cleared && daily.cleared, 'stop left a prune timer running');
 });
 
-test('restart: after stop(), a new instance\'s start() registers both timers again and its runs sweep the marks (round 6 D-E)', async () => {
+test('restart: after stop(), a new instance\'s start() registers both timers again and its runs sweep the marks', async () => {
   const pool = { query: async () => ({ rowCount: 0 }) };
   const old = fakeTimers();
   const before = createAutomod({ pool, ai: {}, config, log: { log() {}, warn() {} }, timers: old });

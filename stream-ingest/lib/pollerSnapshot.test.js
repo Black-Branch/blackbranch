@@ -33,6 +33,9 @@ test('the tick hands snapshotBody the WATCHER\'s id, not the sticky viewer-count
   // session open. Source pin, end-anchored.
   const src = readFileSync(fileURLToPath(new URL('./poller.js', import.meta.url)), 'utf8');
   assert.match(src, /export function startPoller\([\s\S]*\}\s*$/, 'read to the end of poller.js');
-  assert.match(src, /snapshotBody\(\{ streamId, twRaw, yt, kickRaw, sp, ytVideoId: ytConfigured \? getYtVideoId\(\) : '' \}\)/);
+  // ytLiveId is this tick's VERIFIED id: the reader's own, or — with no reader running — the
+  // poller's own lookup's (youtubeReading), never the sticky viewer-count one.
+  assert.match(src, /snapshotBody\(\{ streamId, twRaw, yt: ytViewers, kickRaw, sp, ytVideoId: ytLiveId \}\)/);
+  assert.match(src, /const ytLiveId = yt\?\.videoId \|\| '';/);
   assert.doesNotMatch(src, /postViewerSnapshot\(snapshotBody\(\{[^}]*\bytVideoId \}\)\)/, 'the call site must not pass the bare sticky id');
 });

@@ -28,7 +28,7 @@ export type BoardRow = {
 
 /** The public part of the Home body: the top five of every face × window.
  *  A window is `null` while its cache is still warming (the boards never hold
- *  the Home body — final review 5); the widget says Loading… for it. */
+ *  the Home body); the widget says Loading… for it. */
 export type HomeBoards = Record<FaceId, Record<WindowId, BoardRow[] | null>>;
 
 /** Every window present. A body built while any is cold is served but not

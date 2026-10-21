@@ -14,7 +14,7 @@ import type Stripe from "stripe";
 import { currencyName } from "./currency.ts";
 
 /** A points purchase's suffix is the currency's own name: upper-cased, letters and digits only,
- *  at most 10 — "QORM" for an install that calls it Qorm, "POINTS" by default. Stripe needs a
+ *  at most 10 — "CREDITS" for an install that calls it Credits, "POINTS" by default. Stripe needs a
  *  letter in it; a name with none falls back to POINTS. */
 function pointsSuffix(): string {
   const s = currencyName().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);

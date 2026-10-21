@@ -1,6 +1,6 @@
 // The Send-to menu, mounted: it shows a platform's refusal state beside the
 // name ("Kick: followers-only"), and picking a platform — INCLUDING the one
-// already selected — retries it (U1 rework, k 2026-10-18).
+// already selected — retries it.
 //
 // Run: node --test app/components/SendToButton.render.test.ts
 import test from "node:test";

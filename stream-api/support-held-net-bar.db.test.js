@@ -1,7 +1,7 @@
-// D-D (review round 6, k's decision 2026-10-18) against a REAL Postgres (v159): a credit whose
+// Against a REAL Postgres (v159): a credit whose
 // refunds were HELD before it landed moves the support bar and the timer by its NET only — fully
 // refunded → nothing, partly refunded → the kept part. A refund that arrives AFTER the credit
-// granted its time still takes nothing back (unchanged). The admitted amount is PERSISTED on the
+// granted its time still takes nothing back. The admitted amount is PERSISTED on the
 // ledger row (stream.support_events.admitted_usd) so the bar's restart rebuild agrees with what
 // the live path showed — a live-only fix would revert at the next restart, because the rebuild
 // sums the credit rows of the stream and a reversal row carries no stream_id.

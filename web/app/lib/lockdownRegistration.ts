@@ -13,14 +13,14 @@
 //     that switches it on; never the audit log, which can be missing a row). Unknown (NULL) reads
 //     as "not closed yet", so the close is re-asserted. Once it has closed it, a
 //     later change by an admin — opening sign-up during the lockdown — is theirs and is kept: the
-//     minute check never re-closes it (round 5: it used to, within a minute);
+//     minute check never re-closes it;
 //   • lever off, sign-up closed by the lockdown (the row's writer is still the lockdown) → put back
 //     the value the lockdown replaced (from site.instance_history), ask for a render;
 //   • anything else → nothing. A change an admin made meanwhile is theirs and is never undone.
 // A render that did not land — the request could not be dropped, or the host answered it with a
 // failure — is RETRIED with backoff (2, 4, 8 … 30 minutes) until the host reports a good render at
 // or after the lockdown's last write, and until then the Lockdown screen says "not applied yet".
-// Only on a bundle install: a homeserver the bundle does not run is managed outside Blackbranch,
+// Only on a bundle install: a homeserver the bundle does not run is managed outside Black Branch,
 // and nothing here can reach it — the Lockdown screen says so.
 
 import pool from "../../lib/db.ts";

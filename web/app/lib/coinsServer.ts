@@ -152,7 +152,7 @@ export async function debitCoins(args: {
 }
 
 /**
- * A deleted account forfeits its balance (decision 26: the points balance is removed). Runs
+ * A deleted account forfeits its balance (the points balance is removed). Runs
  * inside the CALLER's transaction (accountDeletion.ts) so the forfeit and the rest of the erase
  * commit together. The ledger keeps one `forfeit` row for the amount — the accounting history
  * stays whole — and the wallet goes to zero. Idempotent: a second call finds nothing to forfeit.
@@ -233,13 +233,13 @@ export async function refundCoins(args: {
  * Credit a completed coin-purchase Checkout session (billing webhook only —
  * it is the sole writer of money state). Idempotent on the session id.
  *
- * Accounting model: Qorm is channel points — a purchase is a private wallet
+ * Accounting model: the currency is channel points — a purchase is a private wallet
  * top-up, full stop. This row is its only DB record; it must NOT touch the
  * support bar, timer, or stream.support_events. A SPEND (cheer/sticker) is
  * spectacle only and moves nothing either — stream-api's money.js KIND_POLICY
  * marks every coin kind `credit: 'none'`, so no spend logs to support_events
  * at face value. The night is funded only by money given to it
- * (donation/gift/sub + platform webhooks), never by Qorm moving in either
+ * (donation/gift/sub + platform webhooks), never by points moving in either
  * direction. A lit sponsor clock pays a 2x bonus on participation earning —
  * which is exactly why a spend must never be able to light one.
  */
@@ -247,11 +247,11 @@ export async function recordCoinPurchase(cs: Stripe.Checkout.Session): Promise<v
   await moneyCredits.recordCheckoutPurchase(cs);
 }
 
-// ── Money-bought Qorm: tips, clawbacks, won disputes ─────────────────────────
+// ── Money-bought points: tips, clawbacks, won disputes ───────────────────────
 //
-// A tip pays Qorm at the purchase peg (1 Qorm per USD cent). A refund or
+// A tip pays points at the purchase peg (1 point per USD cent). A refund or
 // dispute of ANY money-bought credit (kind purchase or tip) takes it back —
-// WITHOUT debitCoins' `balance >= amount` guard, so a wallet whose Qorm was
+// WITHOUT debitCoins' `balance >= amount` guard, so a wallet whose points were
 // already spent goes negative. debitCoins keeps its guard,
 // which is exactly what stops a negative wallet from spending again.
 // Injectable pool: the billing handlers that call this are fake-pool tested,
@@ -288,7 +288,7 @@ export function createMoneyCredits(deps: { pool: Pool }) {
     }
   }
 
-  // ── Delivery order (external review S2 + S4) ──────────────────────────────
+  // ── Delivery order (cases S2 + S4) ────────────────────────────────────────
   //
   // Stripe and PayPal do not deliver events in the order they happened, so a
   // reversal can arrive before its credit, and a reversal's outcome before the
@@ -356,7 +356,7 @@ export function createMoneyCredits(deps: { pool: Pool }) {
   }
 
   /** A money-bought credit, then every reversal of its payment that arrived
-   *  first — one transaction, so the Qorm is never spendable in between. */
+   *  first — one transaction, so the points are never spendable in between. */
   async function creditPayment(a: {
     matrixId: string; cents: number; kind: "purchase" | "tip"; ref: string; payment: PaymentRef;
   }): Promise<void> {
@@ -396,7 +396,7 @@ export function createMoneyCredits(deps: { pool: Pool }) {
     await creditPayment({ ...a, cents, kind: "tip" });
   }
 
-  /** A quiet Qorm purchase paid OUTSIDE Stripe Checkout (PayPal/Venmo).
+  /** A quiet points purchase paid OUTSIDE Stripe Checkout (PayPal/Venmo).
    *  Stripe purchases go through recordCheckoutPurchase below,
    *  which derives everything from the Checkout session. Same meta key shape
    *  as a tip, so clawbackForPayment finds it by the id its refund carries. */
@@ -406,12 +406,12 @@ export function createMoneyCredits(deps: { pool: Pool }) {
     await creditPayment({ ...a, cents, kind: "purchase" });
   }
 
-  /** A paid Stripe Checkout Qorm purchase, idempotent on the session id.
+  /** A paid Stripe Checkout points purchase, idempotent on the session id.
    *
-   *  Qorm is pegged 1:1 to USD CENTS. `amount_total` is in the SETTLEMENT
+   *  Points are pegged 1:1 to USD CENTS. `amount_total` is in the SETTLEMENT
    *  currency's minor units, which is not always USD — Stripe Adaptive Pricing
    *  can settle a session in the buyer's local currency. Crediting it blindly
-   *  would hand out ¥15,000 → 15,000 Qorm, or ₫100,000 → 100,000 Qorm for
+   *  would hand out ¥15,000 → 15,000 points, or ₫100,000 → 100,000 points for
    *  roughly $4. `metadata.coins` is written at session creation
    *  (billing/points/route.ts) from the USD cents the buyer actually chose, so
    *  it is the authoritative intent. Take the MINIMUM of the two: identical in
@@ -459,7 +459,7 @@ export function createMoneyCredits(deps: { pool: Pool }) {
       const row = await creditedFor(c, key, id);
       if (!row) {
         // Nothing credited YET (S2): hold it for the credit to take back. A
-        // payment that never credits Qorm (a sub, an anonymous tip) leaves a
+        // payment that never credits points (a sub, an anonymous tip) leaves a
         // row nothing reads again.
         await c.query(
           `INSERT INTO site.payment_reversals (ref, payment_key, payment_id, cents, reason, status)
@@ -490,7 +490,7 @@ export function createMoneyCredits(deps: { pool: Pool }) {
     return Number(r.rows[0]?.taken ?? 0);
   }
 
-  /** After a restore gives Qorm back, every other live reversal of the payment
+  /** After a restore gives points back, every other live reversal of the payment
    *  takes what it is still owed. Without this, a failed refund that took the
    *  whole credit first leaves its successful replacement (which found nothing
    *  left) owed forever, and the restore hands the viewer points the money no
@@ -516,7 +516,7 @@ export function createMoneyCredits(deps: { pool: Pool }) {
       const owed = Number(r.cents) - await takenBy(c, o.ref);
       if (!(owed > 0)) continue;
       // A reversal's own `(clawback, <ref>)` row may already exist, so a top-up
-      // needs its own ref. Keyed on the restore that freed the Qorm: each
+      // needs its own ref. Keyed on the restore that freed the points: each
       // restore can top a reversal up at most once, and `owed` already counts
       // earlier top-ups, so a redelivered restore takes nothing either way.
       await takeBack(c, credit, id, owed, `${o.ref}:after:${restoreRef}`, r.reason, o.ref);
@@ -595,7 +595,7 @@ export function createMoneyCredits(deps: { pool: Pool }) {
 }
 
 /** Production binding. Consumed by the Stripe billing webhook's recordDonation
- *  (billing/webhook/route.ts, tip credit), the PayPal webhook's Qorm purchase
+ *  (billing/webhook/route.ts, tip credit), the PayPal webhook's points purchase
  *  branch (recordPurchaseCredit), and paymentEventHandlers.ts's production
  *  binding (refund/dispute clawback, dispute-won restore). */
 export const moneyCredits = createMoneyCredits({ pool });
@@ -688,7 +688,7 @@ function toMs(v: Date | string | null): number | null {
  *
  *  A chip can be MISSED, and only a chip: an award whose transaction commits
  *  after this SELECT's snapshot but before the cursor advances to NOW() falls
- *  in the gap. The Qorm is in the ledger and in the balance either way — the
+ *  in the gap. The points are in the ledger and in the balance either way — the
  *  wallet is right, the animation just didn't play. Closing that race would
  *  mean a second cursor column keyed to ledger id, which is not worth carrying
  *  for a 1.5s flourish.
@@ -752,7 +752,7 @@ export function createEarn(deps: {
   }
 
   /** The bonus is its OWN row, ref-keyed to the base row: history
-   *  says which Qorm was the bonus, provenance can carve it out later, and the
+   *  says which points were the bonus, provenance can carve it out later, and the
    *  base award's ref and tests never move. Written only for a FRESH base
    *  credit — a replayed base must not mint a bonus on retry (and a replayed
    *  bonus collides on its own ref anyway). */

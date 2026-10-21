@@ -48,7 +48,7 @@ export const isOverlayScope = (): boolean => settingsScope() !== "";
 export function settingGet(lsKey: string): string | null {
   const sc = settingsScope();
   // Behavior with no control on the overlay pages follows the site LIVE — a seeded
-  // copy there would be frozen forever (half-A review I4). SITE_SCOPED_LS is below.
+  // copy there would be frozen forever. SITE_SCOPED_LS is below.
   if (!sc || SITE_SCOPED_LS.has(lsKey)) return lsGet(lsKey);
   const scoped = lsGet(sc + lsKey);
   if (scoped != null) return scoped;
@@ -286,7 +286,8 @@ export const DEFAULTS = {
   seamDepth:    1,
   pfpOn:        false,
   pfpRing:      false,
-  pronounsOn:   true,
+  // Off by default: the gender marks are each viewer's own choice to switch on.
+  pronounsOn:   false,
   groupConsecutive: false,
   // Indent continuations: TRUE keeps the indented geometry (the gutter a
   // continuation glyph would sit in), so the default layout has no glyph.
@@ -294,7 +295,9 @@ export const DEFAULTS = {
   altRows: false,
   nameStylesOn:  true,
   badgesOn:      true,
-  spotlightOn:   true,
+  // Off by default: the streamer's spotlight card is opt-in for each viewer (paid /highlight cards
+  // are never affected).
+  spotlightOn:   false,
   // Behavior. Never part of a look.
   mentionSound:  "off" as MentionSound,
   mentionHl:     true,
@@ -351,7 +354,7 @@ export const DEFAULTS = {
   piBarW:             3,
   piBarInset:         4,
   piGap:              11,
-  // -1 = "Same as indicator gap" (round 2b): the CSS default derives the badge
+  // -1 = "Same as indicator gap": the CSS default derives the badge
   // gap from the indicator gap, so the 11 viewers with a custom one keep it.
   badgeGap:           -1,
   showMatrixName:     false,
@@ -386,7 +389,7 @@ export const DEFAULTS = {
   mxEditedTag:  true,
   mxUnread:     "dots" as "dots" | "counts",
   mxHideMuted:  false,
-  // Privacy (k round 5: both ON by default). Off = no public receipt / no typing
+  // Privacy (both ON by default). Off = no public receipt / no typing
   // event leaves this browser; see app/lib/matrixPrivacy.ts.
   mxReceipts:   true,
   mxTyping:     true,
@@ -454,13 +457,13 @@ function applyPage(ctx: ApplyCtx) { setProp("--bg-page", pageGradient(ctx.get("b
 // (#ffffff at 10%) are a subtle border.
 function applyFrame(ctx: ApplyCtx)  {
   setProp("--frame-color", hexToRgba(ctx.get("frameColor"), ctx.get("frameOpacity"))); }
-// The time column is MEASURED in its own font and size (round 2b; the `ch`
-// table resolved in the message font and went stale on every time-font/size
+// The time column is MEASURED in its own font and size (a `ch`
+// table resolves in the message font and goes stale on every time-font/size
 // change). --chat-ts-w makes every row's time one fixed-width column;
 // --chat-ts-shown-w is what a grouped row's spacer subtracts, since the time
 // still shows there. A web font that loads late re-measures (loadingdone).
 // A full settings apply calls this from ~8 effects and each measurement forces
-// a whole-page layout, so the work coalesces into ONE per frame (final review);
+// a whole-page layout, so the work coalesces into ONE per frame;
 // the pre-paint's values stand until then.
 let lastWrapCtx: ApplyCtx | null = null;
 let fontsHooked = false;
@@ -582,7 +585,7 @@ interface Entry {
 // also as an entry field or a parser argument with nothing keeping them in
 // agreement.
 const str = (s: string | null): SettingValue | null => (s || null);
-// Font settings: a removed font maps to its replacement (round 2b).
+// Font settings: a removed font maps to its replacement.
 const parseFont = (s: string | null): SettingValue | null => (s ? remapFont(s) : null);
 const flt = (ok: (n: number) => boolean = () => true) =>
   (s: string | null): SettingValue | null => { const n = parseFloat(s ?? ""); return Number.isFinite(n) && ok(n) ? n : null; };
@@ -638,7 +641,7 @@ export const ENTRIES: Record<SettingKey, Entry> = {
     control: { kind: "weights", label: "Weight" } }),
   textColor: E({ ls: "chatStyle_textColor", prePaint: true,
     parse: str, effect: (v) => setProp("--chat-text-color", v as string),
-    control: { kind: "color", label: "Text color" } }),
+    control: { kind: "color", label: "Text colour" } }),
 
   // Username
   usernameFont: E({ ls: "chatStyle_usernameFont", prePaint: true,
@@ -684,7 +687,7 @@ export const ENTRIES: Record<SettingKey, Entry> = {
     control: sx10("Size", 5, 15, "×") }),
   tsColor: E({ ls: "chatStyle_tsColor", prePaint: true,
     parse: str, effect: (v) => setProp("--chat-ts-color", v as string),
-    control: { kind: "color", label: "Timestamp color" } }),
+    control: { kind: "color", label: "Timestamp colour" } }),
 
   // Emotes
   emoteSize: E({ ls: "chatStyle_emoteSize", prePaint: true,
@@ -815,7 +818,7 @@ export const ENTRIES: Record<SettingKey, Entry> = {
   pfpRing: E({ ls: "chatStyle_pfpRing", prePaint: true,
     serialize: ser1, parse: bool1, effect: (v) => cls("chat-pfp-ring-on", v as boolean),
     control: { kind: "toggle", label: "Platform ring" } }),
-  // ♂ ♀ ⚲ before names (shown by default). The OBS source and the /chat window
+  // ♂ ♀ ⚲ before names (hidden by default). The OBS source and the /chat window
   // keep their own copy through the "ov:" scope.
   pronounsOn: E({ ls: "chatStyle_pronouns", prePaint: true,
     serialize: ser1, parse: bool1, effect: (v) => cls("chat-pron-off", !(v as boolean)),
@@ -956,8 +959,7 @@ export const ENTRIES: Record<SettingKey, Entry> = {
   piGap: E({ ls: "chatStyle_piGap", prePaint: true,
     parse: flt((n) => n >= 0), effect: (v) => setProp("--chat-pi-gap", v + "px"),
     control: sraw("Indicator gap", 0, 20, "px") }),
-  // Between badges and before the name (k round 2b: "need both gaps
-  // controllable"). -1 hands it back to the CSS default, the indicator gap.
+  // Between badges and before the name, both controllable. -1 hands it back to the CSS default, the indicator gap.
   badgeGap: E({ ls: "chatStyle_badgeGap", prePaint: true,
     parse: flt((n) => n >= -1),
     effect: (v) => { if ((v as number) < 0) rmProp("--chat-badge-gap"); else setProp("--chat-badge-gap", v + "px"); },
@@ -1012,7 +1014,7 @@ export const ENTRIES: Record<SettingKey, Entry> = {
   // Overlays (.glass)
   glassColor: E({ ls: "theme_glassColor", prePaint: true,
     parse: str, effect: (_v, ctx) => applyGlassBg(ctx),
-    control: { kind: "color", label: "Tint color" } }),
+    control: { kind: "color", label: "Tint colour" } }),
   glassOpacity: E({ ls: "theme_glassOpacity", prePaint: true,
     parse: flt(), effect: (_v, ctx) => applyGlassBg(ctx),
     control: sx100("Opacity", 0, 100) }),
@@ -1216,9 +1218,9 @@ export function applyEffect<K extends SettingKey>(key: K, v: Values[K], ctx: App
 // Both callers (readValues below, ChatSettings' applyBlob) walk SETTING_KEYS,
 // where `key` is the union SettingKey rather than one member of it, so
 // `out[key] = parseValue(key, raw)` is a write of `Values[SettingKey]` into a
-// slot typed `Values[thatOneKey]` — which TypeScript rejects, correctly. Both
-// sites used to buy their way out with `(out as any)[key] = …`, an assertion
-// that would have swallowed a genuinely wrong value type just as happily.
+// slot typed `Values[thatOneKey]` — which TypeScript rejects, correctly. A cast
+// `(out as any)[key] = …` would buy its way out, an assertion
+// that would swallow a genuinely wrong value type just as happily.
 // Binding K per call is what makes the write sound, so the cast disappears
 // instead of being explained.
 export function setValue<K extends SettingKey>(target: Values, key: K, raw: string | null): void {

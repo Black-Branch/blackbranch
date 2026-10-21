@@ -11,6 +11,7 @@ import { staffMatrixIds } from "./staff";
 import { isDiscordGhost, discordGhostPattern } from "./discordSender";
 import { matrixServerName } from "./matrixConfig";
 import { isGiftMonths, MAX_COMMUNITY } from "./giftPricing";
+import { columnEntitledSql, paidThroughSql, subscriptionSources } from "./subscriptions/entitlement";
 // The localpart fallback rule lives in ONE place (chatIdentity.ts — gift
 // announcements are exactly the announce path that module exists for).
 import { matrixLocalpart as fallbackName } from "./chatIdentity";
@@ -132,10 +133,7 @@ async function selectCommunityRecipients(count: number, gifter: string | null): 
        WHERE ($1::text IS NULL OR u.matrix_id <> $1)
          AND u.matrix_id <> ALL($3::text[])
          AND ($4::text IS NULL OR u.matrix_id !~ $4)
-         AND NOT EXISTS (
-           SELECT 1 FROM site.subscriptions s
-           WHERE s.matrix_id = u.matrix_id AND s.status IN ('active','trialing','past_due')
-         )
+         AND NOT ${columnEntitledSql("u.matrix_id", "$5")}
          AND NOT EXISTS (
            SELECT 1 FROM site.gift_subscriptions g
            WHERE g.recipient_matrix_id = u.matrix_id AND g.expires_at > now()
@@ -145,7 +143,7 @@ async function selectCommunityRecipients(count: number, gifter: string | null): 
          EXISTS (SELECT 1 FROM site.chat_messages c WHERE c.matrix_id = u.matrix_id AND c.created_at > now() - interval '14 days') DESC,
          random()
        LIMIT $2`,
-      [gifter, capped, [...staffMatrixIds()], discordGhostPattern()]
+      [gifter, capped, [...staffMatrixIds()], discordGhostPattern(), subscriptionSources()]
     )
     .catch(() => ({ rows: [] as { matrix_id: string }[] }));
   return rows.map((r) => r.matrix_id);
@@ -214,16 +212,14 @@ async function grantGift(
        GREATEST(
          now(),
          COALESCE((SELECT MAX(expires_at) FROM site.gift_subscriptions WHERE recipient_matrix_id = $3), now()),
-         -- A recipient on a PAID sub gets the gift AFTER their paid period,
-         -- not concurrently with it (the gift was otherwise partly wasted).
-         -- The status list mirrors tiers.isActiveStatus — giftStacking.test.ts
-         -- pins the two together.
-         COALESCE((SELECT current_period_end FROM site.subscriptions
-                    WHERE matrix_id = $3 AND status IN ('active', 'trialing', 'past_due')), now())
+         -- A recipient on a PAID sub — through any service that counts — gets the
+         -- gift AFTER their paid period, not concurrently with it (the gift was
+         -- otherwise partly wasted). The records' one entitlement fragment decides.
+         COALESCE(${paidThroughSql("$3", "$7")}, now())
        ) + make_interval(months => $4)
      ON CONFLICT (stripe_session_id, recipient_matrix_id) DO NOTHING
      RETURNING id`,
-    [sessionId, gifter, recipient, months, kind, anonymous]
+    [sessionId, gifter, recipient, months, kind, anonymous, subscriptionSources()]
   );
   return (res.rowCount ?? 0) > 0;
 }
@@ -314,7 +310,7 @@ export async function recordGift(cs: Stripe.Checkout.Session): Promise<void> {
 }
 
 // ── Expiry sweep ─────────────────────────────────────────────────────────────
-// The cosmetic Subscriber badge no longer needs sweeping: badge SLOTS are derived
+// The cosmetic Supporter badge no longer needs sweeping: badge SLOTS are derived
 // live from entitlement (base_slots + a +1 for an active sub/gift, see badge_slots
 // / api/badges), so when a gift lapses the +1 slot — and thus the equipped sub
 // badge — simply stops rendering with no stored state to clean up. Kept as a no-op
@@ -340,7 +336,7 @@ export function startGiftExpirySweep(): void {
   sweepStarted = true;
   const run = async () => {
     const badges = await sweepExpiredGiftBadges().catch(() => 0);
-    if (badges > 0) console.log(`[gift] swept ${badges} expired Subscriber badge(s)`);
+    if (badges > 0) console.log(`[gift] swept ${badges} expired Supporter badge(s)`);
     const pending = await sweepExpiredPendingGifts().catch(() => 0);
     if (pending > 0) console.log(`[gift] swept ${pending} expired pending slot(s)`);
   };

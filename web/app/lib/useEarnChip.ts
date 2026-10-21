@@ -7,7 +7,7 @@
 // message, the message point that came with it, an upvote somebody left while
 // you were reading. Shown one after another, 1.5s each, the chips read as
 // stuttering and run out of bounds. Since the chip does not say WHAT earned
-// the Qorm, five chips in a row carry exactly the information of one — the
+// the points, five chips in a row carry exactly the information of one — the
 // total — split into five restarts of the same animation. And five
 // short-lived wide chips are five chances to overflow the composer.
 //
@@ -27,7 +27,7 @@ import type { EarnChipItem } from "./coins";
 export const EARN_CHIP_MS = 1500;
 
 type Showing = {
-  /** Qorm to announce, or 0 for nothing on screen. */
+  /** Points to announce, or 0 for nothing on screen. */
   points: number;
   /** Increments per chip shown. The element is keyed on this, so two awards of
    *  the SAME amount in a row still replay the animation — without it React
@@ -39,7 +39,7 @@ type Showing = {
 let showing: Showing = { points: 0, seq: 0 };
 /** Earned while a chip was already on screen. Shown as one follow-up rather
  *  than added to the visible number — a chip whose value changes mid-animation
- *  reads as a glitch, not as more Qorm. */
+ *  reads as a glitch, not as more points. */
 let pending = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<() => void>();
@@ -103,7 +103,7 @@ const getSnapshot = () => showing;
 const EMPTY: Showing = { points: 0, seq: 0 };
 const getServerSnapshot = () => EMPTY;
 
-/** The Qorm currently being announced (0 for nothing). */
+/** The points currently being announced (0 for nothing). */
 export function useEarnChip(): Showing {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }

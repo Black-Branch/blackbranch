@@ -26,6 +26,7 @@
 
 import pool from "@/lib/db";
 import { createTtlCache } from "./ttlCache";
+import { ENTITLED_VIEWERS_SQL, subscriptionSources } from "./subscriptions/entitlement";
 
 const TTL_MS = 15_000;
 
@@ -59,9 +60,8 @@ async function load(): Promise<{ data: BadgeSnapshot; complete: boolean }> {
     pool.query<IdRow>(
       `SELECT matrix_id FROM site.users WHERE is_mod OR is_admin`
     ).catch(() => fail<IdRow>()),
-    pool.query<IdRow>(
-      `SELECT matrix_id FROM site.subscriptions WHERE status IN ('active','trialing','past_due') AND matrix_id IS NOT NULL`
-    ).catch(() => fail<IdRow>()),
+    // Viewers an entitling subscription record covers — the one fragment (subscriptions/entitlement.ts).
+    pool.query<IdRow>(ENTITLED_VIEWERS_SQL, [subscriptionSources()]).catch(() => fail<IdRow>()),
     pool.query<IdRow>(
       `SELECT recipient_matrix_id AS matrix_id FROM site.gift_subscriptions WHERE expires_at > now()`
     ).catch(() => fail<IdRow>()),

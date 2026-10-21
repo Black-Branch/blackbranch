@@ -26,7 +26,7 @@
 //    not writing bad levels alone would not bring the sound back. None of it unmutes.
 
 /** @test-only migrateLegacyVolume in this file is the production reader; the tests pin the spelling
- *  The single key the three players used to share. Read only by the one-time migration. */
+ *  The legacy single key the three players shared. Read only by the one-time migration. */
 export const LEGACY_VOLUME_KEY = "player_volume";
 
 export type VolumePlayer = "native" | "youtube" | "twitch";

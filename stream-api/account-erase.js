@@ -56,7 +56,7 @@ const ERASED_CANONICAL = '(erased)';
 // $1 platforms[], $2 platform ids[], $3 the account, $4 'ban' | 'case', $5 expires_at (NULL = never).
 // A LIVE record is never weakened: a later 'case' leaves a 'ban' a ban, the first account it was
 // recorded for stays its account, and its end only moves later (NULL — permanent — wins). A record
-// that has already ENDED is replaced whole: it no longer restricts anything (v156, review round 5).
+// that has already ENDED is replaced whole: it no longer restricts anything (v156).
 const RESTRICTION_UPSERT_SQL = `INSERT INTO stream.erased_restrictions AS r (platform, platform_id, matrix_id, reason, expires_at)
            SELECT p.platform, p.pid, $3, $4, $5::timestamptz FROM unnest($1::text[], $2::text[]) AS p(platform, pid)
            ON CONFLICT (platform, platform_id) DO UPDATE SET
@@ -125,13 +125,13 @@ function createAccountErase({ pool, memory, identity = null, sponsors = null, ms
          UNION SELECT $3::text, $2::text`, [ids.canonicalIds, matrixId, NATIVE_PLATFORM])).rows;
       if (keepLinks || keepEvidence) {
         const real = pids.filter((r) => r.platform !== NATIVE_PLATFORM && !String(r.platform_id).startsWith('name:'));
-        // A timeout ends (review round 5): only a ban with an end, and no open case, expires.
+        // A timeout ends: only a ban with an end, and no open case, expires.
         const expiresAt = keepLinks ? restrictionExpiresAt : null;
         const rr = await client.query(RESTRICTION_UPSERT_SQL,
           [real.map((r) => r.platform), real.map((r) => r.platform_id), matrixId, keepLinks ? 'ban' : 'case', expiresAt]);
         out.restrictionsKept = rr.rowCount;
       }
-      // The opt-out outlives the account (D2): every platform id this account was linked to —
+      // The opt-out outlives the account: every platform id this account was linked to —
       // the ones it linked itself, and those of the identities that were its alone — keeps memory
       // off. Platform and id only. Shared identities' OTHER platform ids are not this person's.
       const o = await client.query(

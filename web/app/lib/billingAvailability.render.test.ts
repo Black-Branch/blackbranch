@@ -1,7 +1,7 @@
 // The three payment surfaces — /donate (DonateClient), the Support panel (SupportContent) and the
-// Store (StoreContent) — open with EITHER provider (k, 2026-10-19). Before, each gated the whole
-// page on Stripe, and the PayPal button sat inside that gate: an install with PayPal/Venmo only
-// could not take a tip or sell points at all. A real mount of each surface for every combination
+// Store (StoreContent) — open with EITHER provider. Gating the whole page on Stripe,
+// with the PayPal button inside that gate, would leave an install with PayPal/Venmo only unable to
+// take a tip or sell points at all. A real mount of each surface for every combination
 // (Stripe only, PayPal only, both, neither), plus a restart and a retry.
 //
 // The availability answer is ONE server response, /api/billing/stripe/config
@@ -23,12 +23,13 @@ g.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 
 delete process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY; // the first answer is the server's, not a build's
 
-type Answer = { publishableKey: string | null; paypalClientId: string | null };
+type Answer = { publishableKey: string | null; paypalClientId: string | null; supporter?: { amount: number; currency: string } | null };
+const MONTH = { amount: 500, currency: "usd" };
 const COMBOS: Record<"stripe" | "paypal" | "both" | "neither", Answer> = {
-  stripe: { publishableKey: "pk_test_casey", paypalClientId: null },
-  paypal: { publishableKey: null, paypalClientId: "AeGadget123" },
-  both: { publishableKey: "pk_test_casey", paypalClientId: "AeGadget123" },
-  neither: { publishableKey: null, paypalClientId: null },
+  stripe: { publishableKey: "pk_test_casey", paypalClientId: null, supporter: MONTH },
+  paypal: { publishableKey: null, paypalClientId: "AeGadget123", supporter: null },
+  both: { publishableKey: "pk_test_casey", paypalClientId: "AeGadget123", supporter: MONTH },
+  neither: { publishableKey: null, paypalClientId: null, supporter: null },
 };
 let served: Answer = COMBOS.neither;
 let configReads = 0;
@@ -134,10 +135,17 @@ for (const combo of Object.keys(COMBOS) as (keyof typeof COMBOS)[]) {
     m.unmount();
   });
 
-  test(`Store, ${combo}: points can be bought with whichever provider is on`, async () => {
+  test(`Store, ${combo}: points can be bought with whichever provider is on — and with neither, only the top-up box goes`, async () => {
     served = COMBOS[combo];
     const m = await mount("store");
-    assertPayButtons(m.host, combo, "Store");
+    if (combo === "neither") {
+      // The wallet, spending and history stay; no "isn't configured" wall over them.
+      assert.ok(!text(m.host).includes(NOT_CONFIGURED), "no Billing-isn't-configured wall over the Store");
+      assert.ok(text(m.host).includes("Your wallet"), "the wallet stays");
+      assert.ok(m.host.querySelector('[aria-label="Store sections"]'), "the Store's sections stay");
+      assert.equal(cardButtons(m.host).length + paypalLines(m.host).length + methodMenus(m.host).length, 0, "no way to pay");
+      assert.ok(!m.host.querySelector('input[placeholder="Other"]'), "no top-up amount box");
+    } else assertPayButtons(m.host, combo, "Store");
     if (combo === "paypal") {
       assert.match(paypalLines(m.host)[0]!.textContent ?? "", /^Buying [\d,]+ \S+ via PayPal$/, "a quiet points purchase through PayPal");
     }
@@ -178,6 +186,17 @@ test("restart: /donate's server-read PayPal id paints at once, before the first 
   m.unmount();
 });
 
+test("restart: the Store's top-up box comes back when a provider is switched on after the Store opened", async () => {
+  served = COMBOS.neither;
+  const m = await mount("store");
+  assert.ok(!m.host.querySelector('input[placeholder="Other"]'));
+  served = COMBOS.paypal;
+  await focus();
+  assertPayButtons(m.host, "paypal", "after PayPal went on");
+  m.unmount();
+  served = COMBOS.neither;
+});
+
 test("retry: PayPal off and on again, and Stripe off and on again, leaves exactly one button set", async () => {
   served = COMBOS.both;
   const m = await mount("store");
@@ -212,6 +231,40 @@ test("the answer's paypalSandbox reaches the SDK URL (buyer-country=US), and a l
     assert.equal(new URL(script!.src).searchParams.get("buyer-country"), sandbox ? "US" : null);
     m.unmount();
   }
+  served = COMBOS.neither;
+});
+
+test("Stripe on with NO Supporter price: subscriptions and gifts are not offered — one plain line, no button that answers 503 (R1.10)", async () => {
+  served = { ...COMBOS.stripe, supporter: null };
+  const m = await mount("support");
+  assertPayButtons(m.host, "stripe", "Support, no price");
+  assert.ok(!text(m.host).includes("Become a Supporter"), "no Subscribe button");
+  assert.ok(!text(m.host).includes("Gift Supporter"), "no Gift section");
+  assert.ok(text(m.host).includes("Subscriptions and gifts aren’t available on this site."));
+  m.unmount();
+  served = COMBOS.neither;
+});
+
+test("the price shown and the gift total are the Stripe Price's amount and currency, not a number in the code (R1.10)", async () => {
+  served = { ...COMBOS.stripe, supporter: { amount: 700, currency: "eur" } };
+  const m = await mount("support");
+  assert.match(text(m.host), /€7\/month/, "the monthly price, formatted in its currency");
+  assert.ok(!text(m.host).includes("$5/month"), "no hard-coded $5/month");
+  const gift = buttons(m.host).find((b) => /^Gift /.test(b.textContent ?? ""));
+  assert.equal(gift?.textContent, "Gift €7", "one month for one person = one month's price");
+  m.unmount();
+  served = COMBOS.neither;
+});
+
+test("restart: a Supporter price set after the page opened shows on the next read (window focus)", async () => {
+  served = { ...COMBOS.stripe, supporter: null };
+  const m = await mount("support");
+  assert.ok(!text(m.host).includes("Become a Supporter"));
+  served = COMBOS.stripe;
+  await focus();
+  assert.ok(text(m.host).includes("Become a Supporter"), "the price arrived: subscriptions are offered");
+  assert.match(text(m.host), /\$5\/month/);
+  m.unmount();
   served = COMBOS.neither;
 });
 

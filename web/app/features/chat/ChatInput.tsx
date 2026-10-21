@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { onChatNotice } from "@/app/lib/chatNotice";
+import { onChatNotice, isLongNotice } from "@/app/lib/chatNotice";
 import { flushSync } from "react-dom";
 import { useEmotes } from "@/app/lib/useEmotes";
 import { usePersonalEmotes } from "@/app/lib/usePersonalEmotes";
@@ -50,6 +50,7 @@ import { normalizePlatform } from "@/app/lib/nativePlatform";
 import { useRefusalNote, useSkippedPlatforms, dismissRefusalNote, retryDestination } from "@/app/lib/platformRefusals";
 import { failedSendAction } from "@/app/lib/failedSend";
 import { takeReHideNotice } from "@/app/lib/behaviorStore";
+import { featureOn } from "@/app/lib/siteFeatures";
 
 type Props = {
   replyTo: ChatMsg | null;
@@ -230,7 +231,8 @@ export default function ChatInput({
   function showNotice(text: string) {
     setNotice(text);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    noticeTimer.current = setTimeout(() => setNotice(null), 5000);
+    // A long one (/help) stays until closed: five seconds is not enough to read a list.
+    if (!isLongNotice(text)) noticeTimer.current = setTimeout(() => setNotice(null), 5000);
   }
   // Row actions with no surface of their own (a mod's delete, pin, unpin) report
   // a failure through this same line — see chatNotice.ts.
@@ -272,7 +274,7 @@ export default function ChatInput({
     errorTimer.current = setTimeout(() => setSendError(null), ms);
   }
 
-  // A platform that refused the sender's lines (U1 rework, k 2026-10-18): ONE note
+  // A platform that refused the sender's lines: ONE note
   // at a time, inside the empty field (ChatComposerField `note`) so it neither
   // grows the bar nor covers the chat. A persistent one waits for its ✕; a
   // transient one, and the "couldn't reach" line, go on their own after the
@@ -309,8 +311,10 @@ export default function ChatInput({
   // `dests` gates the /twitch-family routing commands the same way the send-to
   // toggle is gated — a command that can only ever answer "link that account
   // first" should not be offered at all.
+  // `features`: a command for a part this install does not run is neither offered nor run (the
+  // page records what runs before the chat mounts — siteFeatures.ts).
   const viewer = useMemo(
-    () => ({ isMod, isAdmin, dests: linkedDests, isSupporter: canEncrypt !== false }),
+    () => ({ isMod, isAdmin, dests: linkedDests, isSupporter: canEncrypt !== false, features: featureOn }),
     [isMod, isAdmin, linkedDests, canEncrypt],
   );
 
@@ -778,7 +782,14 @@ export default function ChatInput({
             aria-label="Dismiss the failed message" className="shrink-0 text-muted hover:text-strong">✕</button>
         </div>
       )}
-      {notice &&<p role="status" data-chrome-grow className="text-secondary mb-1 px-1 whitespace-pre-line" style={{ fontSize: CHAT_FONT_SM }}>{notice}</p>}
+      {notice && isLongNotice(notice) ? (
+        // A long reply (/help with no console) in a bounded box that scrolls, with a close.
+        <div role="status" data-chrome-grow className="relative mb-1 max-h-[40vh] overflow-y-auto rounded-md bg-surface-2 px-2 py-1.5 pr-7 text-secondary whitespace-pre-line" style={{ fontSize: CHAT_FONT_SM }}>
+          <button type="button" onMouseDown={keepFocus} onClick={() => setNotice(null)}
+            aria-label="Close" className="absolute right-1.5 top-1 text-muted hover:text-strong">✕</button>
+          {notice}
+        </div>
+      ) : notice && <p role="status" data-chrome-grow className="text-secondary mb-1 px-1 whitespace-pre-line" style={{ fontSize: CHAT_FONT_SM }}>{notice}</p>}
       {slowActive && (
         // role=status like its siblings above — this is the state that
         // actually REFUSES sends, and it was the one of the three that said

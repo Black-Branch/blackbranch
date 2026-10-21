@@ -52,8 +52,7 @@ test("pager plumbing: progress reaches Sections, and a click delegates to the pa
   // …and the direct path survives underneath it, for every host that has no
   // pager (desktop, split, the popout): dropping it would strand those clicks.
   // It is the HOST's `selectPane`, handed down — never a copy of the commit
-  // body here (5d review round 1: the copy is what made "one spelling of
-  // open-a-pane" false while the comment claimed it was true).
+  // body here (a copy would make "one spelling of open-a-pane" false).
   assert.match(src, /\}\s*selectPane\(k\);\s*\};/, "the pager-less click path no longer calls the host's selectPane");
   assert.doesNotMatch(src, /setContentTab\(null\); setTab\(/, "the commit body was re-spelled in the bar again");
 });

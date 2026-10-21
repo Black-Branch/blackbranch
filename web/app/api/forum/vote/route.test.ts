@@ -1,8 +1,8 @@
 // Source scan: who WROTE a forum post decides whose social credit a vote moves,
 // so the author must come from a server we run, never from one the voter names.
 //
-// The route used to ask the VOTER's homeserver (session.homeserver) for the
-// event and trust its `sender`. A viewer signed in from a homeserver they
+// Asking the VOTER's homeserver (session.homeserver) for the event and
+// trusting its `sender` would be exploitable. A viewer signed in from a homeserver they
 // control could answer any event id with `sender` set to someone on ours (each
 // −1 costing that person credit) or to themselves (self-vote farming). The
 // author now comes only from the forum reader: our homeserver, the reader's

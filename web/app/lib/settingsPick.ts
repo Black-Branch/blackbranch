@@ -22,7 +22,7 @@ export function writePick(pick: Pick | null): void {
 }
 
 /** The settings no longer match the preset they came from: it stays the pick, edited. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function markPickEdited(): void {
   const p = readPick();
   if (p && !p.edited) writePick({ ...p, edited: true });

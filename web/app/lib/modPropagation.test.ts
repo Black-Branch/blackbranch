@@ -82,11 +82,11 @@ test("Retry re-runs each retryable failure by its row id", async () => {
 test("the ban route tags its fan-out with a batch and returns it; a retry keeps the batch", () => {
   const read = (rel: string) => stripComments(readFileSync(new URL(rel, import.meta.url), "utf8"));
   const ban = read("../api/mod/ban/route.ts");
-  // Every linked account's fan-out carries the one batch (round 5: a ban acts on each account).
+  // Every linked account's fan-out carries the one batch (a ban acts on each account).
   assert.match(ban, /const platforms = fanOutBan\(a\.mod, targetId, a\.durationMinutes, a\.reason, a\.batchId\);\s*return \{ applied: true, previous, platforms \};/);
   assert.match(ban, /const action: BanAction = \{ mod, durationMinutes, expiresAt, reason, override: body\.override === true, batchId \};/);
   assert.match(ban, /return Response\.json\(\{ ok: true, applied: true, expiresAt, previous: first\.previous, batchId, platforms, accounts: targets\.length \}\);/);
-  assert.match(ban, /for \(const p of fanOutUnban\(mod, t, batchId\)\) platforms\.add\(p\);\s*\}\s*return Response\.json\(\{ ok: true, batchId, platforms: \[\.\.\.platforms\] \}\);\s*\}\s*$/, "vacuity anchor: the unban's end");
+  assert.match(ban, /for \(const p of fanOutUnban\(mod, t, batchId\)\) platforms\.add\(p\);\s*\}\s*await pushChatBan\(chatBanBody\(\{ matrixIds: targets, canonicalId, expiresAt: null, lift: true \}\)\);\s*return Response\.json\(\{ ok: true, batchId, platforms: \[\.\.\.platforms\] \}\);\s*\}\s*$/, "vacuity anchor: the unban's end");
   const retry = read("../api/mod/platform-actions/retry/route.ts");
   for (const call of ["banOnTwitch(mod, row.target_id, dur, null, row.batch_id)", "banOnKick(mod, row.target_id, dur, null, row.batch_id)",
     "banOnYouTube(mod, row.target_id, dur, row.batch_id)", "unbanOnTwitch(mod, row.target_id, row.batch_id)",

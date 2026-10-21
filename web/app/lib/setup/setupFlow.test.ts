@@ -1,7 +1,27 @@
 // The setup pages' order and resume. Run: node --test app/lib/setup/setupFlow.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stepOrder, resumeStep, nextStep, previousStep, maySave } from "./setupFlow.ts";
+import { stepOrder, resumeStep, nextStep, previousStep, maySave, recordVisit } from "./setupFlow.ts";
+import { INSTANCE_KEYS, parseInstanceValue } from "../instanceSchema.generated.mjs";
+
+test("W18b: a visit is recorded once, in first-visit order, and the list is bounded", () => {
+  assert.deepEqual(recordVisit(undefined, "site"), ["site"]);
+  assert.deepEqual(recordVisit(["site", "module:stripe"], "site"), ["site", "module:stripe"], "a second visit adds nothing (retry)");
+  assert.deepEqual(recordVisit(["site"], "core:kick"), ["site", "core:kick"]);
+  const full = Array.from({ length: 50 }, (_, i) => `core:x${i}`);
+  assert.equal(recordVisit(full, "finish").length, 50);
+  // The record the visits go into (setup.state) is a closed shape; the schema lists `visited` (the
+  // pages write it only while it does — setupServer.ts VISITED_STORABLE), and every list recordVisit
+  // makes from the pages' ids — `module:<id>`, `core:<id>`, the fixed pages — is one it accepts.
+  const entry = INSTANCE_KEYS.find((k) => k.key === "setup.state")!;
+  let v: string[] = [];
+  for (const p of ["site", "modules", "module:stripe", "core:kick", "core:kofi", "module:stripe"]) v = recordVisit(v, p);
+  assert.deepEqual(v, ["site", "modules", "module:stripe", "core:kick", "core:kofi"]);
+  const r = parseInstanceValue(entry, { step: "community", visited: v });
+  assert.ok(r.ok, "the setup record takes the visits");
+  assert.deepEqual((r as { value: { visited: string[] } }).value.visited, v, "kept as written, in order");
+  assert.ok(parseInstanceValue(entry, { visited: full }).ok, "the bound recordVisit keeps is within the record's");
+});
 
 test("the order: the eight fixed pages, one per switched-on module with setup steps", () => {
   assert.deepEqual(stepOrder([]), ["admin", "recovery", "site", "points", "modules", "community", "finish"]);

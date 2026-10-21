@@ -35,7 +35,7 @@ test('everything installed: the boot line has no "not installed" part (the owner
   assert.equal(log.lines[0], `[modules] on: ${MODULES.map((x) => x.id).join(', ')} · off: —`);
 });
 
-test('no owner plugin: owner modules are not installed, and switching one on starts nothing', async () => {
+test('no site plugin: its modules are not installed, and switching one on starts nothing', async () => {
   const started = []; const log = logger();
   const m = createModules({ instanceConfig: config(MODULES.map((x) => x.id)), starters: starters(ids('product'), started), log });
   await m.started;

@@ -35,7 +35,7 @@ let beatNow: (() => void) | null = null;
  *  Two seconds is far beyond a local single-row commit (single-digit
  *  milliseconds) while still landing well inside the moment the viewer
  *  connects the chip to what they just did. The failure mode if it were ever
- *  exceeded is a missing animation, never a missing Qorm — the ledger and the
+ *  exceeded is a missing animation, never missing coins — the ledger and the
  *  balance are written either way. */
 const POKE_DELAY_MS = 2_000;
 

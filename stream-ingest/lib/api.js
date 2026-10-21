@@ -15,7 +15,7 @@ function headers() {
 /**
  * One authenticated request to stream-api; rejects on any non-2xx with `status` and the parsed
  * `body` on the error. Every call in this file goes through it.
- * @parked plugin API: the owner plugin's own stream-api calls (owner/api.js — the bot's /bot/*
+ * @parked plugin API: the site plugin's own stream-api calls (owner/api.js — the bot's /bot/*
  * surface and the sentiment scores) are built on this, so a plugin sends the same secret, timeout
  * and error shape as the product. Nothing in the product calls it by name.
  */

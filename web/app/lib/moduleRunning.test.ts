@@ -60,7 +60,7 @@ test("the home page and the About page take module state from the rule, not the 
   const home = readFileSync(join(REPO, "web", "app", "(main)", "page.tsx"), "utf8");
   assert.match(home, /modulesOff\(\)/);
   assert.match(home, /offModules=\{off\}/);
-  assert.match(home, /<SupportModulesOff off=\{off\} \/>/);
+  assert.match(home, /<SupportModulesOff off=\{off\} facts=\{support\} \/>/);
   const about = readFileSync(join(REPO, "web", "app", "about", "page.tsx"), "utf8");
   assert.match(about, /modulesShown\(\)/);
 });

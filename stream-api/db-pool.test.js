@@ -1,6 +1,6 @@
-// F2 (review round 5): stream-api's pool had no connection or statement timeout, so a hung
-// database (a socket that accepts and never answers, a lock nobody releases) held every request —
-// and every money hold — open forever. db-pool.js bounds both and the error handler answers a
+// Without a connection or statement timeout on stream-api's pool, a hung database (a socket that
+// accepts and never answers, a lock nobody releases) holds every request — and every money hold —
+// open forever. db-pool.js bounds both and the error handler answers a
 // timed-out database 503, not a generic 500 after an unbounded wait.
 //
 // The hung database here is real: a TCP server that accepts and never says a word.

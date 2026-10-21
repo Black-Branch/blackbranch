@@ -27,7 +27,7 @@ function readCachedManifest(): EmoteMap | null {
 
 /** The catalog as it stands — the fresh fetch once it landed, else the cached one — for a
  *  reader outside React (the terminal's chat rows). Empty before either. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function currentEmotes(): EmoteMap {
   return readCachedManifest() ?? EMPTY;
 }

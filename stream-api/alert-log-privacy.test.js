@@ -1,6 +1,6 @@
-// L14: no journal line in alert.js names a donor. The money path's failure and clamp lines used
-// to print `username` (and a raw caller value); the journal is kept and read far from the people
-// who gave, so these lines carry event ids and amounts only.
+// No journal line in alert.js names a donor. The money path's failure and clamp lines must not
+// print `username` (or a raw caller value): the journal is kept and read far from the people who
+// gave, so these lines carry event ids and amounts only.
 // Run: node --test alert-log-privacy.test.js
 
 'use strict';

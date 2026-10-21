@@ -3,6 +3,7 @@ import { siteName } from "@/app/lib/siteName";
 import pool from "@/lib/db";
 import { staffMatrixIds, isStaff } from "./staff";
 import { invalidateBadgeSnapshot } from "./badgeCache";
+import { entitledRecordsSql, subscriptionSources } from "./subscriptions/entitlement";
 
 // Server-only billing helpers shared by the checkout + donate routes. The
 // viewer's Stripe customer (ensureStripeCustomer) lives in stripeCustomer.ts.
@@ -35,8 +36,8 @@ export const CUSTOMER_UPDATE: Stripe.Checkout.SessionCreateParams.CustomerUpdate
   address: "auto",
 };
 
-// ── Subscriber badge ─────────────────────────────────────────────────────────
-// The Subscriber badge tracks entitlement (own subscription OR an active gift).
+// ── Supporter badge ─────────────────────────────────────────────────────────
+// The Supporter badge tracks entitlement (own subscription OR an active gift).
 // An admin picks which badge represents Supporter via the is_subscriber flag
 // (migrate-v54); we fall back to the legacy name='Subscriber' for safety. Cached
 // per process; cleared by resetSubscriberBadgeCache when an admin re-points it.
@@ -70,18 +71,19 @@ export function resetSubscriberBadgeCache(): void {
 // the OLD subscriber badge was equipped — so every Supporter's icon updates at once.
 export async function reassignSubscriberBadge(newBadgeId: number, oldBadgeId: number | null): Promise<void> {
   const staff = Array.from(staffMatrixIds());
-  // Unlock the new badge for everyone currently entitled (own sub OR unexpired gift).
+  // Unlock the new badge for everyone currently entitled (an entitling subscription record — the
+  // one fragment, with the sources as $2 — OR an unexpired gift).
   await pool.query(
     `INSERT INTO site.badge_unlocks (matrix_id, badge_id)
      SELECT mid, $1 FROM (
-       SELECT matrix_id AS mid FROM site.subscriptions
-         WHERE status IN ('active','trialing','past_due') AND matrix_id IS NOT NULL
+       SELECT r.matrix_id AS mid FROM site.subscription_records r
+         WHERE ${entitledRecordsSql("r", "$2")}
        UNION
        SELECT recipient_matrix_id FROM site.gift_subscriptions
          WHERE expires_at > now()
      ) entitled
      ON CONFLICT DO NOTHING`,
-    [newBadgeId]
+    [newBadgeId, subscriptionSources()]
   );
   // Swap the equipped icon: anyone wearing the old sub badge in slot 0 now wears
   // the new one. (Staff are curated separately and keep their own equips.)
@@ -103,7 +105,7 @@ export async function grantSubscriberBadge(matrixId: string): Promise<void> {
   if (isStaff(matrixId)) return; // staff slots/badges are seeded by migration
   const badgeId = await getSubscriberBadgeId();
   if (badgeId == null) {
-    console.error("[billing] Subscriber badge not found — run migrate-v49");
+    console.error("[billing] Supporter badge not found — run migrate-v49");
     return;
   }
   await pool.query(

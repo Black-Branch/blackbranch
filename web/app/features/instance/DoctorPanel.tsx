@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle, WarningCircle, XCircle, MinusCircle } from "@phosphor-icons/react/dist/ssr";
 import { getJson, postJsonOrThrow } from "@/app/lib/http";
 import type { DoctorView } from "@/app/lib/doctor/doctorServer";
+import { DOCTOR } from "@/app/lib/doctor.generated.mjs";
 import { card, h2, btn, chip, ago } from "./parts";
 
 type Row = DoctorView["rows"][number];
@@ -39,17 +40,30 @@ export function DoctorRowItem({ r }: { r: Row }) {
   );
 }
 
-function CountChip({ n, status, cls, words }: { n: number; status: Row["status"]; cls: string; words: string }) {
-  if (!n) return <span className={`${chip} text-secondary`}>0 {words}</span>;
+type Group = { status: Row["status"]; words: string; meaning: string; n: number };
+
+/** One line of the header: the group's count and words (the same as `blackbranch doctor` prints,
+ *  from DOCTOR.summary), then what it asks of the reader. A count with rows behind it that need
+ *  something (failing, to look at) jumps to the first of them: on a phone the list is long. */
+function GroupLine({ g }: { g: Group }) {
+  const cls = LOOK[g.status].cls;
   const jump = () => {
-    const el = document.querySelector<HTMLElement>(`[data-check][data-status="${status}"]`);
+    const el = document.querySelector<HTMLElement>(`[data-check][data-status="${g.status}"]`);
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
     el?.focus({ preventScroll: true });
   };
+  const count = <span className="tabular-nums">{g.n}</span>;
   return (
-    <button type="button" onClick={jump} className={`${chip} ${cls} hover:bg-surface-2 outline-none focus-visible:ring-1 focus-visible:ring-edge-bright`}>
-      {n} {words} ↓
-    </button>
+    <li className="flex flex-wrap items-baseline gap-x-2 text-xs" data-group={g.status} data-n={g.n}>
+      {g.n > 0 && (g.status === "fail" || g.status === "warn") ? (
+        <button type="button" onClick={jump} className={`${chip} ${cls} hover:bg-surface-2 outline-none focus-visible:ring-1 focus-visible:ring-edge-bright`}>
+          {count} {g.words} ↓
+        </button>
+      ) : (
+        <span className={`${chip} ${g.n ? cls : "text-muted"}`}>{count} {g.words}</span>
+      )}
+      {g.n > 0 && g.meaning && <span className="min-w-0 text-secondary">{g.meaning}</span>}
+    </li>
   );
 }
 
@@ -81,7 +95,6 @@ export default function DoctorPanel() {
   if (error && !view) return <p className="text-sm text-red-300">Could not run the doctor: {error}</p>;
   if (!view) return <p role="status" className="text-sm text-muted">Running the checks…</p>;
 
-  const count = (s: Row["status"]) => view.rows.filter((r) => r.status === s).length;
   const areas = [...new Set(view.rows.map((r) => r.area))];
   return (
     <>
@@ -95,13 +108,9 @@ export default function DoctorPanel() {
           </div>
           <button type="button" className={btn} disabled={busy} onClick={recheck}>{busy ? "Checking…" : "Check again"}</button>
         </div>
-        <div className="mt-3 flex flex-wrap gap-1.5" role="status">
-          {/* A count with rows behind it jumps to the first of them: on a phone the list is long. */}
-          <CountChip n={count("fail")} status="fail" cls="text-red-300" words="failing" />
-          <CountChip n={count("warn")} status="warn" cls="text-amber-300" words="to look at" />
-          <span className={`${chip} text-secondary`}>{count("ok")} ok</span>
-          <span className={`${chip} text-muted`}>{count("grey")} not checked</span>
-        </div>
+        <ul className="mt-3 space-y-1" role="status" aria-label="Summary">
+          {(DOCTOR.summary(view.rows) as Group[]).map((g) => <GroupLine key={g.status} g={g} />)}
+        </ul>
         <p className="mt-2 text-2xs text-muted">
           {view.bundle
             ? <>The box: checked {ago(view.hostAt)}. The site: checked {ago(view.siteAt)}.</>

@@ -187,8 +187,8 @@ function sanitize(s: string): string {
 
 function cryptoStorePrefix(userId: string, deviceId: string): string {
   // Per-(user, device): a store can never be opened under a different device
-  // identity, which is what used to corrupt the OlmMachine when browsers
-  // shared one site.users token row.
+  // identity, which corrupts the OlmMachine (browsers sharing one
+  // site.users token row once did exactly that).
   return `mx-rust-${sanitize(userId)}-${sanitize(deviceId)}`;
 }
 
@@ -469,8 +469,8 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
     matrixReadiness.advance("token", "done");
 
     // The ~46%-of-homepage-JS chunk the lazy-load verdict kept (see the file
-    // header). Guarded: an import failure used to throw out of startClient as
-    // an unhandled rejection that no surface ever saw.
+    // header). Guarded: an import failure would otherwise throw out of startClient
+    // as an unhandled rejection that no surface ever saw.
     matrixReadiness.advance("sdk", "active");
     let sdk: [typeof import("matrix-js-sdk"), typeof import("matrix-js-sdk/lib/crypto-api")];
     try {
@@ -630,8 +630,8 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
   // The control behind a failed stage. Stops whatever client the abandoned run
   // left running — BOTH the settled one and a client still mid-boot, which are
   // two different refs (see bootingRef): a retry from a stuck `Preparing
-  // encryption` used to leave the half-booted client alive under the fresh one,
-  // because clientRef was still null there. Then it drops them and runs the
+  // encryption` would otherwise leave the half-booted client alive under the
+  // fresh one, because clientRef is still null there. Then it drops them and runs the
   // whole sequence again; `startClient` resets the stages itself.
   // Stopping the CLIENT and making the abandoned RUN inert are two separate
   // jobs: the old run's closure keeps going (its awaits may still resolve, its

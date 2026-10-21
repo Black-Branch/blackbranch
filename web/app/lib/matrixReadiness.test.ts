@@ -119,7 +119,7 @@ test("a retry's generation guard makes the abandoned run's continuation inert", 
     "the token fetch's guard is the first statement after it");
   assert.match(src, /const userId = await fetchMatrixId\(\);\s*if \(stale\(\)\) return;/,
     "the matrix-id fetch's guard is the first statement after it");
-  // A COUNT is not the contract — round 1 passed with two holes at exactly
+  // A COUNT is not the contract — a count can pass with two holes at exactly
   // five occurrences. Every callback that can run after this function has
   // already moved on (a rejection handler settling before its own `await`
   // resumes, or an event handler firing later) must have `stale()` as its

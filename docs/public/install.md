@@ -10,7 +10,7 @@ disk. A rented VPS is the usual choice; a Linux machine at home works the same w
 release brings the site as one prebuilt image — the same for every install — so the server never
 builds it: a 4 GB server installs with most of its memory to spare (measured: about
 1.3 GB in use at the busiest moment of a fresh install, no swap). Installed from a clone of the
-repository instead (section 2, until releases are published), the server builds that image itself once,
+repository instead (section 2), the server builds that image itself once,
 which takes most of a 4 GB server's memory: a server under about 7.5 GB with no swap then gets a 2 GB
 swap file during the install.
 
@@ -25,7 +25,10 @@ once and run `apt install sudo` (Debian leaves it out when a root password was s
 The installer checks the box first — before it installs Docker or starts anything — and stops with
 the reason if one is wrong: it must be running as root (through `sudo`), on Debian or Ubuntu (it reads `/etc/os-release` and
 does not check the release number — Debian stable and Ubuntu LTS are the supported ones), on
-x86-64, with about 4 GB of memory or more.
+x86-64, with about 4 GB of memory or more, able to reach the image registry (ghcr.io answers over
+IPv4 only: a server with IPv6 alone needs an IPv4 route out or a NAT64 network). It installs Docker
+when the server has none; a Docker already there must have **Docker Compose 2.20 or newer**
+(`docker compose version`) — an older one is refused with the update command.
 
 **The domain.** Pick the domain your community will live at — say `example.com`. The site answers
 there, the API at `api.example.com`, the chat server at `matrix.example.com`. **The domain is
@@ -43,24 +46,32 @@ permanent for this install**: your chat server is named after it, and every acco
 
 ## 2. Get the code
 
+The one-line form fetches the newest preview release, checks it against the checksum written into
+that copy of the script, and runs the installer from it (section 3; it asks its two questions on your
+terminal):
+
+```bash
+curl -fsSL https://blackbranch.app/install-beta.sh | sudo bash
+curl -fsSL https://blackbranch.app/install-beta.sh | sudo bash -s -- --domain example.com --mode tunnel
+```
+
+Read a script before you pipe it into a root shell. Every release so far is a preview, published on
+the **beta** release channel; a server installed this way follows that channel. Every release and its
+signature are listed at <https://blackbranch.app/releases>.
+
+Or from a clone of the repository, which builds the site's image on the server (section 1):
+
 ```bash
 git clone https://github.com/Black-Branch/blackbranch.git blackbranch
 cd blackbranch
 ```
 
-Or the one-line form, which fetches the newest release, checks it against the checksum written into
-that copy of the script, and runs the same installer (it asks the same two questions on your terminal):
-
-```bash
-curl -fsSL https://blackbranch.app/install.sh | sudo bash
-curl -fsSL https://blackbranch.app/install.sh | sudo bash -s -- --domain example.com --mode tunnel
-```
-
-Read a script before you pipe it into a root shell.
+A server installed from a clone follows the **stable** channel, which has no release yet. To receive
+the previews as updates, run `sudo blackbranch update --channel beta` once setup is done.
 
 ## 3. Run the installer
 
-From the folder you cloned into, as your ordinary user, with `sudo` in front:
+The one-line form runs it for you. From a clone, as your ordinary user, with `sudo` in front:
 
 ```bash
 sudo ./install/install.sh
@@ -151,7 +162,7 @@ again, and you are back on the same page.
 
    ![A platform page: Twitch](assets/setup-twitch.png)
 
-7. **Community.** Creates your community space and its `#general` room on the chat server, as your
+7. **Community.** Creates your community space with its `#general` and `#forum` rooms (the Forums tab's first forum) on the chat server, as your
    own account (so they are yours), and the federation switch — off by default: no other Matrix
    server can reach yours, and yours reaches none. You can switch it on later. And **who can join**:
    *anyone* (open sign-up: viewers make their own accounts) or *only accounts I make* (closed). There
@@ -162,7 +173,7 @@ again, and you are back on the same page.
    without them important problems still show in the Admin Panel's Doctor), and where backups go: **this server** (simple, but it does
    not survive losing the disk), **a storage bucket** (any S3-compatible one: Backblaze B2, Cloudflare
    R2, Wasabi, Amazon S3…) or **another server over SFTP**. Finish runs a test backup and checks it
-   restores before it lets you through; then the site is rebuilt once with your name and points, and
+   restores before it lets you through; then the site restarts once with your name and points, and
    setup is done.
 
 Until you finish, nobody can sign up on your chat server — your own account is made by page 1. After
@@ -181,7 +192,7 @@ prints it again while no account exists; `sudo blackbranch setup-link --new` mak
   server). Every row should be green; each red one has a one-line fix. Rows for parts you skipped say so.
 - Read [operate.md](operate.md): backups, restores, updates, password resets, moving to a bigger server.
 
-## Known limits of this beta
+## Known limits of this preview
 
 - **Mail:** the site sends no email yet. Sign-up needs no address; a forgotten password is reset on
   the server ([operate.md](operate.md#password-resets)).
@@ -191,8 +202,9 @@ prints it again while no account exists; `sudo blackbranch setup-link --new` mak
   any network: the bot's voice and sound alerts, its avatar, scene switching and the timer's pause
   scene. A browser source cannot show or hide OBS's other sources or mute audio; those are not offered.
 - **The Discord bridge** comes later.
-- **Updates:** until the project publishes its release feed, the Doctor's update row reads "never
-  read". Your install still works; it just cannot see new releases yet.
+- **Updates:** releases are published on the beta channel only; the stable channel has none yet. A
+  server installed from a clone follows stable until you run `sudo blackbranch update --channel beta`,
+  and until then it sees no new release. Your install still works either way.
 - **A first install by someone new to servers** is what these pages are written for, but that is
   a goal, not yet proven: no one new to servers has yet installed from them on a fresh machine. What
   is tested on every change is narrower. The project's CI installs from the repository on a fresh Ubuntu 24.04

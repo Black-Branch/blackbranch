@@ -86,7 +86,7 @@ test("native users fall back to the Matrix avatar route, and ids are encoded", (
 // ── profile lookup key ───────────────────────────────────────────────────────
 
 test("the profile lookup key: a site line's Matrix id, else its public id — never a canonical", () => {
-  // Chat lines carry per-platform public ids (owner decision 2026-10-17); /api/user/[id] answers a
+  // Chat lines carry per-platform public ids; /api/user/[id] answers a
   // raw canonical only for a moderator or the person. A site line keys by its own Matrix id.
   assert.equal(userLookupKey({ publicId: "pSITE", matrixId: "@a:site.test" }), "@a:site.test");
   assert.equal(userLookupKey({ publicId: "pTW", matrixId: null }), "pTW");

@@ -187,7 +187,7 @@ export function Bar({
     // iframe element; leaving the window entirely gives `relatedTarget`
     // null. Both mean "the pointer just left everywhere this effect can see
     // it" — park on either, rather than freezing `nearEdge` at whatever it
-    // last was (the stick-open half of F1).
+    // last was, which would stick the bar open.
     const onOut = (e: PointerEvent) => {
       // A tag-name check, not `instanceof HTMLIFrameElement`: `relatedTarget`
       // is always an Element or null here, and comparing by tag avoids
@@ -204,7 +204,7 @@ export function Bar({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerout", onOut);
       if (raf) cancelAnimationFrame(raf);
-      // F2: react-hooks/set-state-in-effect flags a synchronous setState in
+      // react-hooks/set-state-in-effect flags a synchronous setState in
       // the effect BODY, not in its cleanup — this is lint-clean where the
       // early-return above deliberately is not. Only registered once the
       // listeners actually attached, so this fires exactly when the guard
@@ -229,9 +229,9 @@ export function Bar({
   // Reports `nearEdge`'s OWN transitions — and ONLY `nearEdge`, never
   // `revealed` — while the bar is active overlay. See the prop's docblock
   // for why: reporting `revealed || nearEdge` means that once
-  // a host (ChatSidebar) echoed that value back into `revealed`, the OR
-  // latched permanently true and `nearEdge` releasing stopped being visible
-  // to anyone (final-review re-review). Depending on raw `nearEdge` instead
+  // a host (ChatSidebar) echoes that value back into `revealed`, the OR
+  // latches permanently true and `nearEdge` releasing stops being visible
+  // to anyone. Depending on raw `nearEdge` instead
   // of a value that can itself be polluted by an echoed prop is what makes
   // that latch impossible.
   useEffect(() => {

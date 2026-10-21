@@ -46,11 +46,11 @@
 
 :root {
   /* The app is unconditionally dark (the body gradient + the html canvas pin
-     below force it), so these hold the DARK values directly. They used to default
-     to light (#ffffff/#171717) and get flipped only inside a
-     `@media (prefers-color-scheme: dark)` block — which meant a light-mode *system*
-     kept dark --foreground text on the forced-dark background (invisible), and
-     read like a real light/dark theming system that doesn't exist. Fixed: no
+     below force it), so these hold the DARK values directly. Defaulting
+     to light (#ffffff/#171717) and flipping only inside a
+     `@media (prefers-color-scheme: dark)` block would leave a light-mode *system*
+     with dark --foreground text on the forced-dark background (invisible), and
+     read like a real light/dark theming system that doesn't exist. There is no
      light mode to mirror, so there's nothing to toggle. */
   /* Tell the UA the page is dark so BROWSER-rendered chrome matches. Without this
      the app forces its own dark palette but native widgets — scrollbars, date and
@@ -100,7 +100,7 @@
   --frame-color: rgba(255, 255, 255, 0.10);
   --frame-width: 2px;
 
-  /* Equal-gap spacing (C3): the panels' distance from the page edge equals their
+  /* Equal-gap spacing: the panels' distance from the page edge equals their
      distance from each other — one token drives both the outer padding and the
      inter-panel gap. */
   --panel-gap: 12px;
@@ -245,11 +245,11 @@
   --chrome-bottom-h: max(48px, calc(var(--title-size) * 1.25 + 30px), calc(var(--composer-ctl) + 6px));
 }
 
-/* NOTE: a `@media (max-width:767px) { --chat-font-size: 1rem }` override used to live
-   here. It never took effect: SettingsHydrator applies the registry value to every
-   setting on load regardless of viewport, so the media query was overwritten
-   milliseconds later on every mobile load — it only ever contributed a second font
-   jump (1rem → 1.352rem). Removed rather than left as a lie.
+/* NOTE: no `@media (max-width:767px) { --chat-font-size: 1rem }` override here. It
+   would never take effect: SettingsHydrator applies the registry value to every
+   setting on load regardless of viewport, so the media query is overwritten
+   milliseconds later on every mobile load — it would only add a second font
+   jump (1rem → 1.352rem).
    A genuinely responsive default needs viewport awareness in settingsRegistry, not a
    CSS override the hydrator will always win against. */
 
@@ -892,9 +892,9 @@ html:not(.chat-event-hl-off) .chat-msg-row.chat-row-event { background-color: va
     transform: translate(-50%, -50%);
   }
 }
-/* The money buttons' touch area (round 2b): 44px tall, and wide only to half
+/* The money buttons' touch area: 44px tall, and wide only to half
    of their 6px gap, so neighbours' areas meet but never overlap (a wider one
-   took the next button's edge — the 2a window-band lesson). */
+   would take the next button's edge, as in the window band). */
 @media (pointer: coarse) {
   .money-hit::after { content: ""; position: absolute; inset: -8px -3px; }
 }
@@ -1354,7 +1354,7 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
   .skeleton { animation: none; background-image: none; }
 }
 
-/* Touch press feedback (audit EP-8) — a quick tactile dip for primary tap
+/* Touch press feedback — a quick tactile dip for primary tap
    targets, which otherwise have hover-only affordances that never fire on
    touch. Deliberately no `transition` so it composes with each button's own
    transition-colors/filter (which it would otherwise override) — the dip snaps
@@ -2135,8 +2135,7 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
    modal-in / .chrome-window-page. The shadow token lives here with the raw
    values (check-tokens) and is UPWARD-biased on purpose: shadow-2xl's
    downward bulk would be clipped below the viewport, leaving the sheet's
-   seam against the chat above it nearly shadowless (5c-r final-review
-   finding 11). */
+   seam against the chat above it nearly shadowless. */
 :root {
   --sheet-shadow: 0 -8px 28px rgba(0, 0, 0, 0.55);
 }

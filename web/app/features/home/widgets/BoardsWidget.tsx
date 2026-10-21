@@ -1,9 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
 import {
-  FACES, faceOrDefault, faceLabel, windowsFor, windowLabel, defaultWindow, formatValue, isPeopleFace,
+  faceOrDefault, faceLabel, windowsFor, windowLabel, defaultWindow, formatValue, isPeopleFace,
   type FaceId, type WindowId, type BoardRow, type HomeBoards,
 } from "@/app/lib/boardFaces";
+import { messageScores } from "@/app/lib/plugins/installed";
+import { facesShown, faceShown } from "../boardFacesShown";
 import { useLocalStorageString } from "@/app/lib/useClientState";
 import { getJson } from "@/app/lib/http";
 import { renderText } from "@/app/lib/renderText";
@@ -23,6 +25,8 @@ import { emoteCrossOrigin } from "@/app/lib/emoteRes";
 type Rank = { rank: number; value: number; key: string };
 const EMPTY_EMOTES = {};
 const warmed = new Set<string>();
+// The AI-score faces only where the install's plugin computes those scores (boardFacesShown.ts).
+const FACES = facesShown(messageScores());
 
 export function BoardsWidget({ boards, loading, live, signedIn }: {
   boards: HomeBoards | null;
@@ -31,7 +35,7 @@ export function BoardsWidget({ boards, loading, live, signedIn }: {
   signedIn: boolean;
 }) {
   const [storedFace, setStoredFace] = useLocalStorageString("home_board_face");
-  const face: FaceId = faceOrDefault(storedFace);
+  const face: FaceId = faceShown(faceOrDefault(storedFace), FACES);
   const [picked, setPicked] = useState<WindowId | null>(null);
   const wanted = picked ?? defaultWindow(live);
   // The Streams face offers no Stream window: a Stream pick carried onto it

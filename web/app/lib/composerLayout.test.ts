@@ -280,16 +280,15 @@ test("both ends of the row carry the destination once send-to folds away", () =>
 
 // ── Keyboard ────────────────────────────────────────────────────────────────
 
-// A COUNT per file, not "at least one match" (R-17). The old assertion would
-// have passed with six of ChatMessage's seven controls still dropping the
-// keyboard — one lucky match anywhere in a file said nothing about the rest of
-// it. Update a number here when you add or remove a control; that is the point.
+// A COUNT per file, not "at least one match": that would pass with six of
+// ChatMessage's seven controls still dropping the keyboard — one lucky match
+// anywhere in a file says nothing about the rest of it. Update a number here when you add or remove a control; that is the point.
 const KEEP_FOCUS_SITES: Array<[string, number]> = [
   // The composer row itself.
   ["app/components/SendToButton.tsx", 4],         // send-to + its menu's items + the bound face + the help-desk indicator (shown only while support is live)
   ["app/components/ComposerToolsPopover.tsx", 1],
-  ["app/components/ChatComposerField.tsx", 2],    // emote button + the refusal note's ✕ (U1 rework)
-  ["app/components/MatrixInput.tsx", 2],          // attach + send (R-11)
+  ["app/components/ChatComposerField.tsx", 2],    // emote button + the refusal note's ✕
+  ["app/components/MatrixInput.tsx", 2],          // attach + send
   // The message row and everything that hangs off it.
   // The 9th is the row toolbar's own CONTAINER, not a button: its padding and
   // inter-button gaps are tappable surface, and a press on a non-focusable
@@ -301,7 +300,7 @@ const KEEP_FOCUS_SITES: Array<[string, number]> = [
   // as ChatMessage's equivalents do. A census with a hole in it reads exactly
   // like a census without one.
   ["app/components/MatrixMessageRow.tsx", 7],     // recent-react · 🙂 · ↩ · thread · ⋯ · the bar itself · "(edited)" (⑥)
-  ["app/features/chat/ChatInput.tsx", 4],         // reply-clear ✕ + send (R-11) + the failed-line Retry and ✕; the terminal `>_` moved to the top bar (4a follow-up)
+  ["app/features/chat/ChatInput.tsx", 5],         // reply-clear ✕ + send + the failed-line Retry and ✕ + the long notice's ✕; the terminal `>_` is in the top bar
   ["app/features/chat/SpendChip.tsx", 1],         // ✕ only — Top up deliberately does NOT (carve-out #2, pinned below)
   ["app/features/chat/StickerBoostPopover.tsx", 3],
   ["app/components/PollCard.tsx", 4],             // vote + extend/end/cancel
@@ -433,7 +432,7 @@ test("the placeholder cannot change the field's height at any width", () => {
   assert.match(field, /chat-input-placeholder[^"]*truncate/,
     "the overlay must truncate — that is the whole reason it is not ::placeholder");
   // (d) Only while EMPTY, or it would sit on top of the user's text.
-  // The refusal note (U1 rework) takes the placeholder's place: the same gate,
+  // The refusal note takes the placeholder's place: the same gate,
   // and also an absolute overlay — the note must not grow the field either.
   assert.match(field, /\{!value && !note && placeholder &&/,
     "the overlay must be gated on an empty field");
@@ -498,7 +497,7 @@ test("a grown composer says so — data-chrome-grow, keyed off the FIELD, so bot
   ]) {
     assert.match(input, row, "a status/reply row lost its grow flag — it would overflow a 48px bar");
   }
-  assert.equal((input.match(/data-chrome-grow/g) ?? []).length, 5, "sendError, failed-line retry, notice, slow-mode, reply banner");
+  assert.equal((input.match(/data-chrome-grow/g) ?? []).length, 6, "sendError, failed-line retry, notice (its long box, W30, and its line), slow-mode, reply banner");
   assert.match(readCode("app/features/chat/SpendChip.tsx"), /data-chrome-grow/, "the spend chip is an in-flow row");
 });
 

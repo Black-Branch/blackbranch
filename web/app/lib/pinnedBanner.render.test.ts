@@ -54,7 +54,7 @@ test("the author's equipped style wraps ONLY the name, on the author's colour �
   const platform = render({});
   // No author colour: the same default a chat row falls back to (ChatMessage:
   // a platform author with no per-user colour is DEFAULT_NAME_COLOR, never the
-  // platform's brand colour) — the banner used to diverge here.
+  // platform's brand colour) — the banner must not diverge here.
   assert.match(platform, new RegExp(`color:${DEFAULT_NAME_COLOR}`, "i"), "no author colour: the chat row's default");
   // Badges follow the viewer's badge-size setting like every other badge row.
   assert.match(src, /height: rowBasisCalc\('1\.10 \* var\(--chat-badge-scale, 1\)'\)/, "banner badges scale with --chat-badge-scale");
@@ -73,7 +73,7 @@ test("badges render before the name from BadgesContext, keyed on the pin's matri
 // carries a ':', and the pin icon is the monocolour one.
 test("the name is followed by the chat row's plain colon — outside the style set", () => {
   const html = render({ usernameColor: "#00ccff", usernameStyle: { font: "gothic" } });
-  // Directly after the name span, muted, and carrying the gap the name used to.
+  // Directly after the name span, muted, and carrying the gap the name otherwise would.
   assert.match(html, />casey<\/span><\/span><span class="text-muted mr-1\.5">:<\/span>/);
   const colon = /<span class="text-muted mr-1\.5"[^>]*>:<\/span>/.exec(html)?.[0] ?? "";
   assert.doesNotMatch(colon, /font-pirata|style=/, "the equipped style never reaches the colon");

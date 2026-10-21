@@ -34,6 +34,7 @@ import { useOwnPublicIds } from "@/app/lib/ownIdentity";
 import { useModIds } from "@/app/lib/modIdentity";
 import { scoreName } from "@/app/lib/currency";
 import { normalizePlatform } from "@/app/lib/nativePlatform";
+import { useBillingAvailability } from "@/app/lib/useStripe";
 
 // The /api/user/[id] `Lookup` shape lives in app/lib/userCardData.ts now,
 // beside the prefetch cache that fetches it — this file imports the type.
@@ -157,6 +158,9 @@ export default function UserCard({
    *  whose close would close the window itself. */
   stayOpenAfterAction?: boolean;
 }) {
+  // A gift is a month of Supporter: no usable Supporter price at Stripe = no Gift button.
+  const billing = useBillingAvailability();
+  const giftsOn = billing.stripe && billing.supporter !== null;
   const [data, setData] = useState<Lookup | null>(initialData ? initialData.lookup : null);
   const [credit, setCredit] = useState<number | null>(initialData ? initialData.credit : null);
   const [avatarOk, setAvatarOk] = useState(true);
@@ -182,8 +186,7 @@ export default function UserCard({
   // Never yourself — your site account (isOwnMessage) or any of your platform
   // identities (your own public ids, ownIdentity.ts). Until those have loaded a
   // platform row cannot be told apart from your own Twitch line, so Hide is
-  // offered then only for site messages, which isOwnMessage CAN check (half-B
-  // review I4).
+  // offered then only for site messages, which isOwnMessage CAN check.
   const ownIds = useOwnPublicIds();
   const ownIdsKnown = ownIds.size > 0;
   const hideTarget = isOwnMessage || (!!msg.publicId && ownIds.has(msg.publicId))
@@ -438,7 +441,7 @@ export default function UserCard({
                     Message
                   </button>
                 )}
-                <button
+                {giftsOn && <button
                   onClick={() => {
                     // dispatchClaimable, not a bare CustomEvent: the hub's
                     // one-host guard reads defaultPrevented, which only a
@@ -451,7 +454,7 @@ export default function UserCard({
                   className="px-2 py-1 rounded-md bg-violet-500/30 hover:bg-violet-500/50 text-2xs text-violet-100 transition-colors"
                 >
                   🎁 Gift
-                </button>
+                </button>}
               </>)}
               {canReport && (
                 <button

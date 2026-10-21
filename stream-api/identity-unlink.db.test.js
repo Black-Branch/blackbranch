@@ -84,7 +84,7 @@ test('identity tie-break and unlink against real Postgres', async (t) => {
     assert.equal((await pool.query(`SELECT 1 FROM stream.links WHERE platform = 'twitch' AND platform_id = 'g1u-tw'`)).rowCount, 1);
   });
 
-  // Security review: an unlink is never a way out of a restriction.
+  // An unlink is never a way out of a restriction.
   await t.test('unlinking a MARKED identity: the fresh canonical carries the open mark', async () => {
     await pool.query(`INSERT INTO stream.users (id, name) VALUES ('g1um', 'marked')`);
     await pool.query(`INSERT INTO stream.links (platform, platform_id, canonical) VALUES ('native', '@g1u-m:site.test', 'g1um'), ('twitch', 'g1u-mtw', 'g1um'), ('kick', 'g1u-mkk', 'g1um')`);
@@ -184,12 +184,12 @@ test('identity tie-break and unlink against real Postgres', async (t) => {
     assert.equal((await call({ matrixId: ME, platform: 'native', platformId: ME })).statusCode, 400);
   });
 
-  // ── Review round 6, PB4-b: the ONE-link person. A site person with no native stream.links row
-  // whose site chat sits on the canonical their only platform link gave them (resolveCanonical's
-  // prio 2). The old unlink saw that link alone on its canonical and answered { unchanged: true };
-  // web then dropped its rows, the platform account kept the site person's canonical, and the next
-  // site account to claim that platform account merged two people. Round 6's rule: every fix passes
-  // its original path, a restart and a retry.
+  // ── the ONE-link person. A site person with no native stream.links row whose site chat sits on
+  // the canonical their only platform link gave them (resolveCanonical's prio 2). An unlink that
+  // sees that link alone on its canonical and answers { unchanged: true } leaves the platform
+  // account holding the site person's canonical once web drops its rows, and the next site account
+  // to claim that platform account merges two people. Each case runs its original path, a restart
+  // and a retry.
   const routesOf = (identity) => {
     const routes = {};
     identity.registerIdentityRoutes({ post: (p, ...h) => { routes[p] = h[h.length - 1]; }, get: () => {} },
@@ -201,7 +201,7 @@ test('identity tie-break and unlink against real Postgres', async (t) => {
     await routes[path]({ body }, res);
     return res;
   };
-  // One site person, ONE platform link, no native row — the fixture the reviewer found missing.
+  // One site person, ONE platform link, no native row.
   const oneLinkPerson = async (who, canon, pid) => {
     await pool.query(`INSERT INTO site.users (matrix_id, display_name) VALUES ($1, 'casey')`, [who]);
     await pool.query(`INSERT INTO stream.users (id, name) VALUES ($1, 'casey')`, [canon]);
@@ -215,7 +215,7 @@ test('identity tie-break and unlink against real Postgres', async (t) => {
   const fresh = () => createIdentity({ pool, requestAggregateRefresh: () => {} });
   const unlinkBody = (who, pid) => ({ matrixId: who, platform: 'twitch', platformId: pid });
 
-  await t.test('PB4-b original path: one link, no native row — unlink SEPARATES, and the site person keeps their canonical through a native row', async () => {
+  await t.test('original path: one link, no native row — unlink SEPARATES, and the site person keeps their canonical through a native row', async () => {
     const who = '@g1u-one:site.test';
     await oneLinkPerson(who, 'g1uo', 'g1u-otw');
     const identity = fresh();
@@ -244,7 +244,7 @@ test('identity tie-break and unlink against real Postgres', async (t) => {
     assert.equal(await identity.resolveCanonical(null, who), 'g1uo');
   });
 
-  await t.test('PB4-b restart: after the unlink, a restarted stream-api (empty cache) answers the same people', async () => {
+  await t.test('restart: after the unlink, a restarted stream-api (empty cache) answers the same people', async () => {
     const who = '@g1u-rs:site.test';
     await oneLinkPerson(who, 'g1urs', 'g1u-rstw');
     const before = fresh();
@@ -260,7 +260,7 @@ test('identity tie-break and unlink against real Postgres', async (t) => {
     assert.deepEqual(await nativeRows(who), ['g1urs']);
   });
 
-  await t.test('PB4-b retry: web failed after stream-api committed — the retry (after a restart) answers unchanged and mints nothing', async () => {
+  await t.test('retry: web failed after stream-api committed — the retry (after a restart) answers unchanged and mints nothing', async () => {
     const who = '@g1u-rt:site.test';
     await oneLinkPerson(who, 'g1urt', 'g1u-rttw');
     const sep = (await hit(routesOf(fresh()), '/identity/unlink', unlinkBody(who, 'g1u-rttw'))).body.canonicalId;
@@ -285,7 +285,7 @@ test('identity tie-break and unlink against real Postgres', async (t) => {
     assert.equal(await fresh().resolveCanonical(null, who), 'g1urt');
   });
 
-  await t.test('PB4-b retry: a stream-api transaction that FAILS midway leaves nothing — no native row, link in place — and the retry separates', async () => {
+  await t.test('retry: a stream-api transaction that FAILS midway leaves nothing — no native row, link in place — and the retry separates', async () => {
     const who = '@g1u-mid:site.test';
     await oneLinkPerson(who, 'g1umd', 'g1u-mdtw');
     let armed = true;

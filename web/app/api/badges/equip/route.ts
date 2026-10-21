@@ -5,6 +5,7 @@ import { notifyBadgesChanged } from "@/app/lib/streamApi";
 import { MAX_SLOTS } from "@/app/lib/badgeSlots";
 import { NextRequest } from "next/server";
 import { invalidateBadgeSnapshot } from "@/app/lib/badgeCache";
+import { subscriptionSources, viewerEntitledSql } from "@/app/lib/subscriptions/entitlement";
 
 // POST /api/badges/equip { slotIndex, badgeId|null }
 // Self-service: the signed-in user equips one of THEIR unlocked badges into one of
@@ -25,12 +26,12 @@ export async function POST(req: NextRequest) {
     return new Response("Bad badge", { status: 400 });
   }
 
-  // Effective slot count + unlock check in one round-trip.
+  // Effective slot count + unlock check in one round-trip. Entitled = an entitling subscription
+  // record (the one fragment, sources as $3) OR an unexpired gift.
   const { rows } = await pool.query<{ base: number; entitled: boolean; unlocked: boolean; sub_gated: boolean }>(
     `SELECT
        COALESCE(bs.base_slots, 0) AS base,
-       ( EXISTS (SELECT 1 FROM site.subscriptions s
-                  WHERE s.matrix_id = $1 AND s.status IN ('active','trialing','past_due'))
+       ( ${viewerEntitledSql("$1", "$3")}
          OR EXISTS (SELECT 1 FROM site.gift_subscriptions g
                      WHERE g.recipient_matrix_id = $1 AND g.expires_at > now()) ) AS entitled,
        EXISTS (SELECT 1 FROM site.badge_unlocks bu
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
        COALESCE((SELECT b.is_subscriber FROM site.badges b WHERE b.id = $2), false) AS sub_gated
      FROM (SELECT 1) x
      LEFT JOIN site.badge_slots bs ON bs.matrix_id = $1`,
-    [matrixId, badgeId ?? 0]
+    [matrixId, badgeId ?? 0, subscriptionSources()]
   ).catch(() => ({ rows: [] as { base: number; entitled: boolean; unlocked: boolean; sub_gated: boolean }[] }));
 
   const base = Number(rows[0]?.base ?? 0);
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
   // A subscriber-gated badge needs LIVE entitlement at equip time, not just an
   // unlock row. site.badge_unlocks is a permanent record of "you once earned
   // this" and is never revoked, so a lapsed subscriber who separately bought a
-  // Qorm badge slot could re-equip the Supporter badge forever and keep wearing
+  // points-store badge slot could re-equip the Supporter badge forever and keep wearing
   // it in chat with no subscription behind it. Staff bypass, as everywhere else.
   if (badgeId !== null && rows[0]?.sub_gated && !entitled) {
     return new Response("Subscription required", { status: 403 });

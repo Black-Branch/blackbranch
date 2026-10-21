@@ -1,5 +1,5 @@
 import { postJson, getJson, HttpError } from "../http";
-import { signature, scopeAllows, routeAvailable, type HandlerKey, type PluginHandlerKey } from "./spec";
+import { signature, scopeAllows, routeAvailable, moduleAvailable, type HandlerKey, type PluginHandlerKey } from "./spec";
 import { platformLabel } from "../platforms";
 import { parseCommandLine, argValues, missingArg, durationToMinutes, helpText, type Viewer } from "./parse";
 import { parseYoutubeVideoId } from "../youtubeId";
@@ -594,6 +594,10 @@ export function createCommandRunner({ setSendError, showNotice, support }: RunDe
         kind: "rejected",
         message: leaf.scope === "admin" ? "That command is admin-only." : "That command is for mods.",
       };
+    }
+    // A command for a part this install does not run — on the leaf, or on a branch above it.
+    if (p.path.some((n) => !moduleAvailable(n, viewer))) {
+      return { kind: "rejected", message: `${text.trim().split(/\s+/)[0]} isn't available on this site.` };
     }
 
     const missing = missingArg(text, p);

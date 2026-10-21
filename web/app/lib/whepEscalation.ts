@@ -1,7 +1,7 @@
 // WHEP connection-escalation policy — when a WebRTC player should retry, when it
 // should stop and hand the viewer the choice, and (crucially) when it should do
-// NOTHING. ("fallback" used to mean "switch to HLS by yourself"; since the
-// NO AUTOMATIC DEMOTION rule in StreamplaceThinPlayer it means "stop and ask".)
+// NOTHING. ("fallback" means "stop and ask", never "switch to HLS by yourself":
+// the NO AUTOMATIC DEMOTION rule in StreamplaceThinPlayer.)
 //
 // WHY THIS IS A SEPARATE, PURE MODULE. It was inline in StreamplaceThinPlayer,
 // where it could not be tested — you cannot exercise a WebRTC state machine

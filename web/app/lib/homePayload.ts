@@ -28,6 +28,9 @@ export type HomePayload = {
   threads: HomeThread[] | null;
   /** The Leaderboard's top fives, every face × window. */
   boards: HomeBoards | null;
+  /** The platforms this install is set up with (homePlatforms) — the sign-in logos. [] when the
+   *  read failed: no logo is shown on a guess. */
+  platforms: string[];
   generatedAt: string;
 };
 
@@ -38,7 +41,24 @@ export type HomeLoaders = {
   vods: () => Promise<Vod[]>;
   threads: () => Promise<HomeThread[]>;
   boards: () => Promise<HomeBoards>;
+  platforms: () => Promise<string[]>;
 };
+
+/** The platforms this install is set up with, for the Home tab's sign-in logos: the chat
+ *  platforms with a channel, YouTube while its module runs with a channel, Discord while the
+ *  bridge has a username template, Patreon while its webhook secret is set. Pure. */
+export function homePlatforms(i: {
+  chat: { twitch: boolean; kick: boolean; streamplace: boolean };
+  youtube: boolean;
+  discord: boolean;
+  patreon: boolean;
+}): string[] {
+  const out = (Object.keys(i.chat) as (keyof typeof i.chat)[]).filter((k) => i.chat[k]) as string[];
+  if (i.youtube) out.push("youtube");
+  if (i.discord) out.push("discord");
+  if (i.patreon) out.push("patreon");
+  return out;
+}
 
 /** A loader's failure is that widget's `null`, never a rejection of the whole body. */
 async function settle<T>(load: () => Promise<T>): Promise<T | null> {
@@ -50,15 +70,16 @@ async function settle<T>(load: () => Promise<T>): Promise<T | null> {
 }
 
 export async function buildHomePayload(loaders: HomeLoaders, nowMs: number = Date.now()): Promise<HomePayload> {
-  const [status, lastStream, news, vods, threads, boards] = await Promise.all([
+  const [status, lastStream, news, vods, threads, boards, platforms] = await Promise.all([
     settle(loaders.status),
     settle(loaders.lastStream),
     settle(loaders.news),
     settle(loaders.vods),
     settle(loaders.threads),
     settle(loaders.boards),
+    settle(loaders.platforms),
   ]);
-  return { status, lastStream, news, vods, threads, boards, generatedAt: new Date(nowMs).toISOString() };
+  return { status, lastStream, news, vods, threads, boards, platforms: platforms ?? [], generatedAt: new Date(nowMs).toISOString() };
 }
 
 /** The status route's answer, cut down to what Home shows. */

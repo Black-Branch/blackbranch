@@ -1,15 +1,15 @@
-// Where a wallet's Qorm CAME FROM — attribution of one commingled balance to
-// the four things that can put Qorm into it.
+// Where a wallet's points CAME FROM — attribution of one commingled balance to
+// the four things that can put points into it.
 //
 // The question this exists to answer: **how much of a given balance is backed
-// by real money?** Qorm can be bought with a card, and that is the material
+// by real money?** Points can be bought with a card, and that is the material
 // difference from Twitch channel points, which cannot — and channel points'
 // unpurchasability is most of why Twitch Predictions sit clear of gambling law.
 // Nothing here enforces a policy. It measures, so a policy can be chosen
 // against real numbers instead of guessed at.
 //
 // This file is PURE and dependency-free ON PURPOSE: it does integer
-// arithmetic that must not lose or invent Qorm, and a rounding bug in a
+// arithmetic that must not lose or invent points, and a rounding bug in a
 // proportional drain is exactly the kind that looks right in an example and
 // is wrong in aggregate. Purity is what lets the fold run against synthetic
 // ledgers with no pool — property-tested over random ledgers
@@ -27,18 +27,18 @@
 // and does no extension inference (app/lib/testDom.ts says why).
 import type { LedgerKind } from "./coins.ts";
 
-/** The four origins of Qorm. Only ONE of them is backed by money.
+/** The four origins of points. Only ONE of them is backed by money.
  *
  *  `granted` is deliberately NOT folded into `earned`. Admin grants can be the
- *  overwhelming majority of all Qorm in existence, sitting in a couple of
+ *  overwhelming majority of all points in existence, sitting in a couple of
  *  owner wallets — so calling them "earned" would make any earned-only rule
  *  meaningless, and calling them "purchased" would be false. They are their own
  *  thing and any policy has to say what it thinks of them ON PURPOSE.
  *
  *  `winnings` (LEGACY — there is no market) is market value
- *  returned ABOVE the stake it drew from — Qorm the house minted, not Qorm
+ *  returned ABOVE the stake it drew from — points the house minted, not points
  *  anyone put in. Tracked separately because "winnings from a wager partly
- *  funded by purchased Qorm" is a question someone may need to answer, and
+ *  funded by purchased points" is a question someone may need to answer, and
  *  folding it back into `purchased` or `earned` would answer it silently and
  *  probably wrongly. */
 // @parked same consumer as DRAIN_POLICIES below — the report iterates the
@@ -46,14 +46,14 @@ import type { LedgerKind } from "./coins.ts";
 export const PROVENANCE_BUCKETS = ["purchased", "earned", "granted", "winnings"] as const;
 export type ProvenanceBucket = (typeof PROVENANCE_BUCKETS)[number];
 
-/** Qorm by origin. Always non-negative; NOT always the wallet balance on its
+/** Points by origin. Always non-negative; NOT always the wallet balance on its
  *  own — see `attributionBalance` below. Sums to the balance only when the
  *  wallet owes nothing (`debt === 0`). */
 export type Split = Record<ProvenanceBucket, number>;
 
 /** What a DEBIT takes from a commingled balance. This is the whole policy
- *  question, and it is a choice rather than a fact — the Qorm in a wallet is
- *  fungible, so "which Qorm did you spend" has no physical answer.
+ *  question, and it is a choice rather than a fact — the points in a wallet are
+ *  fungible, so "which points did you spend" has no physical answer.
  *
  *  - `pro-rata` — every debit drains all four pools in proportion to their
  *    current share. Order-independent and ungameable by timing, and it is how
@@ -115,7 +115,7 @@ const DRAIN_ORDER: Record<Exclude<DrainPolicy, "pro-rata">, readonly ProvenanceB
 /** What a debit of this kind takes — the SHIPPED rule, as opposed to the
  *  uniform policies above, which exist so the report can explore hypotheticals.
  *
- *  A store spend drains PURCHASED first, so bought Qorm leaves through the
+ *  A store spend drains PURCHASED first, so bought points leave through the
  *  store and the earned pool survives to be shown as earned. `market_buy` is
  *  LEGACY — nothing writes that kind — but rows exist, and they drained the
  *  `stake` order (winnings, then earned).
@@ -141,7 +141,7 @@ export function PRODUCT_DRAIN(kind: LedgerKind): DrainPolicy {
  *  It is `purchased-first` because that is the CONSERVATIVE direction. A
  *  restore hands the least-stakeable provenance back to the spendable balance
  *  first, so a partial exit could never inflate what a wallet was allowed to stake. The
- *  mirror choice (stake order) would return earned Qorm first and raise
+ *  mirror choice (stake order) would return earned points first and raise
  *  `earnedBalance`, which is the one number in this module that must never be
  *  generous by accident.
  *
@@ -218,7 +218,7 @@ export type Attribution = {
    *  current: a granted wallet that spent the lot is still a granted wallet.
    *  See isHouseWallet — this is what that reads. */
   grantsReceived: number;
-  /** Qorm this wallet OWES — a refund/dispute clawback larger than the balance
+  /** Points this wallet OWES — a refund/dispute clawback larger than the balance
    *  (the wallet goes below zero). While debt > 0 every
    *  bucket is 0; credits pay it off before landing anywhere. Invariant:
    *  splitTotal(split) - debt === balance. */
@@ -229,7 +229,7 @@ export type Attribution = {
  *
  *  The owners' own points only make store prices meaningless for themselves; they are not
  *  circulation. That is the correct frame and it changes what every aggregate
- *  here means: if nearly all Qorm "in circulation" is a couple of grants, a
+ *  here means: if nearly all points "in circulation" is a couple of grants, a
  *  total that includes them describes nothing.
  *
  *  Keyed on HAVING BEEN GRANTED, not on `site.users.is_admin`/`is_mod`:
@@ -278,8 +278,8 @@ export function attributionBalance(a: Pick<Attribution, "split" | "debt">): numb
 
 /** Take `amount` out of `from`, per `policy`, and return what was taken.
  *
- *  THE ROUNDING IS THE DANGEROUS PART. Qorm is integral, so a proportional
- *  share is generally fractional, and naive rounding either loses Qorm (the
+ *  THE ROUNDING IS THE DANGEROUS PART. Points are integral, so a proportional
+ *  share is generally fractional, and naive rounding either loses points (the
  *  split stops summing to the balance) or invents it (worse). This uses
  *  LARGEST REMAINDER: floor every exact share, then hand the leftover units out
  *  one at a time by descending fractional part, skipping any pool that is
@@ -448,7 +448,7 @@ export function attribute(
 
 /** The headline: how much of this balance is backed by real money.
  *  `purchased` only — grants are not money the house received, and winnings are
- *  Qorm the house minted.
+ *  points the house minted.
  *
  *  Kept as a named function rather than an inlined `.purchased` because "backed
  *  by real money" is a DEFINITION, and a definition that lives in one place can

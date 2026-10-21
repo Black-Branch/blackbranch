@@ -3,10 +3,10 @@
 // them with a fake fetch (articleExtract.test.ts).
 //
 // Only links already in site.rss_items are fetched, but the publisher behind one
-// can stall or drip forever, and the slot cap is global: before external review
-// S7, three stalled publishers held every slot and every other reader got 503
-// until a socket timeout, and a huge body went whole into the synchronous parse.
-// Now each URL gets one TOTAL deadline (headers and body) and a byte cap
+// can stall or drip forever, and the slot cap is global: unbounded, three stalled
+// publishers could hold every slot (every other reader got 503 until a socket
+// timeout), and a huge body would go whole into the synchronous parse.
+// So each URL gets one TOTAL deadline (headers and body) and a byte cap
 // enforced while the body is read (which also bounds the parse), and
 // concurrent misses for one URL share one extraction.
 import { JSDOM } from "jsdom";

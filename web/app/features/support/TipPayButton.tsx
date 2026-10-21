@@ -5,6 +5,7 @@ import { PayPalButton, usePaypalSdk, venmoEligible } from "./PayPalButton";
 import { readLastPayMethod, rememberPayMethod, type PayMethod } from "./payMethod";
 import { pointsForCents } from "@/app/lib/coins";
 import { currencyName } from "@/app/lib/currency";
+import { formatPrice, currencySign } from "@/app/lib/moneyFormat";
 import type { TipDraft } from "./types";
 
 // The split "Tip $X [▾]" button, so PayPal is never hidden behind a collapsed
@@ -60,9 +61,11 @@ export function TipPayButton(props: {
   const cardAvailable = props.cardAvailable ?? true;
   const points = (props.purpose ?? "tip") === "points";
   const pointsCount = valid ? pointsForCents(Math.round(amount * 100)).toLocaleString() : "";
+  // The amount in the site's currency (moneyFormat.ts), never a literal "$": "$5", "$4.50", "$—".
+  const tipAmount = amount ? formatPrice(Math.round(amount * 100)) : `${currencySign()}—`;
   const cardLabel = points
     ? (busy ? "Starting checkout…" : `Buy ${pointsCount} ${currencyName()}`)
-    : (busy ? "Starting…" : `Tip $${amount || "—"}`);
+    : (busy ? "Starting…" : `Tip ${tipAmount}`);
   const cardColour = points ? "bg-yellow-500 hover:brightness-110" : "bg-emerald-500 hover:bg-emerald-400";
 
   const [chosenMethod, setMethod] = useState<PayMethod>("card");
@@ -201,7 +204,7 @@ export function TipPayButton(props: {
               purpose={props.purpose ?? "tip"}
             />
             <p className="mt-1 text-xs text-body-dim">
-              {points ? `Buying ${pointsCount} ${currencyName()}` : `Tipping $${amount || "—"}`} via {method === "paypal" ? "PayPal" : "Venmo"}
+              {points ? `Buying ${pointsCount} ${currencyName()}` : `Tipping ${tipAmount}`} via {method === "paypal" ? "PayPal" : "Venmo"}
             </p>
           </div>
         )}

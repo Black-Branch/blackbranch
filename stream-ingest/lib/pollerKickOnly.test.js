@@ -1,9 +1,8 @@
-// The REAL poller on a Kick-only install (external review, finding A).
+// The REAL poller on a Kick-only install.
 //
-// startPoller() used to admit itself only when a Twitch bot token or a YouTube Data API key was
-// present, so an install whose only channel is Kick connected chat but never opened a session,
-// never recorded a viewer snapshot and never closed one: the poller printed "idle" and made no
-// request at all. This drives the actual timer loop against a fake Kick and a fake stream-api and
+// A poller that admits itself only when a Twitch bot token or a YouTube Data API key is present
+// leaves an install whose only channel is Kick with chat but no session, no viewer snapshot and
+// no close: the poller prints "idle" and makes no request at all. This drives the actual timer loop against a fake Kick and a fake stream-api and
 // asserts the whole lifecycle: start once, snapshots with Kick's count, and an end only after the
 // second consecutive offline answer (the miss-counter debounce).
 //

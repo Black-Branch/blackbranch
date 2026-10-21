@@ -23,7 +23,7 @@ test("an unknown or missing stored face falls to credit; a window id is validate
   assert.equal(faceOrDefault(null), "credit");
   assert.equal(faceOrDefault("nope"), "credit");
   assert.equal(faceOrDefault("emotes"), "emotes");
-  // The pre-rename "qorm" id is no longer mapped (R contract step): it falls to credit like any unknown.
+  // A retired face id is not mapped: it falls to credit like any unknown.
   assert.equal(faceOrDefault("qorm"), "credit");
   assert.equal(faceIdOf("qorm"), null);
   assert.equal(faceIdOf("points"), "points");

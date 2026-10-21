@@ -106,7 +106,7 @@ export async function loadHouseLooks(): Promise<Record<number, Look>> {
 export type SlotFile = { slot: number; own: boolean; name: string | null; settings: Record<string, string>; houseBehind: boolean };
 
 /** Each slot as a file: your own look, else the house look filling it, else no file. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function slotFiles(presets: readonly Preset[], house: Record<number, Look>): SlotFile[] {
   const out: SlotFile[] = [];
   for (const n of PRESET_SLOTS) {

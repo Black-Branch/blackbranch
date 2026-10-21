@@ -19,7 +19,7 @@ test("next.config.ts rewrites nothing but the product favicon — the one-releas
 });
 
 test("the renamed route families are served only under their new names", () => {
-  // The owner plugin's renamed family is checked in its own folder (app/(owner)/ownerRoutes.test.ts).
+  // A site plugin's renamed family is checked in its own folder (app/(owner)/ownerRoutes.test.ts).
   for (const [oldDir, newDir] of [["api/coins", "api/points"], ["api/billing/coins", "api/billing/points"]] as const) {
     assert.ok(!existsSync(join(WEB, "app", oldDir)), `${oldDir} has a route directory again`);
     assert.ok(existsSync(join(WEB, "app", newDir)), `${newDir} is missing from app`);

@@ -42,7 +42,7 @@ test("1: migrate-v119 adds the renewal-off flag, additively, and tracks itself",
 });
 
 test("2: the webhook's subscription writer stores Stripe's cancel_at_period_end in the same upsert as status", () => {
-  // The upsert lives in subscriptionSync.ts (external review S3), imported by the
+  // The upsert lives in subscriptionSync.ts, imported by the
   // webhook route and nothing else — pinned in "2b" below.
   const src = read("app/lib/subscriptionSync.ts");
   assert.match(src, /export const syncSubscriptionState = bound\.syncSubscription;\s*$/, "END of subscriptionSync.ts not read");

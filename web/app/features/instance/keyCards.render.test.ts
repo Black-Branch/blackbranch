@@ -1,7 +1,7 @@
 // The Admin Panel's setting rows, mounted: a choice and a text box start from the current value, a
 // list is its items with add and remove (and a save carries the whole list), every restart setting
 // raises the pending-restart banner, and a setting the host applies says "Applying…" on a bundle and
-// "Managed outside Blackbranch" on an install that is not one.
+// "Managed outside Black Branch" on an install that is not one.
 // Run: systemd-run --user --scope -p MemoryMax=8G node --test app/features/instance/keyCards.render.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -105,7 +105,7 @@ test("a restart setting that is not a switch raises the pending-restart banner w
 });
 
 test("a module the chat service runs: the website follows that service's restart, never 'at once'", async () => {
-  // modules.obs, not an owner-only module: the public cut has no owner plugin, and KeyCards hides a key
+  // modules.obs, not an owner-only module: the public cut has no site plugin, and KeyCards hides a key
   // of an owner-only module the install does not have — so a radio row is null there.
   const { el, unmount } = await mount();
   const when = rowOf(el, "modules.obs").querySelector('[aria-label="When it applies"]')!.textContent ?? "";
@@ -127,15 +127,35 @@ test("a host-applied switch on a bundle: Applying… until the host's render ans
   await b.unmount();
 });
 
-test("not a bundle: the host-applied switch is 'Managed outside Blackbranch', read-only, with where to change it", async () => {
+test("not a bundle: the host-applied switch is 'Managed outside Black Branch', read-only, with where to change it", async () => {
   const { el, unmount } = await mount(view({ bundle: false, canRestart: false }));
   const fed = rowOf(el, "matrix.federation");
   assert.ok(fed.querySelector("[data-managed-outside]"));
-  assert.match(fed.textContent ?? "", /Managed outside Blackbranch/);
+  assert.match(fed.textContent ?? "", /Managed outside Black Branch/);
   assert.match(fed.textContent ?? "", /set in the homeserver's own config/);
   assert.equal(fed.querySelector('[role="switch"]'), null, "no switch that would change nothing");
   assert.equal(fed.querySelector("[data-host-apply]"), null);
   // The rest of the card stays editable.
   assert.ok(rowOf(el, "auth.federatedSignin").querySelector("select"));
   await unmount();
+});
+
+test("the federation switch's FIRST render is the saved value — never on for an install whose setup saved it off", async () => {
+  const fedRow = (stored: unknown, web: unknown) => key({ key: "matrix.federation", label: "Federation", kind: "bool", reload: "restart", hostApplied: true, defaultValue: false,
+    stored: stored === undefined ? null : { display: stored, updatedBy: "@casey:site.test", updatedAt: "2026-10-18T09:00:00Z" }, packages: [pkg("web", web)] });
+  const cases: [string, unknown, unknown, string][] = [
+    ["saved off, the website still reading on", false, true, "false"],
+    ["saved off", false, false, "false"],
+    ["nothing saved (setup left the default), the website reads off", undefined, false, "false"],
+    ["nothing saved, the website not reporting yet", undefined, null, "false"],
+    ["saved on", true, true, "true"],
+  ];
+  for (const [name, stored, web, want] of cases) {
+    const { el, unmount } = await mount(view({ keys: [fedRow(stored, web)] }));
+    const sw = rowOf(el, "matrix.federation").querySelector('[role="switch"]');
+    assert.ok(sw, `${name}: the switch is there`);
+    assert.equal(sw!.getAttribute("aria-checked"), want, name);
+    assert.equal(rowOf(el, "matrix.federation").textContent?.includes(want === "true" ? "On" : "Off"), true, `${name}: the word beside it agrees`);
+    await unmount();
+  }
 });

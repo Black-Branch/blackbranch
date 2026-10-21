@@ -2,7 +2,8 @@
 
 import ModUndoToast from "@/app/components/ModUndoToast";
 import { useMarkedPolling } from "@/app/lib/markedPeople";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, useSyncExternalStore, type CSSProperties } from "react";
+import { subscribeHomeStore, readHomeStore } from "@/app/lib/homeStore";
 import { useLocalStorageString } from "@/app/lib/useClientState";
 import ChatMessage from "./ChatMessage";
 import ReplyPreview from "./ReplyPreview";
@@ -234,11 +235,13 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
   // tab does not compile here until this host answers for it. VODs needs BOTH
   // a list and a picker: the popout renders this sidebar with neither. Home
   // has nothing to do in a 420px popout either.
+  const newsHasItems = (useSyncExternalStore(subscribeHomeStore, readHomeStore, () => null)?.news?.length ?? 0) > 0;
   const { shown: shownContent, tabs: contentTabs, unarmed: unarmedTabs } =
     partitionTabs(armed, {
       home: !isPopout,
       forums: !isPopout,
-      news: true,
+      // Hidden until a feed has items (§0): read from the remembered Home body.
+      news: newsHasItems,
       vods: vods.length > 0 && !!onPickVod,
       stream: isAdmin && !isPopout,
     });
@@ -1225,9 +1228,9 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
               /* Banned/timed out: the COMPOSER is the punishment, not the
                  account. UserMenu hosts the only listener for every
                  `bb:open-*` event (store, support, settings, mod panel…) —
-                 when this branch replaced ChatInput it silently unmounted that
-                 hub, so a routine 10-minute timeout removed settings/support/
-                 sign-out and turned the MetaBar's Donate/Subscribe/Qorm buttons
+                 if this branch replaced ChatInput it would silently unmount that
+                 hub, so a routine 10-minute timeout would remove settings/support/
+                 sign-out and turn the MetaBar's Donate/Subscribe/points buttons
                  into no-ops. The avatar rides beside the notice in the same
                  Bar as the other two branches, so the baseline with the
                  MetaBar holds (bannedSurface.test.ts). */
@@ -1533,7 +1536,7 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
             // The Message button opens the DM window, never the Community tab.
             onStartDM={(matrixId) => { requestDm({ kind: "open", to: { matrixId, username: localpart(matrixId), displayName: card.msg.username } }); }}
             onOpenModPanel={(target) =>
-              // The mod panel is the ModWindow tool window now. Note the
+              // The mod panel is the ModWindow tool window. Note the
               // card does NOT stay open — UserCard's shield handler calls
               // onClose() right after this dispatch.
               dispatchClaimable("bb:open-modpanel", { target })

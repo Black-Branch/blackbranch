@@ -777,7 +777,7 @@ async function storeRefusesModel(pool, model) {
 
 /**
  * Is this backfill row (platform: user_id · native: matrix_id · bot line: target_name) an opted-out person's?
- * @parked plugin API: an install's owner plugin filters its offline embedding backfills (its
+ * @parked plugin API: an install's site plugin filters its offline embedding backfills (its
  * bulk-embed scripts) with it, so a backfill honours the opt-out exactly as the live writer does.
  * Nothing in the product backfills.
  */

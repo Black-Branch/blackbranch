@@ -3,7 +3,7 @@
 // timer.js's startNight/extendNight/endNight own the lifecycle and the
 // money→time math (timer.test.js's night section pins that). This file is
 // only the route: does it call the right timer method with the right shape,
-// does it thread meter.requiredCentsPerDay() and TIMER_TZ through, does a
+// does it thread meter.requiredCentsPerDay() and the zone (site.timeZone, else TIMER_TZ) through, does a
 // NightConfigError (by `.code`, not by class — timer.js deliberately does not
 // export it) become a 400 while anything else escapes to `wrap`'s 500, and is
 // requireInternal actually wired.
@@ -60,7 +60,7 @@ function harness({ timerOverrides = {}, meterOverrides = {} } = {}) {
     persistEventCard: async () => 999,
     maskBlacklist: (t) => t,
     broadcast: () => {}, bufferPush: () => {}, bufferReplace: () => {},
-    ALERT_TTS_ENABLED: false,
+    ttsEnabled: () => false,
   });
   const routes = {};
   let nightAuthCount = null;
@@ -143,6 +143,28 @@ test('start: TIMER_TZ threads through as tz; unset stays undefined (startNight\'
     assert.equal(h2.calls.find((c) => c.fn === 'startNight').opts.tz, 'America/Denver');
   } finally {
     if (prior === undefined) delete process.env.TIMER_TZ; else process.env.TIMER_TZ = prior;
+  }
+});
+
+test('start: the install\'s time zone (site.timeZone) is the night\'s zone, ahead of TIMER_TZ — read per start, no restart', async () => {
+  // The bundle passes no TIMER_TZ, so without site.timeZone every install would read "4am" in UTC
+  // while the wizard's time zone sat unused. site.timeZone resolves env SITE_TIME_ZONE > stored value > default; the
+  // env form is how this test sets it on the settings singleton.
+  const prior = { tz: process.env.TIMER_TZ, site: process.env.SITE_TIME_ZONE };
+  try {
+    process.env.TIMER_TZ = 'America/Denver';
+    process.env.SITE_TIME_ZONE = 'Pacific/Auckland';
+    const h = harness();
+    await h.post({ action: 'start', end: '4am' });
+    assert.equal(h.calls.find((c) => c.fn === 'startNight').opts.tz, 'Pacific/Auckland');
+
+    // Same harness, the setting changed: the next start reads it (retry path, no new process).
+    process.env.SITE_TIME_ZONE = 'Europe/Berlin';
+    await h.post({ action: 'start', end: '4am', force: true });
+    assert.equal(h.calls.filter((c) => c.fn === 'startNight').at(-1).opts.tz, 'Europe/Berlin');
+  } finally {
+    if (prior.tz === undefined) delete process.env.TIMER_TZ; else process.env.TIMER_TZ = prior.tz;
+    if (prior.site === undefined) delete process.env.SITE_TIME_ZONE; else process.env.SITE_TIME_ZONE = prior.site;
   }
 });
 

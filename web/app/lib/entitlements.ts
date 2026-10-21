@@ -1,6 +1,7 @@
 import pool from "@/lib/db";
-import { isActiveStatus, type TierSlug } from "./tiers";
+import { highestTier, type TierSlug } from "./tiers";
 import { isStaff } from "./staff";
+import { VIEWER_TIERS_SQL, subscriptionSources } from "./subscriptions/entitlement";
 
 // Server-side subscription entitlements. Keeps the chat hot path cheap with a
 // short TTL cache — subscription changes (from the billing webhook) take effect
@@ -10,7 +11,9 @@ const tierCache = new Map<string, { tier: TierSlug | null; exp: number }>();
 const CACHE_TTL = 60_000;
 
 // The active tier for a user, or null if not subscribed / lapsed. A user is a
-// Supporter via their own active Stripe subscription OR an unexpired gift sub.
+// Supporter via any entitling subscription record of a service that counts
+// (subscriptions/entitlement.ts — the one fragment; the highest tier wins) OR an
+// unexpired gift sub.
 export async function getActiveTier(matrixId: string): Promise<TierSlug | null> {
   // Staff/bot are comp Supporters by code — always entitled, no Stripe row needed.
   if (isStaff(matrixId)) return "supporter";
@@ -22,22 +25,18 @@ export async function getActiveTier(matrixId: string): Promise<TierSlug | null> 
   const { rows } = await pool
     .query(
       `SELECT
-         s.tier   AS sub_tier,
-         s.status AS sub_status,
+         ARRAY(${VIEWER_TIERS_SQL}) AS sub_tiers,
          EXISTS (
            SELECT 1 FROM site.gift_subscriptions g
            WHERE g.recipient_matrix_id = $1 AND g.expires_at > now()
-         ) AS gift_active
-       FROM (SELECT $1::text AS mid) m
-       LEFT JOIN site.subscriptions s ON s.matrix_id = m.mid`,
-      [matrixId]
+         ) AS gift_active`,
+      [matrixId, subscriptionSources()]
     )
-    .catch(() => ({ rows: [] as { sub_tier: string | null; sub_status: string | null; gift_active: boolean }[] }));
+    .catch(() => ({ rows: [] as { sub_tiers: (string | null)[]; gift_active: boolean }[] }));
 
   const row = rows[0];
-  let tier: TierSlug | null = null;
-  if (isActiveStatus(row?.sub_status)) tier = (row?.sub_tier as TierSlug | null) ?? null;
-  else if (row?.gift_active) tier = "supporter";
+  let tier: TierSlug | null = highestTier(row?.sub_tiers ?? []);
+  if (!tier && row?.gift_active) tier = "supporter";
 
   if (tierCache.size > 5000) tierCache.clear();
   tierCache.set(matrixId, { tier, exp: now + CACHE_TTL });

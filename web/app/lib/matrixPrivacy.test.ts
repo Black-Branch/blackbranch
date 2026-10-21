@@ -1,4 +1,4 @@
-// ⑥ Community › Privacy (k round 5: both ON by default). What leaves the browser
+// ⑥ Community › Privacy (both ON by default). What leaves the browser
 // for each switch position, driven through the real helper with a fake client.
 // Run: node --test app/lib/matrixPrivacy.test.ts
 import test from "node:test";

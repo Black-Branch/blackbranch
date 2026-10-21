@@ -1,7 +1,7 @@
 import type Stripe from "stripe";
 import type { PaymentRef } from "./coinsServer.ts";
 
-// What a completed Stripe tip session is worth in Qorm (1 Qorm per USD cent),
+// What a completed Stripe tip session is worth in points (1 point per USD cent),
 // or null when it pays none. Pure, so the rules are tested without a webhook:
 // signed-in only (anonymous still pays — it only hides the name on stream);
 // paid only; and never more than the USD cents the tipper chose — Adaptive

@@ -250,13 +250,13 @@ cross-post = write a `place.stream.chat.message` record.
 
 ---
 
-## TODO to make the data fully reliable
+## Known limits
 
-- [ ] **Kick replies:** parse `payload.metadata.original_sender/original_message` → `replyTo*` (capture a live reply frame to confirm shape).
-- [ ] **stream.place replies:** resolve `record.reply.parent.uri` → author handle + text (`com.atproto.repo.getRecord`).
-- [x] **YouTube user ID:** Data-API backfill implemented (`createIdentityResolver`, `liveChatMessages.list` → `authorChannelId`). Link-time resolution remains available as a higher-assurance complement.
-- [ ] **Capture/store msg ids** (`tags.id`, Kick `payload.id`, SP `uri`) for moderation + precise replies.
-- [ ] **Username color** for all platforms → richer feed rendering.
-- [ ] **stream.place facets/emotes:** confirm whether custom emotes exist and how they're encoded.
-- [x] **Support-event ownership:** Twitch/Kick/YouTube support events are normalized in `lib/alerts.js` → stream-api `/alert` (deduplicated by eventId). Only stream.place support events remain unhandled.
-- [ ] **Bot send-back per platform:** Kick bot token, YouTube write scope, stream.place bot ATProto account.
+- **Kick replies** are read from `metadata.original_sender` / `original_message`; that shape has
+  not yet been confirmed against a live reply frame.
+- **stream.place emotes and facets** are not read: whether custom emotes exist there, and how
+  they would be encoded, is not confirmed.
+- **stream.place support events** are not read. Twitch, Kick and YouTube support events are
+  (`lib/alerts.js` → stream-api `/alert`, deduplicated by event id).
+- **The bot posts into Twitch chat only.** A mention on Kick, YouTube or stream.place is answered
+  in the site's chat (`lib/bot/index.js`), where it is addressed to the person by name.

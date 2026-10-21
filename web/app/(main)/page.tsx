@@ -16,7 +16,14 @@ import { instanceList, instanceString } from "@/app/lib/instanceConfigServer";
 // while stream-api still runs (and spends on) the station.
 import { modulesOff } from "@/app/lib/moduleRunningServer";
 import { SupportModulesOff } from "@/app/lib/support/SupportModulesOff";
+import { supportFacts } from "@/app/lib/support/supportFactsServer";
 import { siteName } from "@/app/lib/siteName";
+import { donateTarget } from "@/app/lib/donateTarget";
+import { liveSourcesSetUp } from "@/app/lib/playerSource";
+import { stripeConfigured } from "@/app/lib/stripe";
+import { paypalConfigured } from "@/app/lib/paypalClient";
+import { platformRows } from "@/app/lib/streamPlatformsServer";
+import { followerTotal, watchTitle } from "@/app/lib/watchHeader";
 
 async function getStreamStatus() {
   try {
@@ -133,11 +140,16 @@ export default async function StreamPage() {
   // on briefly: a cold cache (a Matrix read) must not hold the page.
   const homeP = getHomePayloadWithin(1500);
   const offP = modulesOff();
+  // What the help desk may promise here: bounded reads, never throws.
+  const supportP = supportFacts();
 
   const infoP = statusP.then((status) => {
     const live = !!status?.live;
+    const ytVideoId = typeof status?.ytVideoId === "string" && status.ytVideoId ? status.ytVideoId : null;
     return Promise.all([
       getTwitchInfo(live),
+      // The other platforms' titles, for an install that is not live on Twitch (the Stream tab's rows).
+      live ? platformRows(ytVideoId).catch(() => []) : Promise.resolve([]),
       getYouTubeSubscriberCount(),
       instanceString("youtube.apiKey") && instanceString("platform.youtube.channelId")
         ? getChannelAvatar(instanceString("platform.youtube.channelId")!, instanceString("youtube.apiKey")!)
@@ -163,19 +175,16 @@ export default async function StreamPage() {
   const emotesP = Promise.all([historyP, manifestWithin().catch(() => ({}))])
     .then(([rows, manifest]) => emotesUsedBy(rows.map((m) => m.message), manifest));
 
-  const [session, status, vods, [twitchInfo, ytSubscribers, ytAvatar], userCtx, messages, initialEmotes, home, off] =
-    await Promise.all([sessionP, statusP, vodsP, infoP, userP, historyP, emotesP, homeP, offP]);
+  const [session, status, vods, [twitchInfo, liveRows, ytSubscribers, ytAvatar], userCtx, messages, initialEmotes, home, off, support] =
+    await Promise.all([sessionP, statusP, vodsP, infoP, userP, historyP, emotesP, homeP, offP, supportP]);
 
   const isLive = !!status?.live;
-  const streamTitle = isLive ? twitchInfo.title ?? (process.env.STREAM_TITLE ?? "") : "";
+  const streamTitle = watchTitle({ live: isLive, twitchLive: twitchInfo.title, rows: liveRows, fallback: process.env.STREAM_TITLE ?? "" });
   // Viewer count = stream-ingest's 60s snapshots via stream-api (all four
   // platforms combined); the Twitch API count is only a fallback. This seeds
   // the render — StreamView keeps it fresh via the 30s status poll.
   const viewerCount = isLive ? status?.viewers?.total ?? twitchInfo.viewerCount : null;
-  const followerCount =
-    twitchInfo.followerCount !== null || ytSubscribers !== null
-      ? (twitchInfo.followerCount ?? 0) + (ytSubscribers ?? 0)
-      : null;
+  const followerCount = followerTotal([twitchInfo.followerCount, ytSubscribers]);
 
   const canonicalId = userCtx.canonicalId;
   const isMod = userCtx.is_mod || userCtx.is_admin;
@@ -185,7 +194,7 @@ export default async function StreamPage() {
       {/* The page's one heading — visually the stream UI is its own title, but
           the document outline needs a root. */}
       <h1 className="sr-only">{siteName()} — live stream and community chat</h1>
-      <SupportModulesOff off={off} />
+      <SupportModulesOff off={off} facts={support} />
       <StreamView
         isLive={isLive}
         vods={vods}
@@ -194,7 +203,8 @@ export default async function StreamPage() {
         viewerCount={viewerCount}
         initialYtVideoId={isLive && typeof status?.ytVideoId === "string" && status.ytVideoId ? status.ytVideoId : null}
         followerCount={followerCount}
-        donateUrl={process.env.DONATE_URL ?? "/donate"}
+        // Contract 7: a provider on → /donate; else the streamer's https donate link; else null (no button).
+        donateUrl={donateTarget({ providerOn: stripeConfigured() || paypalConfigured(), donateUrl: instanceString("site.donateUrl") })}
         subscribeUrl={instanceString("money.subscribeUrl") ?? ""}
         spChannel={instanceString("platform.streamplace.channel") ?? ""}
         ytChannelId={instanceString("platform.youtube.channelId") ?? ""}
@@ -210,6 +220,14 @@ export default async function StreamPage() {
         initialEmotes={initialEmotes}
         offModules={off}
         embedsOff={instanceList("player.embedsOff")}
+        // Only the sources this install has a channel for; none = the player says so.
+        liveSetUp={liveSourcesSetUp({
+          streamplaceChannel: instanceString("platform.streamplace.channel") ?? "",
+          youtubeChannelId: instanceString("platform.youtube.channelId") ?? "",
+          youtubeShown: !off.includes("youtube"),
+          twitchChannel: instanceString("platform.twitch.channel") ?? "",
+        })}
+        kickChannel={instanceString("platform.kick.slug") ?? ""}
       />
     </div>
   );

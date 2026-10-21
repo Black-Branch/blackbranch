@@ -26,7 +26,7 @@ export default function PresenceStatusPicker() {
   // A second save() while one is still in flight is IGNORED, not queued — a
   // plain ref because state is batched/async and this must be checked
   // synchronously at call time. The buttons below do NOT disable while a
-  // save runs (a disabled option used to eat a fast click before it could
+  // save runs (a disabled option would eat a fast click before it could
   // land — see the mousedown comment), so this is what stops two overlapping
   // PUTs racing to decide `saved` instead. The option onClick checks this
   // BEFORE calling setStatus, so the whole click is ignored — no state change
@@ -85,7 +85,7 @@ export default function PresenceStatusPicker() {
         {OPTIONS.map((o) => (
           <button key={o.value} type="button" data-status-option={o.value}
             // The text input's onBlur fires BEFORE this button's onClick — a
-            // disabled-while-saving button used to already be disabled by
+            // disabled-while-saving button would already be disabled by
             // the time the click landed, swallowing the tap on the status
             // the user actually meant to choose. preventDefault on mousedown
             // stops the input from ever blurring into the click at all.

@@ -173,7 +173,7 @@ export function NewPostModal({
         <input
           value={tagText}
           onChange={(e) => setTagText(e.target.value)}
-          placeholder="Tags — #climate #policy (optional)"
+          placeholder="Tags — #clips #question (optional)"
           className="bg-scrim border border-control rounded-md px-3 py-1.5 text-body outline-none focus:border-accent"
           style={{ fontSize: "var(--text-chat-md)", fontFamily: "var(--chat-font-family, inherit)" }}
         />

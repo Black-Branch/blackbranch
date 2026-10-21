@@ -80,7 +80,7 @@ test('a person known only through a linked platform gets THAT canonical — not 
   assert.deepEqual(res.body, { ok: true, canonicalId: 'twitchcanon1', created: false });
   assert.ok(!pool.seen.some((q) => /INSERT INTO stream\.users/.test(q.sql)), 'no second identity');
   assert.ok(!pool.seen.some((q) => /UPDATE stream\.users SET name/.test(q.sql)), 'their stream name stays');
-  // Review round 6 (PB4-b): the person gets their OWN native row on that canonical, so unlinking
+  // The person gets their OWN native row on that canonical, so unlinking
   // the platform account later separates it instead of leaving it holding the site identity.
   const link = pool.seen.find((q) => /INSERT INTO stream\.links/.test(q.sql));
   assert.ok(link, 'no native row was written for a platform-linked person');

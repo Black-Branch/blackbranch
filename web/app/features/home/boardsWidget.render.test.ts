@@ -40,11 +40,16 @@ test("live → the Stream pill is the default; its one row shows", () => {
   assert.doesNotMatch(h, /person2/);
 });
 
-test("every face is a chip, in the faces' order", () => {
+test("every face this install offers is a chip, in the faces' order — the AI-score faces only with the plugin that scores", () => {
   const h = html({});
-  const labels = ["Earned points", "Karma", "Karma / 100", "Streams", "Wholesome", "Toxic", "Big brain", "Small brain", "Top messages", "Top emotes"];
+  // This tree's site plugin declares both scores (karma, intelligence); the public build has none
+  // (TEST_NO_OWNER=1, or no owner folder) — boardsWidget.public.render.test.ts mounts that one.
+  const owner = process.env.TEST_NO_OWNER !== "1" && fs.existsSync(path.join(process.cwd(), "app/(owner)/plugin.ts"));
+  const ai = ["Wholesome", "Toxic", "Big brain", "Small brain"];
+  const labels = ["Earned points", "Karma", "Karma / 100", "Streams", ...(owner ? ai : []), "Top messages", "Top emotes"];
   let at = -1;
   for (const l of labels) { const i = h.indexOf(`>${l}</button>`); assert.ok(i > at, `${l} in order`); at = i; }
+  assert.equal((h.match(/<\/button>/g) ?? []).length, labels.length + 4, "the faces plus the four window pills, nothing else");
 });
 
 test("empty face → Nothing yet; no boards → Loading… / Couldn't load", () => {

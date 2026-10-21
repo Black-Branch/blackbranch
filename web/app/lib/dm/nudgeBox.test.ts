@@ -1,10 +1,9 @@
-// The DM nudge reaches only its recipient (external review S5).
+// The DM nudge reaches only its recipient.
 //
-// Before: POST /api/dm/ping sent stream-api a STABLE per-recipient tag (an HMAC of the Matrix id)
-// and stream-api broadcast it on the PUBLIC chat socket. Any signed-in account could nudge a chosen
-// target, watch the socket for the frame that followed, and from then on recognise every nudge to
-// that person — who is being messaged, and when — without knowing the secret.
-// Now: the POST only records a pending nudge for the recipient on the web server (nudgeBox.ts), and
+// A STABLE per-recipient tag (an HMAC of the Matrix id) broadcast on the PUBLIC chat socket would
+// let any signed-in account nudge a chosen target, watch the socket for the frame that followed,
+// and from then on recognise every nudge to that person — who is being messaged, and when —
+// without knowing the secret. So the POST only records a pending nudge for the recipient on the web server (nudgeBox.ts), and
 // the recipient's own signed-in page asks for it (GET /api/dm/ping, its session's id only). Nothing
 // about a nudge leaves on a public channel, so there is nothing to correlate.
 //

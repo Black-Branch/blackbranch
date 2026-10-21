@@ -63,9 +63,9 @@ test("bump drops stale non-existent entries and caps at RECENT_MAX", () => {
   assert.ok(store.some((e) => e.name === "star"), "the strongest entry is never evicted");
 });
 
-// Regression: bump() used to prune entries missing from the CURRENT manifest.
-// The manifest genuinely collapses sometimes (the 7TV "found 178, was 1150"
-// episode), so one emote pick during a degraded fetch permanently erased the
+// bump() must not prune entries missing from the CURRENT manifest. The manifest
+// genuinely collapses sometimes (a 7TV fetch can find 178 of 1150 emotes), so
+// pruning would let one emote pick during a degraded fetch permanently erase the
 // user's entire frecency history. Persisted state must outlive a transient
 // fetch failure; rankNames() hides missing emotes at read time instead.
 test("bump does not destroy history when the manifest is degraded", () => {

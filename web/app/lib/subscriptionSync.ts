@@ -1,11 +1,15 @@
-// The subscription-state writer behind the Stripe billing webhook.
+// The Stripe adapter behind the billing webhook: it resolves the viewer, reads
+// every Stripe subscription they hold under their lock, and hands them to the
+// ONE writer of subscription state, subscriptions/state.ts writeTransition
+// (subscription sources S1, decision D2), in the same transaction as the legacy
+// one-row-per-viewer mirror below (site.subscriptions — kept, and written by the
+// rule it was always written by, until S1b drops it).
 //
-// ONE caller: app/api/billing/webhook/route.ts — that route stays the only
-// writer of subscription tier/status transitions; this module is its upsert,
-// lifted out so a test can drive it against a real database
-// (subscriptionSync.test.ts) and pinned to that one importer by
-// subStatusWiring.test.ts ("2b"). Injectable-pool factory, the same shape and
-// reason as paymentEventHandlers.ts.
+// ONE caller: app/api/billing/webhook/route.ts, after Stripe's signature check —
+// a provider-verified path. Pinned to that one importer by
+// subStatusWiring.test.ts ("2b"); lifted out of the route so a test can drive it
+// against a real database (subscriptionSync.test.ts). Injectable-pool factory,
+// the same shape and reason as paymentEventHandlers.ts.
 import type { Pool, PoolClient } from "pg";
 import type Stripe from "stripe";
 import pool from "../../lib/db.ts";
@@ -14,6 +18,8 @@ import { tierByPriceId, type Tier } from "./tiers.ts";
 import { isMissingCustomer } from "./stripeCustomer.ts";
 import type { createConcurrencyGate } from "./concurrencyGate.ts";
 import { webhookConnections } from "./billingConnections.ts";
+import { heldRecordIds, writeTransition } from "./subscriptions/state.ts";
+import { missingStripeObservation, stripeObservation } from "./subscriptions/stripeRecords.ts";
 
 export type SubscriptionWrite = {
   matrixId: string;
@@ -128,9 +134,11 @@ export function createSubscriptionSync(deps: {
    *  new customer's membership. Every event that writes this row takes this one
    *  lock, so it also serialises each customer's events.
    *
-   *  Lock order: `billing:viewer:<matrixId>` is the only billing lock taken
-   *  here, and ensureStripeCustomer (stripeCustomer.ts) takes the same one and
-   *  nothing else, so the two cannot deadlock.
+   *  Lock order: `billing:viewer:<matrixId>` is taken first; the transition
+   *  function then takes each `billing:record:…` lock, in sorted order, AFTER
+   *  it. ensureStripeCustomer (stripeCustomer.ts) takes the viewer lock and
+   *  nothing else, so no holder waits on a viewer while holding a record and
+   *  none of them can deadlock.
    *
    *  The viewer is resolved before the lock: it comes from the subscription's
    *  or customer's metadata, or the stored mapping, none of which an event
@@ -163,6 +171,28 @@ export function createSubscriptionSync(deps: {
       await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`billing:viewer:${matrixId}`]);
       const all = await viewerSubscriptions(client, matrixId, eventCustomer);
       const sub = countsForViewer(all) ?? (await deps.stripe().subscriptions.retrieve(ref.id));
+      // Every subscription the viewer holds becomes its own record, each stamped with this
+      // Event's `created` — the one writer, in this transaction, under this lock. Then the
+      // legacy row, from the subscription that counts, exactly as before.
+      const observed = all.some((x) => x.id === sub.id) ? all : [...all, sub];
+      const stamp = new Date(eventAt * 1000);
+      const observations = observed.map((x) => stripeObservation(x, stamp));
+      // Fail closed: the subscription this event names, and every Stripe record the viewer already
+      // holds, are observed too, read from Stripe under this lock — even when no listed customer
+      // reaches them any more (a customer Stripe deleted is dropped from the listing above, and its
+      // subscriptions with it). Left out, such a record would keep its last state, entitling, for
+      // ever. One that Stripe no longer has at all ends.
+      const seen = new Set(observed.map((x) => x.id));
+      for (const id of new Set([ref.id, ...(await heldRecordIds(client, matrixId, "stripe"))])) {
+        if (seen.has(id)) continue;
+        try {
+          observations.push(stripeObservation(await deps.stripe().subscriptions.retrieve(id), stamp));
+        } catch (e) {
+          if (!isMissingCustomer(e)) throw e; // the same resource_missing test, for a subscription
+          observations.push(missingStripeObservation(id, stamp));
+        }
+      }
+      await writeTransition(client, { via: "webhook", viewer: matrixId, observations });
       const r = await writeState(client, matrixId, sub, eventAt);
       await client.query("COMMIT");
       return r;

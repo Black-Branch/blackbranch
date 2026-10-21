@@ -1,7 +1,7 @@
 // What the public profile card (GET /api/user/[id]) may show about the identity it was asked
 // about — the one decision every field of that route follows.
 //
-// Owner decision 2026-10-17: a person's cross-platform link is shown only where they show it
+// A person's cross-platform link is shown only where they show it
 // themselves (posting from the site to several platforms at once, or the "show my linked platforms"
 // switch, site.users.show_links). Matching names are not consent. So, unless the caller is a
 // moderator, is the person, or the person opted in:

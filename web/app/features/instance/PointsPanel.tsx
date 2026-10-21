@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getJson, postJson } from "@/app/lib/http";
 import { FIELD } from "@/app/components/SettingsControls";
 import type { InstanceView } from "@/app/lib/instanceAdminView";
-import { currencyLabel, currencyName } from "@/app/lib/currency";
+import { currencyLabel, currencyName, currencyTitle } from "@/app/lib/currency";
 import { formatCoinsShort } from "@/app/lib/coins";
 import PointsIcon from "@/app/components/PointsIcon";
 import { card, h2, btn } from "./parts";
@@ -88,7 +88,7 @@ function StorePrices({ note }: { note: (m: string) => void }) {
     <section className={card} aria-label="Store prices">
       <h2 className={h2}>Store prices</h2>
       <p className="mt-0.5 text-xs text-muted">
-        Each price is stored as streams of earning and shown at today&apos;s points per stream, so changing
+        Each price is stored as streams of earning and shown at today&apos;s {currencyName()} per stream, so changing
         what a stream earns moves every price together. Badges and name styles are priced in the store itself.
       </p>
       {err && <p className="mt-2 text-xs text-red-300">Could not load the prices: {err}</p>}
@@ -96,9 +96,9 @@ function StorePrices({ note }: { note: (m: string) => void }) {
       {data && (
         <>
           <form className="mt-3 flex flex-wrap items-center gap-2" onSubmit={(ev) => { ev.preventDefault(); void recompute(false); }}>
-            <span className="min-w-0 flex-1 basis-40 text-sm text-body">Points per stream (E)</span>
+            <span className="min-w-0 flex-1 basis-40 text-sm text-body">{currencyTitle()} a viewer earns per stream</span>
             <input className={narrow} inputMode="numeric" value={eDraft} onChange={(e) => { setEDraft(e.target.value); setPlan(null); }}
-              aria-label="Points a typical viewer earns per stream" />
+              aria-label={`${currencyTitle()} a typical viewer earns per stream`} />
             <button type="submit" className={btn} disabled={busy || !eDraft.trim() || Number(eDraft) === data.e}>Preview</button>
           </form>
           {plan && (

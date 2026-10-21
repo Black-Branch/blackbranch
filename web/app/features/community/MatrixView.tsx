@@ -198,8 +198,8 @@ function UnifiedLayout({
   const servers = useMemo(() => buildServers(nav), [nav]);
   // Last-visited channel for a space, falling back to its first — the
   // `mx-lastch:` memory openRoom writes. ONE rule for both consumers (the
-  // session-restore effect and the rail's server switch); they used to carry
-  // two hand-written copies of it.
+  // session-restore effect and the rail's server switch), not two
+  // hand-written copies of it.
   const lastChannelFor = (srv: RailServer): Room | undefined => {
     const chans = serverChannels(srv);
     return chans.find((c) => c.roomId === lsGet(`mx-lastch:${srv.id}`)) ?? chans[0];
@@ -294,7 +294,7 @@ function UnifiedLayout({
     const prev = prevModeRef.current;
     prevModeRef.current = mode;
     // Rule lives in lib/matrixCapacity.ts so the one-shot mode-3 entry and the
-    // mode-2 tie-break are testable — inline, both were invisible to review.
+    // mode-2 tie-break are testable — inline, neither could be tested.
     const patch = resolveCapacityChange({
       mode,
       prevMode: prev,
@@ -544,7 +544,9 @@ function UnifiedLayout({
       servers={servers}
       activeId={activeId}
       homeUnreads={homeUnreads}
-      canAddSpace={status === "ready"}
+      // Hidden until a space can be given an alias and channels from here — a space made
+      // now could hold nothing. Returns as status === "ready" once alias and channel creation exist.
+      canAddSpace={false}
       onSelectHome={handleSelectHome}
       onSelectServer={handleSelectServer}
       onAddSpace={() => setAddSpaceOpen(true)}

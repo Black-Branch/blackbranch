@@ -42,7 +42,7 @@ test('add(takeHome, username, userId): the canonical id rides the onAdd payload 
   assert.equal(payloads[0].username, 'GadgetFan', 'the donation name still travels — it becomes the alias');
 });
 
-test('init(): the per-stream re-sum excludes the Qorm-spend event types IN SQL', async () => {
+test('init(): the per-stream re-sum excludes the currency-spend event types IN SQL', async () => {
   const seen = [];
   const bar = createSupportBar({
     pool: { query: async (sql, params) => { seen.push({ sql, params }); return { rows: [{ s: '12.50' }], rowCount: 1 }; } },
@@ -97,14 +97,14 @@ test('init(): a NULL event_type must not be silently dropped by the exclusion', 
 });
 
 test("init(): the exclusion is platform-scoped — a platform='twitch' row sharing a coin-kind event_type is KEPT in the bar total", async () => {
-  // Qorm spends only ever arrive under the site's own platform id (money.js). This fake
+  // Currency spends only ever arrive under the site's own platform id (money.js). This fake
   // pool actually APPLIES the WHERE clause to fixture rows (unlike the tests
   // above, which only inspect SQL text) — safe to do here because `platform`
   // is NOT NULL in schema.sql, so unlike event_type there is no hidden
   // three-valued-logic gap a JS mirror could paper over.
   const rows = [
     { platform: 'twitch', event_type: 'cheer', amount_usd: 7 },   // real money, must be KEPT
-    { platform: NATIVE_PLATFORM, event_type: 'cheer', amount_usd: 5 },   // the actual Qorm spend, must be excluded
+    { platform: NATIVE_PLATFORM, event_type: 'cheer', amount_usd: 5 },   // the actual currency spend, must be excluded
     { platform: NATIVE_PLATFORM, event_type: 'donation', amount_usd: 3 }, // a real donation, must be KEPT
   ];
   const exclude = ['cheer', 'sticker', 'sticker_boost', 'tts_msg', 'sound'];

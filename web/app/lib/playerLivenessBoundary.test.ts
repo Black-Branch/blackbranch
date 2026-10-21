@@ -80,7 +80,7 @@ test("the hint is scoped to which TwitchPlayer mount produced it, not just a sou
   const src = view();
   // Not /scope:\s*"live"/ — that also matches the useState<{ scope: "live" |
   // "community"; ... }> TYPE ANNOTATION at the hint's own declaration, which
-  // survives deleting the runtime guard entirely (finding 5). The actual
+  // survives deleting the runtime guard entirely. The actual
   // runtime read is `playerLiveHint?.scope === "live"`.
   assert.match(src, /playerLiveHint\?\.scope\s*===\s*"live"/, "the consumption side never checks the mount's scope");
 });

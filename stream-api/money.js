@@ -1,16 +1,16 @@
 // ── Money ───────────────────────────────────────────────────────────────────
 // Every route that moves real or virtual money, and the accounting policy that
-// governs it. The most consequential invariant in the repo lives here (Qorm,
-// the site's virtual currency, works like channel points):
+// governs it. The most consequential invariant in the repo lives here (the
+// site's virtual currency works like channel points):
 //
-//   • buying Qorm is ONLY a wallet top-up (site.coin_ledger, written web-side)
+//   • buying currency is ONLY a wallet top-up (site.coin_ledger, written web-side)
 //     — never the bar, never the timer, never stream.support_events, and
 //     never a public event;
-//   • SPENDING Qorm — cheer / sticker / sticker_boost / tts_msg / sound — is
+//   • SPENDING currency — cheer / sticker / sticker_boost / tts_msg / sound — is
 //     spectacle: a card, an overlay, a sound. It moves NOTHING. The night is
 //     funded by money GIVEN to it, and a lit sponsor clock is a perk for that
 //     money (the 2x earn bonus, web-side) — which is exactly why a spend must
-//     never light one: earned Qorm could be spent to earn faster;
+//     never light one: earned currency could be spent to earn faster;
 //   • real-money kinds (donation / gift / sub) credit the Stripe NET of the
 //     charge, never the gross and never a coin amount;
 //   • never credit both ends of the same dollar.
@@ -26,6 +26,15 @@ const { createReplayGuard } = require('./webhooks.js');
 const { ledgerEventId } = require('./alert.js');
 // The pad rule for POST /speak lives with the queue that sleeps for it, not here.
 const { clampPadMs, PAD_DEFAULTS } = require('./tts.js');
+const { instanceConfig } = require('./instance-config');
+
+/** The zone a Fund-the-Night end time ("4am") is read in: the install's time zone (instance key
+ *  site.timeZone, env SITE_TIME_ZONE), else env TIMER_TZ (the older name), else undefined — which
+ *  timer.startNight reads as the system zone (UTC in the bundle). Read per start, so a zone saved in
+ *  the Admin Panel applies to the next night without a restart. */
+function nightTimeZone() {
+  return instanceConfig.get('site.timeZone') || process.env.TIMER_TZ || undefined;
+}
 
 // The coin-spend kinds /chat/event accepts. A new kind added here WITHOUT an
 // explicit KIND_POLICY entry refuses to boot (see the check below) — an
@@ -125,7 +134,7 @@ function supportPlatformId({ userId, username }) {
 // guards. `duplicate: true` tells the caller the row already exists, so the
 // bar/timer must not move again.
 //
-// ── Reversals that arrive before their credit (review round 5, PB2; v156) ────────────────
+// ── Reversals that arrive before their credit (v156) ─────────────────────────────────────
 //
 // A refund or dispute of a payment the ledger does not hold YET (its ledger write failed and it
 // waits in stream.unpriced_support, or its credit is still on its way) is HELD in
@@ -175,7 +184,7 @@ async function writeReversal(q, orig, originalEventId, { ref, share }) {
 /** Apply every pending hold on a credit that now exists. Caller holds the event lock. Returns the
  *  number of reversals written, whether they took the WHOLE credit back (`refunded`) and, when any
  *  was written, what is left of the credit (`admittedUsd`, never below 0) — which is then stored on
- *  the credit row (v159, review round 6 D-D): the bar and the timer admit the net of a credit
+ *  the credit row (v159): the bar and the timer admit the net of a credit
  *  whose refunds were held before it landed, and the bar's restart rebuild sums that same column. */
 async function applyHeldReversals(q, originalEventId) {
   const orig = (await q.query(
@@ -283,7 +292,7 @@ function makeRecordSupport({ pool, resolveOrCreate, liveState, onReversed = null
   };
 }
 
-// Insert a payment the ledger could not price (R2-1) into stream.unpriced_support
+// Insert a payment the ledger could not price into stream.unpriced_support
 // (v151). Wired as createAlert's `logUnpriced` dep. Nothing reads this table for
 // any total: the bar, timer, sponsor pool and meter only ever sum
 // stream.support_events. `event_id` is the same namespaced key the ledger would
@@ -409,7 +418,10 @@ function nativeSpendKey(kind, spendId) {
 function createMoney({
   pool, economics, alert, supportBar, timer, meter, tts, sounds, cleanForTTS,
   persistEventCard, maskBlacklist,
-  broadcast, bufferPush, bufferReplace, ALERT_TTS_ENABLED,
+  broadcast, bufferPush, bufferReplace,
+  // Whether alerts, paid read-aloud and /speak are SPOKEN: tts.js's enabled() (instance key tts.enabled,
+  // restart-applied). A getter, so the value the settings layer's first load resolves is the one used.
+  ttsEnabled = () => false,
   // Fund the Night: the sponsor credit pool (sponsors.js). Optional — the many
   // money tests that construct this factory for the alert/ledger paths have no
   // reason to know about it, and a missing pool must never 500 a money route.
@@ -563,7 +575,7 @@ function createMoney({
         userId: msg.subscriberMatrixId || undefined, // see the donation note above
         // months > 1 = a renewal (web's invoice.paid path sends the tenure).
         message: msg.message || '', label: msg.months > 1 ? 'resubscribed' : 'subscribed', tier: msg.tier, months: msg.months,
-        takeHomeUSD: takeHome('sub', usd),
+        takeHomeUSD: takeHome('sub', usd, body.netUsd),
         eventId: nativeSpendKey('sub', body.spendId),
       }) };
     },
@@ -594,7 +606,7 @@ function createMoney({
       // Paid TTS: speak the card's MASKED text (blacklisted words never voiced).
       // spoken:false when the global gate is off → the web route refunds.
       const text = cleanForTTS(msg.message || '');
-      const spoken = !!(ALERT_TTS_ENABLED && text);
+      const spoken = !!(ttsEnabled() && text);
       if (spoken) tts.speak(text);
       return { spoken };
     },
@@ -687,12 +699,12 @@ function createMoney({
       res.json(out.replay ? { ok: true, deduped: true } : { ok: true });
     }));
 
-    // POST /speak — the bot's TTS route (also gated by ALERT_TTS_ENABLED for now).
+    // POST /speak — the bot's TTS route (gated by tts.enabled like every spoken line).
     // Body: { text?, noise?, noiseBefore?, noiseAfter?, padBeforeMs?, padAfterMs? }.
     app.post('/speak', requireInternal, wrap(async (req, res) => {
       const parsed = parseSpeakBody(req.body);
       if (parsed.error) return res.status(400).json({ error: parsed.error });
-      if (!ALERT_TTS_ENABLED) return res.json({ ok: true, skipped: 'tts disabled' });
+      if (!ttsEnabled()) return res.json({ ok: true, skipped: 'tts disabled' });
       // `wait`: answer when his audio has REALLY finished, with its start and end — the
       // brain times his next line off that instead of guessing. Everyone else (alerts,
       // paid TTS) is answered the moment the turn is queued.
@@ -713,8 +725,9 @@ function createMoney({
     // own stream, with no celebration: no alert, sound, lights, TTS or card (the event was
     // celebrated when it arrived). When that stream is the one LIVE now, the live bar and the timer
     // take the credit's admitted amount after the COMMIT (liveCredit below) — the bar's restart
-    // rebuild sums that stream's rows, so a credit left off the live bar jumped it at the next
-    // restart (round 7). A past stream's credit counts in its own history only. Idempotent: the event_id's unique index makes a second credit a no-op, and a
+    // rebuild sums that stream's rows, so a credit left off the live bar would jump it at the next
+    // restart. A past stream's credit counts in its own history only. Idempotent: the event_id's
+    // unique index makes a second credit a no-op, and a
     // settled row answers with what it was settled as. A refund or dispute held for this event
     // (stream.support_reversal_holds — it arrived while the row waited here) is taken back in the
     // same transaction, so a refunded payment is never credited in full.
@@ -802,10 +815,10 @@ function createMoney({
     //   • the per-stream bar, the timer, the meter — UNTOUCHED: the bar sums one stream_id
     //     (a reversal has none) and the timer/meter move only on a live credit.
     //
-    // A credit the ledger does not hold yet (PB2): the reversal is HELD (stream.support_reversal_holds)
+    // A credit the ledger does not hold yet: the reversal is HELD (stream.support_reversal_holds)
     // and answered 202 { held: 'pending' } — the credit takes it back when it lands (reconcile, or a
-    // late delivery), and the bar and the timer then admit only its net (admitted_usd, v159 — round
-    // 6 D-D). Durable here, so the caller has nothing to redeliver. A restore marks the
+    // late delivery), and the bar and the timer then admit only its net (admitted_usd, v159).
+    // Durable here, so the caller has nothing to redeliver. A restore marks the
     // ref's hold `cancelled` (200 { held: 'cancelled' } when there is no credit yet): an opening
     // event that arrives after its outcome takes nothing.
     app.post('/support/reverse', requireInternal, wrap(async (req, res) => {
@@ -995,7 +1008,7 @@ function createMoney({
           const required = meter.requiredCentsPerDay();
           const snap = timer.startNight({
             endLocal: b.end,
-            tz: process.env.TIMER_TZ, // undefined → startNight defaults to the system zone
+            tz: nightTimeZone(),
             requiredCentsPerDay: required ?? 0,
             seedSec: b.seedSec,
             priceCents: b.priceCents,
@@ -1027,10 +1040,13 @@ function createMoney({
       res.status(400).json({ error: 'action must be start|extend|end|target' });
     }));
 
-    // GET /tts/status — the coin store greys the paid-TTS tile while the global
-    // gate is off (never charge for a silent no-op; see /chat/event tts_msg).
+    // GET /tts/status — { enabled, keySet, voiceSet, sink }. The coin store
+    // greys the paid-TTS tile while `enabled` is off (never charge for a silent no-op; see
+    // /chat/event tts_msg); the doctor fails `enabled` without a key and a voice. Never a value:
+    // the key and the voice ids are reported as set / not set.
     app.get('/tts/status', requireInternal, (req, res) => {
-      res.json({ enabled: ALERT_TTS_ENABLED });
+      const s = typeof tts?.status === 'function' ? tts.status() : {};
+      res.json({ enabled: ttsEnabled(), keySet: s.keySet === true, voiceSet: s.voiceSet === true, sink: s.sink || null });
     });
 
     // GET /sounds/manifest — clip catalog for the coin store ({enabled, sounds}).

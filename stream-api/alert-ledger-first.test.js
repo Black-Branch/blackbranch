@@ -1,17 +1,17 @@
-// The ledger answers BEFORE anything fires on stream (R2-3), and a payment the
-// ledger cannot price is kept, not lost (R2-1).
+// The ledger answers BEFORE anything fires on stream, and a payment the
+// ledger cannot price is kept, not lost.
 // Run: node --test alert-ledger-first.test.js
 //
-// R2-3: every on-stream effect — the overlay frame, the alert sound, the room
-// lights, the TTS voice — and the chat card ran BEFORE the ledger said whether
-// this event had already been recorded. The durable event_id dedup stopped the
-// second bar credit, and nothing else: the same Streamlabs donation re-emitted
-// on reconnect, or any retry bridging a restart (the in-memory guards empty),
-// rang, flashed, spoke and posted a card a second time.
+// Every on-stream effect — the overlay frame, the alert sound, the room
+// lights, the TTS voice — and the chat card wait for the ledger to say whether
+// this event was already recorded. The durable event_id dedup alone stops only
+// the second bar credit: the same Streamlabs donation re-emitted on reconnect,
+// or any retry bridging a restart (the in-memory guards empty), would ring,
+// flash, speak and post a card a second time.
 //
-// R2-1: a payment in a currency with no rate converts to $0, and a $0 take-home
-// wrote no ledger row at all — the money arrived, was celebrated, and left no
-// trace to reconcile from. It now lands in stream.unpriced_support (via the
+// A payment in a currency with no rate converts to $0, and a $0 take-home
+// writes no ledger row — the money would arrive, be celebrated, and leave no
+// trace to reconcile from. So it lands in stream.unpriced_support (via the
 // `logUnpriced` dep), whose unique event_id is also its replay answer, and the
 // alert shows the raw amount string instead of nothing.
 
@@ -76,7 +76,7 @@ test('the ledger is asked before any effect fires', async () => {
   assert.ok(order.indexOf('bar') > order.indexOf('ledger'), 'the bar must still move only after the ledger row');
 });
 
-// L1 (owner rule): the celebration stays PENDING until the ledger confirms the event is new,
+// The celebration stays PENDING until the ledger confirms the event is new,
 // then fires once — however late. Never blind, no ceiling.
 test('a slow ledger HOLDS the celebration: nothing fires until it answers, then everything fires once', async () => {
   let release;
@@ -182,7 +182,7 @@ test('a retry that answers "already recorded" is treated as a duplicate (a faile
   assert.ok(warned.some((w) => /treated as a duplicate/.test(w)), 'the ambiguous duplicate must be said in the journal');
 });
 
-// ── R2-1: unpriced ──────────────────────────────────────────────────────────
+// ── unpriced ────────────────────────────────────────────────────────────────
 
 const ARS_LIKE = { platform: 'youtube', eventType: 'superchat', username: 'casey', amount: 5000,
   currency: 'UNKNOWN', amountText: 'F CFA 5,000', message: 'hola', label: 'super chat', eventId: 'youtube:r-1' };
@@ -258,7 +258,7 @@ test('a priced zero (a tip under the fee, a milestone) is NOT unpriced', async (
   assert.equal(r.n.showAlert, 2);
 });
 
-// ── R2-2's stream-api half ──────────────────────────────────────────────────
+// ── unverified gift counts: the stream-api half ─────────────────────────────
 
 test('a gift with an unverified count is logged and credited 1, never 0', async () => {
   const warned = [];
@@ -280,7 +280,7 @@ test('a gift with an unverified count is logged and credited 1, never 0', async 
 });
 
 // ── A write that can never succeed must not hold the money path forever ───────
-// (security review of L1): a permanent error is not retried, a transient one is retried a
+// A permanent error is not retried, a transient one is retried a
 // bounded number of times; either way the event is recorded for reconciliation, nothing fires,
 // and dispatch rejects so every caller answers non-2xx / forgets its replay key.
 

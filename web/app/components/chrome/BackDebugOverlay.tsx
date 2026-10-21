@@ -1,6 +1,6 @@
 "use client";
 
-// ?backdebug=1 — the on-device back-sentinel probe.
+// ?backdebug=1 — the on-device back-sentinel probe (a build with the debug switches only: debugFlags.ts).
 //
 // Back-gesture failures (a back swipe exiting the PWA with a card open) can
 // depend on the device's browser and not reproduce off-device, so, like
@@ -17,6 +17,7 @@ import {
   getBackDebugLog,
   subscribeBackDebug,
 } from "@/app/lib/chrome/pageBackSentinel";
+import { DEBUG_FLAGS_ON } from "@/app/lib/debugFlags";
 
 export function BackDebugOverlay() {
   // The log array is mutated in place; the monotonic event counter is the
@@ -27,7 +28,7 @@ export function BackDebugOverlay() {
     () => String(backDebugVersion()),
     () => "ssr"
   );
-  if (version === "ssr" || !backDebugEnabled()) return null;
+  if (!DEBUG_FLAGS_ON || version === "ssr" || !backDebugEnabled()) return null;
   const log = getBackDebugLog();
   const tail = log.slice(-8);
   return (

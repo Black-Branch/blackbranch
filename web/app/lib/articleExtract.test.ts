@@ -1,4 +1,4 @@
-// Article extraction under hostile publishers (external review S7).
+// Article extraction under hostile publishers.
 //
 // Only links already in site.rss_items are fetched, but the publisher behind one
 // can stall. With a global cap of three slots and no deadline, three stalled

@@ -1,8 +1,8 @@
-// Session cache for the own-view ProfileCard's data payloads (feedback round
-// 2, issue 2: "the font, banner, stats etc. load up AFTER the profile does").
+// Session cache for the own-view ProfileCard's data payloads, so the font,
+// banner and stats do not load up AFTER the profile does.
 //
-// The card used to fire six independent fetches on mount, each landing in its
-// own render — visible pop-in on every open. This module holds the whole
+// Six independent fetches on mount, each landing in its own render, would mean
+// visible pop-in on every open. This module holds the whole
 // payload as ONE unit with stale-while-revalidate semantics:
 //   - `read()` — synchronous cached snapshot; the card paints fully populated
 //     on open when warm (UserMenu prefetches on avatar hover/focus + idle).

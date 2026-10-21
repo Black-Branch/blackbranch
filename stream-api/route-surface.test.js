@@ -7,13 +7,10 @@
 // other test still passes. The money endpoints (/chat/event, /support,
 // /timer/*) and the mod endpoints live on this surface.
 //
-// WRITTEN FOR H7 (the index.js decomposition), but useful well beyond it. That
-// refactor moves ~3600 lines of route registrations into modules, and this is
-// the one artifact that is trivial to capture BEFORE the move and impossible to
-// reconstruct after. The extractor scans every stream-api source file and the
-// snapshot excludes the filename on purpose — so moving a route from index.js
-// into a registerX(app, deps) module is a NO-OP here, while losing or de-authing
-// one is a loud failure. That is exactly the discrimination the refactor needs.
+// The extractor scans every stream-api source file and the snapshot excludes
+// the filename on purpose — so moving a route from index.js into a
+// registerX(app, deps) module is a NO-OP here, while losing or de-authing one
+// is a loud failure. That is exactly the discrimination a refactor needs.
 //
 // This is a static scan of source, for the same reason money-policy.test.js is:
 // the app cannot be booted in a test (Postgres, OBS, TTS, platform tokens).
@@ -27,8 +24,8 @@
 //   routes:surface(__dirname),shadowPairs:shadowPairs(__dirname)},null,2)+'\n')"
 //
 // …and make the regeneration its own reviewable line in the diff. NEVER
-// regenerate to make a red suite green during a refactor — during H7 the whole
-// value of this file is that the table does NOT change.
+// regenerate to make a red suite green during a refactor — the whole value of
+// this file is that the table does NOT change.
 //
 // Run: node --test route-surface.test.js
 
@@ -43,7 +40,7 @@ const { MODULES } = require('./instanceSchema.generated.js');
 
 const snapshot = JSON.parse(readFileSync(join(__dirname, 'route-surface.snapshot.json'), 'utf8'));
 
-// The snapshot is the private build's whole surface: the product's routes plus the owner plugin's
+// The snapshot is the private build's whole surface: the product's routes plus the site plugin's
 // (`owner`). A public tree has no owner folder, so it must hold exactly the product half.
 const OWNER_PRESENT = existsSync(join(__dirname, 'owner'));
 const expectedRoutes = OWNER_PRESENT ? snapshot.routes : snapshot.routes.filter((r) => !snapshot.owner.includes(r));
@@ -88,7 +85,7 @@ test('no route silently loses its auth middleware', () => {
 test('shadowing order stays fixed (currently: nothing shadows anything)', () => {
   // Express matches first-registered-wins, so when a literal path and a :param
   // path collide at the same depth their ORDER is behaviour. There are none
-  // today, which is why moving routes around during H7 is safe — but if a
+  // today, which is why moving routes around is safe — but if a
   // future route creates a pair, its order becomes load-bearing and gets frozen
   // here rather than discovered in production.
   assert.deepEqual(shadowPairs(__dirname), snapshot.shadowPairs,
@@ -135,7 +132,7 @@ test('per configuration: each module owns exactly the routes the snapshot lists 
     `a fresh public install (no owner folder; product modules off by default: ${offProduct.join(', ') || 'none'}) now mounts ${freshInstall} routes`);
 });
 
-test('the owner plugin adds exactly the routes the snapshot lists for it; the rest is the product', () => {
+test('the site plugin adds exactly the routes the snapshot lists for it; the rest is the product', () => {
   // owner/ is dropped by
   // the public export, so every route it carries leaves with it. Listed, so a route moving between
   // the product and the owner folder is a reviewed change in either direction.

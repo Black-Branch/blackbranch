@@ -32,7 +32,8 @@ function fromStorage(): HomePayload | null {
     if (!env || typeof env !== "object" || env.v !== VERSION) return null;
     const body = env.body as Partial<HomePayload> | null | undefined;
     if (!body || typeof body !== "object" || typeof body.generatedAt !== "string") return null;
-    return body as HomePayload;
+    // A body stored before `platforms` existed (the sign-in logos) reads as none — never undefined.
+    return { ...body, platforms: Array.isArray(body.platforms) ? body.platforms : [] } as HomePayload;
   } catch {
     return null;
   }

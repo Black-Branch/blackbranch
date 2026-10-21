@@ -23,9 +23,12 @@ import { instanceString } from "@/app/lib/instanceConfigServer";
 export const runtime = "nodejs";
 
 // POST /api/billing/webhook — Stripe webhook receiver.
-// Verifies the signature against STRIPE_WEBHOOK_SECRET, then mirrors Stripe
-// subscription state into site.subscriptions. This is the ONLY writer of
-// tier/status — the checkout redirect is never trusted to grant a sub.
+// Verifies the signature against STRIPE_WEBHOOK_SECRET, then hands Stripe's
+// subscription state to the ONE transition function (subscriptions/state.ts
+// writeTransition, through subscriptionSync.ts), the only writer of
+// subscription tier/status, called only from provider-verified paths — this
+// route, after the signature check, is Stripe's. The checkout redirect is never
+// trusted to grant a sub.
 export async function POST(req: NextRequest) {
   // Card payments switched off (Site → Modules): "not found", before anything is read — Stripe
   // keeps a non-2xx event and retries it for about three days, so switching back on in time loses

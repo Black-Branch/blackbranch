@@ -195,14 +195,13 @@ test('an event without a platform id still mints a unique eventId', () => {
     'two identical-looking cheers minted the same id — the second REAL event would be deduped away');
 });
 
-// ── R2-1: a currency the table does not know is NEVER dollars ───────────────
+// ── a currency the table does not know is NEVER dollars ─────────────────────
 // The scraper reads YouTube in en-US, where a currency with no short symbol is
-// written as its ISO code ("ARS 5,000.00") and a few are written with a symbol
-// the old table did not list ("CN¥100.00", "₫100,000"). Each of those used to
-// fall back to 'USD', so ARS 5,000 (about $5) was credited as $3,500 and
-// ₫100,000 as $70,000 — on the bar, the timer, the sponsor pool and the ledger.
-// stream-api's toUSD already credits $0 and logs for a code it cannot price;
-// the bug was that the code never reached it.
+// written as its ISO code ("ARS 5,000.00") and a few with an uncommon symbol
+// ("CN¥100.00", "₫100,000"). A fallback to 'USD' would credit ARS 5,000 (about
+// $5) as $3,500 on the bar, the timer, the sponsor pool and the ledger.
+// stream-api's toUSD credits $0 and logs for a code it cannot price, so the
+// code must reach it.
 
 test('an ISO-prefixed amount keeps its own code, never USD', () => {
   for (const [raw, code, amount] of [
@@ -215,7 +214,7 @@ test('an ISO-prefixed amount keeps its own code, never USD', () => {
   }
 });
 
-test('the symbols the old table missed are mapped', () => {
+test('the uncommon symbols are mapped', () => {
   for (const [raw, code] of [['CN¥100.00', 'CNY'], ['₫100,000', 'VND'], ['E£500.00', 'EGP'], ['₴200.00', 'UAH']]) {
     assert.equal(normalizeYouTubeEvent({ kind: 'superchat', author: 'casey', amount: raw }).currency, code, raw);
   }
@@ -266,12 +265,11 @@ test('every currency stream-api can price round-trips through its en-US format',
   }
 });
 
-// ── R2-2: gifted memberships count from the words next to the count ─────────
-// Every multi-gift was being credited as one: the count came from
-// /gifted\s+(\d+)/ on the banner text, the match failed on the wording YouTube
-// uses, and the fallback was 1 — in silence. The count must come from the
-// number ADJACENT to the gift wording, never the first number in the text,
-// which may be the donor's own name.
+// ── gifted memberships count from the words next to the count ───────────────
+// A /gifted\s+(\d+)/ match fails on the wording YouTube uses and silently
+// credits every multi-gift as one. The count must come from the number
+// ADJACENT to the gift wording, never the first number in the text, which may
+// be the donor's own name.
 
 test('parseGiftCount reads the count next to the gift wording', () => {
   for (const [text, n] of [
@@ -321,7 +319,7 @@ test('a gift banner with an unreadable count credits 1, flagged unverified, and 
   assert.equal(a.countUnverified, true);
   const line = warned.join('\n');
   assert.match(line, /did something new/, "YouTube's wording must still be logged so the next stream captures it");
-  assert.doesNotMatch(line, /Viewer2026/, 'review round 5 L14: the donor name reached the journal');
+  assert.doesNotMatch(line, /Viewer2026/, 'the donor name reached the journal');
 });
 
 test('maskBannerName: the author anywhere, or an unknown name before YouTube\'s own verb', () => {

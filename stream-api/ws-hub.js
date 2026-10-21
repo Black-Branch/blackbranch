@@ -31,9 +31,9 @@ function createWsHub({ server, connectFrames = [], isInternalUpgrade = () => fal
   // so CSWSH risk is low; an Origin check needs a verified inventory of real overlay origins.
   const WS_MAX_PAYLOAD = parseInt(process.env.WS_MAX_PAYLOAD || String(64 * 1024), 10);
   const MAX_WS_CLIENTS = maxClients ?? parseInt(process.env.MAX_WS_CLIENTS || '5000', 10);
-  // Per-address cap (R2-8). The global cap alone let ONE host fill the socket — `ws`
+  // Per-address cap. The global cap alone lets ONE host fill the socket — `ws`
   // clients auto-pong, so the heartbeat never reaps an idle flood — and then every
-  // overlay, every viewer's chat and web's internal socket got 503: alerts and the timer
+  // overlay, every viewer's chat and web's internal socket gets 503: alerts and the timer
   // dark on stream. Generous on purpose: one OBS machine runs a browser source per
   // overlay (alerts, timer, bar, credit, night, meter, sticker, poll…), all from one address.
   const MAX_WS_PER_ADDRESS = maxPerAddress ?? parseInt(process.env.MAX_WS_PER_ADDRESS || '32', 10);

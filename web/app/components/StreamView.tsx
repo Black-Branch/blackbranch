@@ -82,6 +82,8 @@ export default function StreamView({
   initialEmotes,
   offModules = NO_MODULES_OFF,
   embedsOff = NO_EMBEDS_OFF,
+  liveSetUp,
+  kickChannel = "",
 }: {
   isLive: boolean;
   vods?: Vod[];
@@ -95,7 +97,9 @@ export default function StreamView({
   streamTitle: string;
   viewerCount: number | null;
   followerCount: number | null;
-  donateUrl: string;
+  /** Where Donate goes (donateTarget.ts): the site's own page, an outside https link, or null =
+   *  nowhere, and the button is hidden. */
+  donateUrl: string | null;
   subscribeUrl: string;
   streamerAvatar: string | null;
   /** The streamer's display name (instance key streamer.displayName); "" when unset. */
@@ -117,6 +121,12 @@ export default function StreamView({
    *  server per render). The Live row, its drop-down and the remembered source all go through
    *  liveSourcesOn / liveSourceOn. */
   embedsOff?: readonly string[];
+  /** The live sources this install has a channel for (liveSourcesSetUp, server render). Omitted =
+   *  all. None = the live player says there is no player for this site's platforms. */
+  liveSetUp?: readonly LiveSource[];
+  /** The Kick channel (platform.kick.slug), "" when unset: no Kick player exists yet, so a live
+   *  stream with no other source links to it. */
+  kickChannel?: string;
 }) {
   // The registered fallbacks whose module is on — this component's own reads, and the context
   // every player part below reads (usePlayerFallbacks).
@@ -137,7 +147,13 @@ export default function StreamView({
   const [legacyEmbed] = useLocalStorageString("embed_source");
   const [legacySpThin] = useLocalStorageString("chatStyle_spThinPlayer");
   const embedsOffKey = embedsOff.join(",");
-  const liveOn = useMemo(() => liveSourcesOn(embedsOffKey ? embedsOffKey.split(",") : []), [embedsOffKey]);
+  // Keyed by value: the server render hands a fresh array each time.
+  const liveSetUpKey = liveSetUp ? liveSetUp.join(",") : null;
+  const setUpList = useMemo(
+    () => (liveSetUpKey === null ? undefined : liveSetUpKey ? (liveSetUpKey.split(",") as LiveSource[]) : []),
+    [liveSetUpKey],
+  );
+  const liveOn = useMemo(() => liveSourcesOn(embedsOffKey ? embedsOffKey.split(",") : [], setUpList), [embedsOffKey, setUpList]);
   // A remembered source that is switched off plays the first one still on; nothing stored changes.
   const liveSource = liveSourceOn(parseLiveSource(storedLive) ?? liveSourceFromLegacy(legacyEmbed, legacySpThin), liveOn);
   const { active, spThinPlayer } = legacyForLiveSource(liveSource);
@@ -146,7 +162,7 @@ export default function StreamView({
   // space. The chat tab bar's far-left toggle is what restores them.
   //
   // DELIBERATELY NOT PERSISTED, unlike every neighbouring
-  // toggle. This one hides the support bar and the Qorm/Donate/Gift row —
+  // toggle. This one hides the support bar and the currency/Donate/Gift row —
   // barVisibility.ts's header is explicit that hiding a donate button costs
   // money. A remembered "hide the money" that a viewer set once weeks ago and
   // cannot see the cause of is a worse failure than re-tapping a toggle, so it
@@ -169,8 +185,10 @@ export default function StreamView({
   const billing = useBillingAvailability();
   const stripeReady = billing.stripe;
   const [guestDonate, setGuestDonate] = useState(false);
+  // Subscribing (and gifting) in place needs a usable Supporter price at Stripe as well.
+  const subscribeInPlace = stripeReady && billing.supporter !== null;
   function openSupport(section: "donation" | "subscribe", fallbackUrl: string) {
-    const inPlace = section === "donation" ? stripeReady || billing.paypalClientId !== null : stripeReady;
+    const inPlace = section === "donation" ? stripeReady || billing.paypalClientId !== null : subscribeInPlace;
     if (!inPlace) { window.open(fallbackUrl, "_blank", "noopener"); return; }
     if (!isSignedIn) {
       // Guests can DONATE — /api/billing/donate takes a null matrix_id by
@@ -202,7 +220,7 @@ export default function StreamView({
   // `defaultMode`: the visit's shape when nothing is stored, so the
   // server render and a fresh device paint the chat folded while offline.
   const { panelMode, snapZone, snapping, applyMode, resizeHandlers } =
-    usePanelResize({ rootRef, narrow, defaultMode: isLive ? "normal" : "chatFolded" });
+    usePanelResize({ rootRef, narrow, defaultMode: "normal" });
   // Selected video source for a featured community streamer (their sp/yt/tw-style
   // switcher). Defaults to the first source; reset when the featured streamer changes.
   // Its writer is Community's dropdown on the rail.
@@ -390,15 +408,18 @@ export default function StreamView({
     // commit useSyncExternalStore still answers with the server snapshot (the
     // seeded "none"), so a hook-read rule would see "already folded" and leave
     // a stored unfolded player open on an offline visit.
-    const v = foldForVisit({ live: isLive, narrow: narrowViewportNow(), storedPlayerMode: lsGet(PLAYER_MODE_KEY) ?? storedMode, storedPanelMode: lsGet("panelMode") ?? (isLive ? null : "chatFolded") });
+    // The chat is shown on a first visit and kept as the viewer left it; a community feed on
+    // at load unfolds the video to it.
+    const communityOn = !isLive && !!homeInitial?.status?.community;
+    const v = foldForVisit({ live: isLive, community: communityOn, narrow: narrowViewportNow(), storedPlayerMode: lsGet(PLAYER_MODE_KEY) ?? storedMode, storedPanelMode: lsGet("panelMode") });
     if (v.player === "fold") setStoredMode("none");
-    else if (v.player === "unfold") setStoredMode(modeForTab(isLive ? "live" : offlineTab));
+    else if (v.player === "unfold") setStoredMode(modeForTab(isLive ? "live" : communityOn ? "community" : offlineTab));
     if (v.chat !== null) applyMode(v.chat);
     if (v.openHome) {
       if (!narrowViewportNow()) setDockTabRaw(writeDockTab("home"));
       window.dispatchEvent(new Event(OPEN_HOME_EVENT));
     }
-  }, [isLive, storedMode, setStoredMode, applyMode, setDockTabRaw, offlineTab]);
+  }, [isLive, storedMode, setStoredMode, applyMode, setDockTabRaw, offlineTab, homeInitial]);
 
   // The live edge's second half: the player-unfold above already
   // exists; going live also unfolds a folded chat on desktop and moves a phone
@@ -722,6 +743,8 @@ export default function StreamView({
                 spChannel={spChannel}
                 onToggleSpPlayer={() => setSource("streamplace")}
                 onPlayerLive={setTwitchLiveHint}
+                livePlayable={liveOn.length > 0}
+                kickChannel={kickChannel}
               />
             )}
           </div>
@@ -744,8 +767,9 @@ export default function StreamView({
               subscribed={subscribed}
               openSupport={openSupport}
               donateUrl={donateUrl}
-              // No Stripe and no outside link = nowhere to subscribe: no button (money.subscribeUrl).
-              subscribeUrl={stripeReady || subscribeUrl ? subscribeUrl : null}
+              // No Supporter price at Stripe and no outside link = nowhere to subscribe: no button
+              // (money.subscribeUrl).
+              subscribeUrl={subscribeInPlace || subscribeUrl ? subscribeUrl : null}
             />
           )}
 

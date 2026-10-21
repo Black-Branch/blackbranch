@@ -51,12 +51,12 @@ test('a client gets the current state frames the moment it connects — after hi
   assert.equal(frames[2].sponsors[0].name, 'Bram42');
 });
 
-// ── R2-8: one address cannot fill the socket ────────────────────────────────
-// The only limit was one global MAX_WS_CLIENTS, checked for everyone. `ws`
-// clients auto-pong, so idle sockets are never reaped: one host opening
-// thousands of connections filled the cap, and then every OBS overlay, every
-// viewer's chat socket and web's internal config_changed socket got 503 —
-// alerts and the timer went dark on stream. Now each address has its own cap
+// ── one address cannot fill the socket ──────────────────────────────────────
+// With only one global MAX_WS_CLIENTS, checked for everyone — `ws` clients
+// auto-pong, so idle sockets are never reaped — one host opening thousands of
+// connections fills the cap, and then every OBS overlay, every viewer's chat
+// socket and web's internal config_changed socket gets 503: alerts and the
+// timer go dark on stream. So each address has its own cap
 // (CF-Connecting-IP when the tunnel sets it — all public traffic arrives from
 // the tunnel host — else the socket address; for LIMITING only, never auth),
 // a closed socket gives its slot back, and a secret-bearing (internal) upgrade
@@ -187,7 +187,7 @@ test('with no connectFrames (the old contract) a client gets history alone', asy
   assert.deepEqual(frames.map((f) => f.type), ['history']);
 });
 
-// ── L13: IPv6 per /64; local overlays exempt and kept headroom ────────────────
+// ── IPv6 per /64; local overlays exempt and kept headroom ────────────────────
 const { bucketOf, isLocalDirect } = require('./ws-hub');
 
 test('IPv6 is counted per /64 — one host cannot mint a bucket per address', () => {

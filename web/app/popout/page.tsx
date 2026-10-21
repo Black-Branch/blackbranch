@@ -6,6 +6,9 @@ import { CHAT_LIVE_CAP } from "@/app/lib/chatCaps";
 import { manifestWithin } from "@/app/api/emotes/route";
 import { emotesUsedBy } from "@/app/lib/emoteSubset";
 import { preferredCanonical } from "@/app/lib/canonicalFromMatrix";
+import { modulesOff } from "@/app/lib/moduleRunningServer";
+import { SupportModulesOff } from "@/app/lib/support/SupportModulesOff";
+import { supportFacts } from "@/app/lib/support/supportFactsServer";
 
 async function getUserMeta(matrixId: string) {
   try {
@@ -34,8 +37,12 @@ export default async function PopoutPage() {
     .catch(() => []);
   // The emotes those rows use, so they render as <img>s in the HTML (emoteSubset.ts).
   const initialEmotes = emotesUsedBy(messages.map((m) => m.message), await manifestWithin().catch(() => ({})));
+  // The popout offers the help desk too: the same facts as the stream page.
+  const [off, support] = await Promise.all([modulesOff(), supportFacts()]);
 
   return (
+    <>
+    <SupportModulesOff off={off} facts={support} />
     <PopoutView
       isSignedIn={!!session?.user}
       userId={session?.user?.id ?? null}
@@ -45,5 +52,6 @@ export default async function PopoutPage() {
       initialMessages={messages}
       initialEmotes={initialEmotes}
     />
+    </>
   );
 }

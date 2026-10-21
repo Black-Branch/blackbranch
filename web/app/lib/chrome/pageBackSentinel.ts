@@ -26,6 +26,7 @@
 import { useEffect, useRef } from "react";
 import { pushDismissLayer, dismissTop } from "./dismissStack.ts";
 import { createPageBackSentinel, hasMarkState, MARK } from "./pageBackSentinelCore.ts";
+import { DEBUG_FLAGS_ON } from "../debugFlags.ts";
 
 export type BackDebugEvent = {
   t: number;
@@ -49,12 +50,13 @@ let debugSeq = 0;
 /** Monotonic event counter — the overlay's useSyncExternalStore snapshot.
  *  Length+timestamp is NOT enough once the ring buffer is full: two events
  *  in the same millisecond leave both unchanged and the tail renders one
- *  event stale (5c-r final-review finding 13a). */
+ *  event stale. */
 export function backDebugVersion(): number {
   return debugSeq;
 }
 
 export function backDebugEnabled(): boolean {
+  if (!DEBUG_FLAGS_ON) return false;
   try {
     return window.location.search.includes("backdebug=1");
   } catch {

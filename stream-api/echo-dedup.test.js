@@ -23,9 +23,7 @@
 //      is not safe for text.
 //
 // This file tests the DECISION. The WIRING — that /chat/echo-copies really
-// populates the map /chat really reads — is covered by `echo-wiring.probe.cjs`
-// in this directory, which has to be run by hand (createChat pins the event
-// loop; the reason is written at the top of that file).
+// populates the map /chat really reads — is covered by echo-wiring.test.js.
 //
 // Run: node --test echo-dedup.test.js
 

@@ -1,9 +1,9 @@
-// Store prices are stored as STREAMS and rendered to Qorm. Pure and
+// Store prices are stored as STREAMS and rendered to points. Pure and
 // dependency-free: it decides what a viewer is charged, so it is
 // property-tested rather than eyeballed.
 //
-// The anchor is E — the Qorm a median engaged viewer earns per stream (seeded
-// at 45). Storing prices as streams and deriving Qorm is what decouples the
+// The anchor is E — the points a median engaged viewer earns per stream (seeded
+// at 45). Storing prices as streams and deriving points is what decouples the
 // earn-rate decision from the price-table decision: change how much a viewer
 // earns and the whole table moves correctly, because what is held constant is
 // how long they save for a thing.
@@ -14,7 +14,7 @@ export const STORE_PRICE_DAMPING = 0.1;
 
 /** Rounding is part of the PRICE, not presentation — a price of 1,263 reads as
  *  a computed artifact rather than a decision. Coarser steps as the number
- *  grows, so a 25-Qorm sticker and a 2,500-Qorm badge slot both look chosen.
+ *  grows, so a 25-point sticker and a 2,500-point badge slot both look chosen.
  *  (Not exported: renderPrice() is the entry point.) */
 function ladderStep(points: number): number {
   return points < 500 ? 25 : points <= 2_000 ? 50 : 100;
@@ -55,7 +55,7 @@ export function renderPrice(baseStreams: number, e: number): number {
  *
  *  The bound is the LARGER of ±10% and one ladder step, because neither alone
  *  works across the range: at 2,500 a lone 100-step is 4% per run (85 runs to
- *  double), while at 25 Qorm ±10% is 2.5 and the ladder has nothing finer than
+ *  double), while at 25 points ±10% is 2.5 and the ladder has nothing finer than
  *  25. Cheap items therefore move a whole step or not at all — that is the
  *  honest floor of the ladder's resolution, not a compromise.
  *
@@ -77,7 +77,7 @@ export function dampen(prev: number | null, next: number): number {
   //
   //   · at 2,500 a lone 100-step would be 4% per run (85 runs to double), so
   //     the percentage has to win at the top;
-  //   · at 25 Qorm ±10% is 2.5 and the ladder has nothing finer than 25, so
+  //   · at 25 points ±10% is 2.5 and the ladder has nothing finer than 25, so
   //     the step has to win at the bottom — otherwise the price rounds
   //     straight back to where it started and stalls FOREVER.
   //

@@ -81,7 +81,7 @@ function aiFeatureList(ai: LegalFacts["ai"], botName: string | null): string[] {
 /** What automod keeps (stream-api/automod.js): the held row in site.automod_held carries the text
  *  and the verdict and is deleted AUTOMOD_HELD_RETENTION_DAYS after it was held, whatever its
  *  status; markIfDue's site.user_marks row holds no text, and while it is open the same daily job
- *  deletes it once none of its evidence rows is left (k, review round 6 D-E). A cleared mark is the
+ *  deletes it once none of its evidence rows is left. A cleared mark is the
  *  moderator's record: nothing deletes it, and an account deletion keeps it (accountDeletion.ts
  *  `kept`). The render test holds every part to the code. */
 const AUTOMOD_KEEPS =
@@ -99,6 +99,10 @@ export function LegalDocument({ facts }: { facts: LegalFacts }) {
   const aiKeeps = ai.memory || ai.automod || !!facts.plugin?.derived;
   const cur = facts.currencyName;
   const linkPlatforms = youtube.linking ? "a Twitch, YouTube, Kick, or other account" : "a Twitch, Kick, or other account";
+  const pictures = [
+    facts.thirdPartyImages.vods && "thumbnails of past broadcasts from YouTube",
+    facts.thirdPartyImages.news && "news-feed pictures from the site that published the item",
+  ].filter((x): x is string => !!x);
 
   return (
     <div className="h-dvh overflow-y-auto bg-canvas text-strong">
@@ -251,7 +255,7 @@ export function LegalDocument({ facts }: { facts: LegalFacts }) {
           loss of data, profits, or goodwill, arising from your use of the Service. Our
           total liability for any claim relating to the Service will not exceed the
           greater of the amount you paid us in the twelve months before the claim or
-          USD $50.
+          USD ${facts.liabilityCapUsd}.
         </P>
 
         <H3>9. Termination</H3>
@@ -459,17 +463,25 @@ export function LegalDocument({ facts }: { facts: LegalFacts }) {
             chat that is relayed out, or when we aggregate public chat from platforms you
             or the stream connect;
           </li>
-          <li>
-            <B>alejo.io</B> — when you chat on Twitch and
-            have not set pronouns here, we look up the pronouns you chose on alejo.io’s public
-            pronoun service using your Twitch username;
-          </li>
+          {facts.twitch && (
+            <li>
+              <B>alejo.io</B> — when you chat on Twitch and
+              have not set pronouns here, we look up the pronouns you chose on alejo.io’s public
+              pronoun service using your Twitch username;
+            </li>
+          )}
           <li>
             when required by law, or to protect the rights and safety of users and the
             Service.
           </li>
         </UL>
         <P>We do not sell your personal data.</P>
+        {pictures.length > 0 && (
+          <P>
+            Some pictures load straight from the service that hosts them: {and(pictures)}. That service sees
+            your IP address when your browser fetches the picture.
+          </P>
+        )}
 
         {(youtube.publicData || youtube.linking) && (
           <>

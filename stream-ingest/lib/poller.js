@@ -14,11 +14,19 @@
 //     updated_metadata, 1-unit videos.list as count fallback — sticky id +
 //     last-good cache), Kick (official public API with app token; v2 scrape
 //     fallback), and stream.place (read passively off the chat WS's viewer
-//     frames via the connector handle — viewer count only, no liveness vote).
+//     frames via the connector handle).
+//   • stream.place votes too: its chat socket carries the channel's
+//     livestream record, and the reader turns it into live/offline/unknown
+//     (platforms/streamplace.js streamplaceLiveness). Without it a
+//     stream.place-only install never opens a session.
+//   • YouTube votes from the chat reader's verified video id; when NO reader is
+//     running (it failed to start — no browser — or is still starting) the
+//     poller asks YouTube itself with the same zero-quota lookup, and a
+//     lookup that failed votes unknown, never offline.
 
 import { getAccessToken, refreshAccessToken } from './twitchToken.js';
 import { postStreamStart, postStreamEnd, postViewerSnapshot, getCurrentStream } from './api.js';
-import { findLiveVideoId, fetchWatchingNow } from '../platforms/youtube.js';
+import { findLiveVideoId, fetchWatchingNow, youtubeLiveState } from '../platforms/youtube.js';
 import { fetchKickState } from '../platforms/kick.js';
 import { instanceConfig } from './instanceConfig.js';
 
@@ -63,6 +71,12 @@ const YT_OFFLINE_MISS_THRESHOLD = 2;
 const twOffline = createMissCounter(TW_OFFLINE_MISS_THRESHOLD);
 const kickOffline = createMissCounter(KICK_OFFLINE_MISS_THRESHOLD);
 const ytOffline = createMissCounter(YT_OFFLINE_MISS_THRESHOLD);
+// stream.place's own record already debounces (idleTimeoutSeconds); one more miss keeps a socket
+// hiccup from ending a session.
+const spOffline = createMissCounter(2);
+// The last live id the poller's OWN YouTube lookup found (no reader running) — re-verified directly
+// on the next tick instead of scraping /live again (youtubeLiveState's sticky path).
+let ytOwnId = '';
 // Read by startPoller's adaptive scheduler after every tick.
 let sessionOpenNow = false;
 // The forced-offline hold (see forcedHold): when this poller last saw every
@@ -295,7 +309,23 @@ export function aggregateLiveness(platforms) {
   };
 }
 
-async function tick(getStreamplaceViewers, getYtVideoId) {
+/**
+ * YouTube's reading for this tick. The reader's id when a reader runs ('' = it says not live);
+ * with no reader (`watcher` null) the poller's own lookup while YouTube is chosen. Exported for
+ * pollerYoutubeNoReader.test.js. Returns the raw reading (before the miss counter) and the verified
+ * live id, or null when YouTube does not vote.
+ * @returns {Promise<{ raw: 'live'|'offline'|'unknown', videoId: string } | null>}
+ */
+export async function youtubeReading({ watcher, wanted, channelId = ytChannelId(), lookup = youtubeLiveState }) {
+  if (!channelId || !(ytApiKey() || YT_INNERTUBE)) return null;
+  if (watcher != null) return { raw: watcher !== '' ? 'live' : 'offline', videoId: watcher };
+  if (!wanted) return null;
+  const r = await lookup(channelId, { knownId: ytOwnId });
+  ytOwnId = r.state === 'live' ? r.videoId : r.state === 'offline' ? '' : ytOwnId;
+  return { raw: r.state, videoId: r.state === 'live' ? r.videoId : '' };
+}
+
+async function tick({ getStreamplaceViewers, getStreamplaceState, getYtVideoId, ytWanted }) {
   // When this tick's platform reads happen — the all-offline observation is
   // stamped with THIS, not with the later moment the session read resolves,
   // or a forced end landing in that gap would be judged against evidence
@@ -311,17 +341,25 @@ async function tick(getStreamplaceViewers, getYtVideoId) {
     const twState = twRaw.state == null ? null : twOffline.record(twRaw.state);
     const kickState = kickRaw.state == null ? null : kickOffline.record(kickRaw.state);
 
-    // YouTube votes when the chat watcher can be asked and there is a channel to watch. A Data API
-    // key is not needed: liveness is the watcher's id, the count InnerTube's.
-    const ytConfigured = (ytApiKey() || YT_INNERTUBE) && typeof getYtVideoId === 'function' && ytChannelId() !== '';
-    const ytState = ytConfigured
-      ? ytOffline.record(getYtVideoId() !== '' ? 'live' : 'offline')
-      : null;
+    // YouTube votes while there is a channel to watch and a reader to ask — the chat reader, or
+    // with none running, the poller's own lookup (youtubeReading). A Data API key is not needed:
+    // liveness is a verified video id, the count InnerTube's.
+    const yt = await youtubeReading({
+      watcher: typeof getYtVideoId === 'function' ? getYtVideoId() : null,
+      wanted: typeof ytWanted === 'function' ? ytWanted() === true : typeof getYtVideoId === 'function',
+    });
+    const ytConfigured = yt !== null;
+    const ytLiveId = yt?.videoId || '';
+    const ytState = yt ? ytOffline.record(yt.raw) : null;
+    // stream.place: the reader's reading of its own livestream record; null = no reader running.
+    const spRaw = typeof getStreamplaceState === 'function' ? getStreamplaceState() : null;
+    const spState = spRaw == null ? null : spOffline.record(spRaw);
 
     const { voting, anyPlatformLive, allConfirmedOffline } = aggregateLiveness([
       { name: 'twitch', state: twState },
       { name: 'kick', state: kickState },
       { name: 'youtube', state: ytState },
+      { name: 'streamplace', state: spState },
     ]);
     // Nothing configured (yet — settings are read live, so a channel saved later is picked up on
     // the next tick): no vote, so the poller neither starts nor ends anything, and does not ask
@@ -334,7 +372,7 @@ async function tick(getStreamplaceViewers, getYtVideoId) {
     noneLogged = false;
     // Log every platform, voting or not, so a platform dropping out of the vote
     // is visible in the journal rather than just vanishing from the line.
-    console.log(`[poller] platform states: twitch=${twState ?? 'unconfigured'} kick=${kickState ?? 'unconfigured'} youtube=${ytState ?? 'unconfigured'}`);
+    console.log(`[poller] platform states: twitch=${twState ?? 'unconfigured'} kick=${kickState ?? 'unconfigured'} youtube=${ytState ?? 'unconfigured'} streamplace=${spState ?? 'unconfigured'}`);
 
     let cur = null;
     let curFailed = false;
@@ -366,16 +404,16 @@ async function tick(getStreamplaceViewers, getYtVideoId) {
         console.log(`[poller] stream started: ${streamId}`);
       }
       // YouTube's count only where YouTube votes: with no channel there is nothing to look up.
-      const yt = ytConfigured ? await youtubeViewers(getYtVideoId) : null;
+      const ytViewers = ytConfigured ? await youtubeViewers(() => ytLiveId) : null;
       const sp = getStreamplaceViewers ? getStreamplaceViewers() : null;
-      // The watcher's verified-live id (see snapshotBody), not the sticky one.
-      await postViewerSnapshot(snapshotBody({ streamId, twRaw, yt, kickRaw, sp, ytVideoId: ytConfigured ? getYtVideoId() : '' }));
+      // The verified-live id (see snapshotBody), not the sticky one.
+      await postViewerSnapshot(snapshotBody({ streamId, twRaw, yt: ytViewers, kickRaw, sp, ytVideoId: ytLiveId }));
     } else if (streamId) {
       if (!allConfirmedOffline) {
         console.warn('[poller] no platform live this tick, but not every platform has confirmed offline yet — not ending');
       } else {
         await postStreamEnd(streamId);
-        ytVideoId = ''; ytEndedMisses = 0; lastGoodYt = null;
+        ytVideoId = ''; ytEndedMisses = 0; lastGoodYt = null; ytOwnId = '';
         streamId = null;
         console.log('[poller] stream ended (every platform confirmed offline)');
       }
@@ -389,20 +427,21 @@ async function tick(getStreamplaceViewers, getYtVideoId) {
 // Always runs: which platforms vote is decided on every tick from the live settings (see tick),
 // so an install whose only channel is Kick, or YouTube without a Data API key, gets its sessions
 // opened and closed, and a channel saved after boot is picked up without a restart.
-export function startPoller({ getStreamplaceViewers, getYtVideoId } = {}) {
+export function startPoller({ getStreamplaceViewers, getStreamplaceState, getYtVideoId, ytWanted } = {}) {
+  const sources = { getStreamplaceViewers, getStreamplaceState, getYtVideoId, ytWanted };
   console.log(`[poller] starting (live=${Math.round(POLL_MS / 1000)}s, idle=${Math.round(IDLE_POLL_MS / 1000)}s)`);
   let stopped = false;
   let timer = null;
   const scheduleNext = () => {
     if (stopped) return;
     timer = setTimeout(async () => {
-      await tick(getStreamplaceViewers, getYtVideoId);
+      await tick(sources);
       scheduleNext();
     }, nextPollDelay(sessionOpenNow));
     if (timer.unref) timer.unref();
   };
   (async () => {
-    await tick(getStreamplaceViewers, getYtVideoId);
+    await tick(sources);
     scheduleNext();
   })();
   return { stop() { stopped = true; if (timer) clearTimeout(timer); } };

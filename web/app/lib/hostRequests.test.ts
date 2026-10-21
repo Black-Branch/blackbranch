@@ -6,6 +6,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requestHost, hostResult, answers, hostRequestsAvailable, requestRenderFor, hostRecoveryPassphrase, isHostRendered } from "./hostRequests.ts";
 
+test("the wizard's icon upload asks the host by the typed verb site-icons (W2) — an empty file, nothing else", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bb-req-"));
+  try {
+    const dirs = { requests: join(home, "requests"), results: join(home, "results") };
+    mkdirSync(dirs.requests); mkdirSync(dirs.results);
+    const r = await requestHost("site-icons", dirs);
+    assert.ok(r.ok);
+    assert.deepEqual(readdirSync(dirs.requests), ["site-icons.req"]);
+    // Retry: asking again leaves the one request file.
+    assert.ok((await requestHost("site-icons", dirs)).ok);
+    assert.deepEqual(readdirSync(dirs.requests), ["site-icons.req"]);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 test("a request is an empty file named after the verb; the answer is read from the host's folder only", async () => {
   const home = mkdtempSync(join(tmpdir(), "bb-req-"));
   try {

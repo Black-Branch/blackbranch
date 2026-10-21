@@ -86,6 +86,7 @@ function ageVerdict({ createdAt, minAgeDays, now }) {
 // the avatar resolver.
 const { getAppToken: twitchAppToken, invalidateAppToken } = require('./twitch-app.js');
 const { instanceConfig } = require('./instance-config');
+const { NATIVE_PLATFORM, isNativePlatform } = require('./native-platform');
 
 async function fetchTwitch(platformId) {
   const id = instanceConfig.get('twitch.clientId');
@@ -141,17 +142,27 @@ async function fetchKick() {
 
 const FETCHERS = { twitch: fetchTwitch, youtube: fetchYouTube, kick: fetchKick };
 
-/** Platforms whose age we can actually establish.
- *  Not yet wired: no route exposes it, and the mod panel's lockdown section
- *  reads min_account_age_days from Postgres directly. Kept (test-pinned) for a
- *  "which platforms can we check" warning, the natural surface for the
- *  credential misconfiguration documented below. */
+/** Platforms whose account age this install can establish, right now (served as
+ *  GET /lockdown/checkable). Twitch needs the app's client id + secret; YouTube an API key; Kick
+ *  publishes no creation date at all; stream.place has no lookup here. `native` is the site's own
+ *  accounts, which this lever never gates (the signup lever does). Read per call: a key saved in
+ *  the Admin Panel makes a platform checkable without a restart.
+ *
+ *  The lever never holds a platform that is not checkable — an unknown age there is a fact about
+ *  the platform or this install's keys, not about the chatter, and holding on it muted whole
+ *  audiences (all of Kick; all of Twitch without app keys; all of YouTube without an API key). */
 function checkablePlatforms() {
   const twitch = Boolean(
     instanceConfig.get('twitch.clientId') &&
     instanceConfig.get('twitch.clientSecret')
   );
-  return { twitch, youtube: Boolean(instanceConfig.get('youtube.apiKey')), kick: false };
+  return { twitch, kick: false, youtube: Boolean(instanceConfig.get('youtube.apiKey')), streamplace: false, [NATIVE_PLATFORM]: true };
+}
+
+/** GET /lockdown/checkable (requireInternal) — the moderation panel's per-platform line ("age
+ *  unknown on Kick — not held"). */
+function registerLockdownRoutes(app, { requireInternal }) {
+  app.get('/lockdown/checkable', requireInternal, (_req, res) => res.json(checkablePlatforms()));
 }
 
 // ── Cache ───────────────────────────────────────────────────────────────────
@@ -199,8 +210,10 @@ async function lookupCreatedAt({ pool, platform, platformId, now }) {
       // A FAILED lookup is NOT the same as an absent one, and conflating them
       // is the trap this branch exists to avoid.
       //
-      // "Kick has no creation date" is a fact about the platform, and those
-      // messages are withheld. "Twitch rejected our credentials" is a fact about
+      // "This channel has no usable date" is a fact about one account on a
+      // checkable platform, and its messages are withheld (a platform with no
+      // dates at all, like Kick, never reaches here — checkAccountAge lets it
+      // through). "Twitch rejected our credentials" is a fact about
       // OUR configuration — withholding on that silently mutes an entire
       // audience because of a typo in a .env (for example a TWITCH_CLIENT_ID
       // that differs from the web app's), with the panel still reporting the
@@ -271,7 +284,12 @@ async function checkAccountAge({ pool, platform, platformId, now = Date.now() })
   const minAgeDays = await getMinAccountAgeDays(pool);
   if (!(minAgeDays > 0)) return { action: 'allow' };
 
-  // No id means we cannot even ask. Same class as Kick: unknown.
+  // A platform this install cannot check is never held (checkablePlatforms says why). The site's
+  // own accounts are not this lever's to gate either. Both pass with no lookup.
+  const plat = String(platform || '').toLowerCase();
+  if (isNativePlatform(plat) || checkablePlatforms()[plat] !== true) return { action: 'allow', uncheckable: true };
+
+  // No id on a checkable platform means we cannot even ask about THIS account: unknown.
   if (!platformId) {
     return { action: 'withhold', reason: 'unknown_age', minAgeDays, accountCreatedAt: null };
   }
@@ -307,6 +325,7 @@ module.exports = {
   checkAccountAge,
   getMinAccountAgeDays,
   checkablePlatforms,
+  registerLockdownRoutes,
   // exported for tests — the pure core is the part worth pinning
   ageVerdict,
   normalizeCreatedAt,

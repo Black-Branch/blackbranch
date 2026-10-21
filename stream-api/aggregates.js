@@ -24,29 +24,50 @@ const REFRESH_MS = 2 * 60 * 1000;
 //
 // Exported on its own so aggregate-refresh.test.js exercises this policy
 // directly.
+//
+// `request.stop()` is the shutdown half (index.js's drain): no pass starts after it, a queued
+// follow-up is dropped, and it resolves when the pass already running has ended (createAggregates's
+// guard cuts that pass after its current statement) — so the drain ends the pool after the last query.
 function makeRefresher(work, onError = () => {}) {
   let inflight = null;
   let queued = false;
-  return function request() {
+  let stopped = false;
+  function request() {
+    if (stopped) return Promise.resolve();
     if (inflight) { queued = true; return inflight; }   // fold callers into one follow-up pass
     inflight = work()
       .catch(onError)
       .finally(() => {
         inflight = null;
-        if (queued) { queued = false; request(); }
+        if (queued && !stopped) { queued = false; request(); }
       });
     return inflight;
+  }
+  request.stop = () => {
+    stopped = true;
+    queued = false;
+    return inflight || Promise.resolve();
   };
+  return request;
 }
 
 // `schedule` is injectable so the start() wiring — interval drives the WRAPPER,
 // never the raw rebuild — is testable without real timers.
 //
-// `afterAggregates` is the install plugin's own step over the fresh stats (review round 4,
-// step 2b): a scoring plugin derives its labels from the scores there. The product derives none —
+// `afterAggregates` is the install plugin's own step over the fresh stats: a scoring plugin derives its labels from the scores there. The product derives none —
 // no scorer, no labels. It runs once per rebuild, after the product's last statement; a failure is
 // logged and costs neither this pass's stats nor the next pass.
-function createAggregates({ pool, schedule = setInterval, excludeEventTypes = [], afterAggregates = null }) {
+function createAggregates({ pool: realPool, schedule = setInterval, cancel = clearInterval, excludeEventTypes = [], afterAggregates = null }) {
+  // Every statement of a pass goes through this guard. Once stop() is called (the drain), the
+  // statement already running finishes and the NEXT one is refused — so the drain waits for one
+  // statement, never for the rest of a long rebuild, and the pass ends without touching an ended
+  // pool. The refusal is marked so it is not logged as a failure.
+  let stopping = false;
+  const pool = {
+    query: (...args) => (stopping
+      ? Promise.reject(Object.assign(new Error('aggregates stopped for shutdown'), { stopped: true }))
+      : realPool.query(...args)),
+  };
   // DIRTY-FLAG. A pass is expensive and runs every two minutes, while chat_log
   // is silent most of the day. The rebuild's INSERT inputs are append-only
   // (chat_log, support_events), so a MAX(id) watermark pair detects every new
@@ -90,7 +111,7 @@ function createAggregates({ pool, schedule = setInterval, excludeEventTypes = []
     if (renamed) console.log(`[Refresh] ${renamed} name(s) set by the naming rule`);
 
     // ── Step 1: Raw metrics ──────────────────────────────────────────────
-    // Lifetime support excludes Qorm spends — spectacle, not support.
+    // Lifetime support excludes currency spends — spectacle, not support.
     await pool.query(`
       WITH user_metrics AS (
         SELECT
@@ -258,8 +279,11 @@ function createAggregates({ pool, schedule = setInterval, excludeEventTypes = []
     await checkThresholds();
 
     // ── The install plugin's step (see createAggregates) ─────────────────
-    if (afterAggregates) {
-      await afterAggregates({ pool }).catch((e) => console.warn('[aggregates] plugin step failed:', e.message));
+    // The plugin gets the REAL pool (it may need more than query), so the stop guard is applied
+    // here instead: a stopping pass skips it. The drain awaits the pass, so it never runs on an
+    // ended pool.
+    if (afterAggregates && !stopping) {
+      await afterAggregates({ pool: realPool }).catch((e) => console.warn('[aggregates] plugin step failed:', e.message));
     }
     console.log('[Refresh] Aggregates updated');
   }
@@ -273,12 +297,12 @@ function createAggregates({ pool, schedule = setInterval, excludeEventTypes = []
 
   async function checkThresholds() {
     const lowKarma = await pool.query(`
-      SELECT us.user_id, us.name, us.karma,
+      SELECT us.user_id, us.karma,
              COUNT(cl.id) FILTER (WHERE cl.karma IS NOT NULL) AS scored
       FROM stream.user_stats us
       JOIN stream.chat_log cl ON cl.user_id = us.user_id
       WHERE us.karma < 0.35
-      GROUP BY us.user_id, us.name, us.karma
+      GROUP BY us.user_id, us.karma
       HAVING COUNT(cl.id) FILTER (WHERE cl.karma IS NOT NULL) >= 5
     `);
     const stillLow = new Set();
@@ -287,7 +311,7 @@ function createAggregates({ pool, schedule = setInterval, excludeEventTypes = []
       stillLow.add(u.user_id);
       if (printedLowKarma.get(u.user_id) === karma) continue;
       printedLowKarma.set(u.user_id, karma);
-      console.log(`[Threshold] Low karma: ${u.name} karma=${karma} scored=${u.scored}`);
+      console.log(`[Threshold] Low karma: ${u.user_id} karma=${karma} scored=${u.scored}`);
     }
     for (const id of printedLowKarma.keys()) {
       if (!stillLow.has(id)) printedLowKarma.delete(id);
@@ -296,7 +320,7 @@ function createAggregates({ pool, schedule = setInterval, excludeEventTypes = []
 
   const runRefresh = makeRefresher(
     refreshAggregates,
-    (e) => console.warn('[aggregates] refresh failed:', e.message)
+    (e) => { if (!e?.stopped) console.warn('[aggregates] refresh failed:', e.message); }
   );
 
   // Two entries, one refresher (single-flight + coalesce still cover both):
@@ -312,12 +336,21 @@ function createAggregates({ pool, schedule = setInterval, excludeEventTypes = []
   // Interval + startup pass. The interval drives the coalescing wrapper —
   // never refreshAggregates directly, or slow passes stack. Startup polls:
   // lastWatermark is null after a restart, so the first pass always rebuilds.
+  let handle = null;
   function start() {
-    schedule(pollAggregateRefresh, REFRESH_MS);
+    handle = schedule(pollAggregateRefresh, REFRESH_MS);
     pollAggregateRefresh();
   }
 
-  return { requestAggregateRefresh, pollAggregateRefresh, start };
+  /** The drain's step BEFORE pool.end(): no new pass starts, and it resolves when the running one
+   *  has finished. */
+  function stop() {
+    stopping = true;
+    if (handle != null) { cancel(handle); handle = null; }
+    return runRefresh.stop();
+  }
+
+  return { requestAggregateRefresh, pollAggregateRefresh, start, stop };
 }
 
 module.exports = { createAggregates, makeRefresher, REFRESH_MS };

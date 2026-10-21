@@ -49,8 +49,8 @@ export async function GET(req: NextRequest) {
   // older MSC2965 path — the issuer its .well-known names and that issuer's openid-configuration.
   // BOTH go through the same validator (federatedSignIn.ts discoverIssuer → parseAuthMetadata): no
   // issuer pin (an outside server names its own), but every endpoint must be https on that issuer's
-  // origin. The fallback used to be returned unvalidated, and a `javascript:` authorize endpoint
-  // became the URL the sign-in page navigates to.
+  // origin. An unvalidated fallback would let a `javascript:` authorize endpoint become the URL the
+  // sign-in page navigates to.
   const found = await discoverIssuer(homeserver, wellKnown, (url, init) => safeFetch(url, init));
   if (!found.ok) {
     const status = found.error === "no_oidc" ? 422 : 502;

@@ -30,27 +30,27 @@ const answer = async () => {
 
 test("both on: the publishable key AND the PayPal client id", async () => {
   setEnv({ ...STRIPE, ...PAYPAL });
-  assert.deepEqual(await answer(), { publishableKey: "pk_test_abc", paypalClientId: "AeGadget123", paypalSandbox: true });
+  assert.deepEqual(await answer(), { publishableKey: "pk_test_abc", paypalClientId: "AeGadget123", paypalSandbox: true, supporter: null });
 });
 
 test("PayPal only: no publishable key, the client id", async () => {
   setEnv({ ...PAYPAL });
-  assert.deepEqual(await answer(), { publishableKey: null, paypalClientId: "AeGadget123", paypalSandbox: true });
+  assert.deepEqual(await answer(), { publishableKey: null, paypalClientId: "AeGadget123", paypalSandbox: true, supporter: null });
 });
 
 test("Stripe only: the key, no client id", async () => {
   setEnv({ ...STRIPE });
-  assert.deepEqual(await answer(), { publishableKey: "pk_test_abc", paypalClientId: null, paypalSandbox: false });
+  assert.deepEqual(await answer(), { publishableKey: "pk_test_abc", paypalClientId: null, paypalSandbox: false, supporter: null });
 });
 
 test("PayPal partly configured (no env) reads as off — a client id alone cannot take a payment", async () => {
   setEnv({ ...STRIPE, PAYPAL_CLIENT_ID: "AeGadget123", PAYPAL_CLIENT_SECRET: "shh" });
-  assert.deepEqual(await answer(), { publishableKey: "pk_test_abc", paypalClientId: null, paypalSandbox: false });
+  assert.deepEqual(await answer(), { publishableKey: "pk_test_abc", paypalClientId: null, paypalSandbox: false, supporter: null });
 });
 
 test("paypalSandbox is true only for a sandbox PayPal — a live one never gets the sandbox-only SDK parameter", async () => {
   setEnv({ ...PAYPAL, PAYPAL_ENV: "live" });
-  assert.deepEqual(await answer(), { publishableKey: null, paypalClientId: "AeGadget123", paypalSandbox: false });
+  assert.deepEqual(await answer(), { publishableKey: null, paypalClientId: "AeGadget123", paypalSandbox: false, supporter: null });
   setEnv({ ...PAYPAL });
   assert.equal((await answer()).paypalSandbox, true);
 });

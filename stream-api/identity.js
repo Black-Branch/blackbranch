@@ -167,7 +167,7 @@ function createIdentity({ pool, requestAggregateRefresh }) {
       // of them (its own, or a victim's moved over) with every mark's evidence; the others are
       // closed as carried into it. The kept one is the earliest mark NOT opened by automod, else
       // the earliest: automod.js's daily job deletes an automatic mark once its evidence is gone,
-      // and a carried or hand-placed mark closed into one would go with it (round 6 D-E).
+      // and a carried or hand-placed mark closed into one would go with it.
       const marks = (await client.query(
         `SELECT id, canonical_id FROM site.user_marks
           WHERE canonical_id = ANY($1) AND cleared_at IS NULL ORDER BY (source = 'automod'), created_at, id`, [[survivor, ...victims]])).rows;
@@ -443,7 +443,7 @@ function createIdentity({ pool, requestAggregateRefresh }) {
     // site profile + later native chat resolve to the same person (no future orphan).
     if (pendingMatrixId) await bindPlatformLink(pendingMatrixId, platform, userId, id);
     rememberIdentity(platform, userId, id, username);
-    console.log(`[API] New user (${platform}) → ${id}`); // ids only — never the person's name (review round 5, F3)
+    console.log(`[API] New user (${platform}) → ${id}`); // ids only — never the person's name
     return id;
   }
 
@@ -492,9 +492,9 @@ function createIdentity({ pool, requestAggregateRefresh }) {
       }
       const existing = isNativePlatform(platform) ? await resolveCanonical(null, userId) : null;
       // A person known only through a platform link gets their OWN native row on the canonical they
-      // already resolve to (review round 6, PB4-b). Without it their site identity is borrowed from
-      // that platform account: an unlink found the link alone on its canonical and left it there,
-      // and the next site account to claim the platform account merged two people. A no-op for a
+      // already resolve to. Without it their site identity is borrowed from that platform account:
+      // an unlink would find the link alone on its canonical and leave it there, and the next site
+      // account to claim the platform account would merge two people. A no-op for a
       // person who already has one (the conflict), and for a stale platform link whose canonical
       // is gone (the EXISTS — links.canonical references stream.users).
       if (existing) await mintNativeLink(pool, userId, existing);
@@ -509,7 +509,7 @@ function createIdentity({ pool, requestAggregateRefresh }) {
     // platform id. Answers { ok: true, canonicalId } (the platform account's canonical now).
     // A site account with no native row of its own gets one, in the same transaction, on the
     // canonical it resolves to — so an unlink always separates, even when the account's only
-    // platform link is what its site identity sat on (review round 6, PB4-b).
+    // platform link is what its site identity sat on.
     // Idempotent: a row alone on its canonical once that is done is answered as it is
     // ({ unchanged: true }) — the retry after a first call committed.
     // 404 when no such platform link exists; 409 when it shares a canonical with other links and
@@ -533,10 +533,10 @@ function createIdentity({ pool, requestAggregateRefresh }) {
         const mine = (await client.query(
           `SELECT 1 FROM stream.links WHERE platform IN ${NATIVE_SQL} AND platform_id = $1 AND canonical = $2
            UNION SELECT 1 FROM site.platform_links WHERE matrix_id = $1 AND canonical_id = $2`, [matrixId, current])).rowCount;
-        // The ONE-link person (review round 6, PB4-b): a site account with no native row resolves
+        // The ONE-link person: a site account with no native row resolves
         // to a platform link's canonical (resolveCanonical's prio 2), so a lone link here can be
-        // the very canonical the site person's own chat sits on. Counting siblings alone answered
-        // "already alone" and left that platform account holding the person's identity. So first,
+        // the very canonical the site person's own chat sits on. Counting siblings alone would answer
+        // "already alone" and leave that platform account holding the person's identity. So first,
         // in this transaction, the site account gets its own native row on the canonical it
         // resolves to — the same order resolveCanonical uses — and the count below then sees it.
         // Only for this account's own link: a stranger's link mints nothing for the caller.

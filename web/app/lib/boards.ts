@@ -61,8 +61,8 @@ const PERSON = `person AS (
   ) i GROUP BY i.canonical
 )`;
 // Whose row a chat line counts for. A board is public, and one row adding up a person's Twitch,
-// YouTube and site lines under their site name publishes the link between them (owner decision
-// 2026-10-17). So a platform line counts for its site account only when that account shows its
+// YouTube and site lines under their site name publishes the link between them.
+// So a platform line counts for its site account only when that account shows its
 // links; otherwise it counts for that ONE platform identity — 'c:<canonical>|<platform>', an
 // internal key the board turns into the identity's public id before anything leaves (publicKey).
 // A site line (the site's own platform) counts for the site account.
@@ -106,7 +106,7 @@ SELECT ${PKEY} AS key,
  LIMIT 500`;
 
 // earn_bonus is the 2× clock bonus, and the clock is lit by money
-// (stream-api/sponsors.js) — so it is not "earned" for ruling 5 (final review).
+// (stream-api/sponsors.js) — so it is not "earned" for ruling 5.
 const SQL: Record<FaceId, string> = {
   points: `SELECT l.matrix_id AS key, SUM(l.delta)::bigint AS value
   FROM site.coin_ledger l
@@ -263,7 +263,7 @@ type WindowLists = Partial<Record<FaceId, BoardRow[]>>;
 
 /** One window's lists. A face that fails is ABSENT (not empty), and the whole
  *  answer is then not cacheable, so the next read retries while serveWarm keeps
- *  serving that face's last good list (final review 6). */
+ *  serving that face's last good list. */
 async function loadWindow(w: WindowId): Promise<{ lists: WindowLists; complete: boolean }> {
   const bounds = await resolveWindow(w);
   const lists: WindowLists = {};
@@ -288,7 +288,7 @@ const slots = Object.fromEntries(WINDOW_IDS.map((w) => [w, { last: null, infligh
 /** Stale-while-revalidate over a TTL cache, WITHOUT waiting: fresh → the
  *  cache's value; otherwise the last value we saw (null when cold) while ONE
  *  background load runs. The Home body is built on this, so a cold or slow
- *  window can never hold the page (final review 5). A load's answer is merged
+ *  window can never hold the page. A load's answer is merged
  *  over the last one, so a face missing from it (failed) keeps its last list.
  *  @test-only exported for the unit test; the caller is getBoards below (check-orphans does not count in-file references). */
 export function serveWarm<T extends object>(cache: { peek(): T | null; get(): Promise<T> }, slot: Slot<T>): T | null {

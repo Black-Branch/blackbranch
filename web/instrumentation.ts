@@ -60,6 +60,10 @@ export async function register() {
       .catch((e) => console.error(`[store-prices] seed check failed: ${e instanceof Error ? e.message : String(e)}`));
     const { startGiftExpirySweep } = await import("@/app/lib/giftServer");
     startGiftExpirySweep();
+    // PayPal subscriptions (S3): every 6 h, re-read the records whose access runs out soon, so a
+    // CANCELLED/EXPIRED webhook lost for good cannot leave access open.
+    const { startPaypalRecheck } = await import("@/app/lib/subscriptions/paypal");
+    startPaypalRecheck();
     const { startAutomodEventSub } = await import("@/app/lib/automodEventSub");
     startAutomodEventSub();
     // Keeps the mod-curated blocklist re-grades (migrate-v87) current in this

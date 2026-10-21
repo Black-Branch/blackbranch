@@ -163,7 +163,7 @@ for (const file of files) {
   const rel = relative(appDir, file);
   // An exempt file is exempt from the colour/type-token rules, but not from the
   // text scale: globals.css is where the colour tokens are DEFINED, yet a
-  // font-size written there is a use like any other (④ review finding).
+  // font-size written there is a use like any other.
   const exemptFile = EXEMPT_FILES.some((f) => rel.endsWith(f)) || EXEMPT_DIRS.some((d) => rel.startsWith(d));
 
   const src = readFileSync(file, "utf8");

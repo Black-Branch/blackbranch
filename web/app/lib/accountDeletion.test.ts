@@ -37,7 +37,7 @@ test("the confirm name: the account's local name, typed exactly (case and a lead
   assert.equal(confirmsName(undefined, "@kate:example.tv"), false);
 });
 
-// Review round 5: a TIMEOUT's restriction on the deleted account's platform ids ends when the
+// A TIMEOUT's restriction on the deleted account's platform ids ends when the
 // timeout does. A permanent ban, or any open case, keeps it with no end.
 test("the restriction a deletion leaves ends with a timeout — never with a permanent ban or an open case", () => {
   const none = { mark: false, held: false, report: false };
@@ -197,8 +197,8 @@ test("the site erase on a real Postgres: removed, tombstoned, kept — and nobod
 });
 
 // ── Completeness: every per-person column of the site schema is declared ─────────────────────
-// The erase is a hand-written list. A new per-person table or profile column used to ship with no
-// one deciding whether a deletion removes it (payments, coins and slow mode were undeclared, and
+// The erase is a hand-written list. A new per-person table or profile column could ship with no
+// one deciding whether a deletion removes it (payments, coins and slow mode were once undeclared, and
 // v153's show_links was left "consenting" on a tombstone). DELETION_DECLARATION says, per column,
 // erased or kept (with a reason); this reads the GENERATED baseline schema and fails on any
 // `site.*` column ending in matrix_id, or any `site.users` column, that is in none or in two.

@@ -92,7 +92,14 @@ not_yet() { printf 'blackbranch %s: not in this release yet.\n' "$1" >&2; exit 3
 need_root() {
   if [ "$(id -u)" != 0 ] && [ ! -w "$BB_HOME" ]; then die "run as root (sudo blackbranch $*)"; fi
 }
-need_install() { [ -f "$ENV_FILE" ] || die "no install at $BB_HOME (no .env) — run install.sh first"; }
+# The install's home is root's (mode 750) and .env is 600: a normal user cannot see that there IS an
+# install, so "no install" would be the wrong answer to a forgotten sudo (R1.5).
+need_install() {
+  if [ "$(id -u)" != 0 ] && [ -d "$BB_HOME" ] && { [ ! -x "$BB_HOME" ] || { [ -e "$ENV_FILE" ] && [ ! -r "$ENV_FILE" ]; }; }; then
+    die "the install at $BB_HOME is root's: run it with sudo — sudo blackbranch ${BB_ARGS:-help}"
+  fi
+  [ -f "$ENV_FILE" ] || die "no install at $BB_HOME (no .env) — run install.sh first"
+}
 
 # ── .env: read and write one key (never sourced: values are data) ───────────────────────────
 env_get() { # env_get KEY → value ("" when absent)
@@ -169,6 +176,39 @@ web_image() { # the image the site runs: the release's digest, or the tag a chec
   ref="${ref//\$\{BB_RELEASE:-local\}/$(release_tag)}"
   printf '%s' "$ref"
 }
+# Docker's own failure text, read for the causes a first install meets, as a plain reason and the
+# next step (R1.4: before, the raw text was the last thing printed and no `install:` line followed).
+# Reads Docker's stderr on stdin; prints nothing when the cause is not one of these.
+docker_why() {
+  local t; t=$(tr -d '\000' | tail -c 20000)
+  case "$t" in
+    *"port is already allocated"*|*"address already in use"*|*"failed to bind host port"*)
+      echo "port 80 or 443 is already used on this server by another program (often a web server such as nginx or apache). See which: sudo ss -ltnp '( sport = :80 or sport = :443 )'. Stop it (or move it), or install in tunnel mode, which needs neither port; then run the same command again" ;;
+    *"Pool overlaps with other one on this address space"*|*"overlaps with other"*|*"invalid pool request"*)
+      echo "the bundle's private network $(env_get BB_SUBNET | grep . || echo 172.29.83.0/24) clashes with a network this server already has (docker network ls; ip route). Pick a free /24, set it in $ENV_FILE as BB_SUBNET with BB_CADDY_IP and BB_CLOUDFLARED_IP inside it (.249 and .250), then run the same command again" ;;
+    *"toomanyrequests"*|*"pull rate limit"*|*"rate limit"*)
+      echo "the image registry's download limit for this server's address was reached (Docker Hub allows a few pulls per hour without an account). Wait an hour, or sign in with docker login, then run the same command again — it carries on where it stopped" ;;
+    *"no space left on device"*)
+      echo "the disk is full. Free some space (docker image prune removes unused images), then run the same command again" ;;
+    *"Cannot connect to the Docker daemon"*|*"Is the docker daemon running"*)
+      echo "Docker is not running: sudo systemctl start docker, then run the same command again" ;;
+    *"no such host"*|*"TLS handshake timeout"*|*"i/o timeout"*|*"connection refused"*|*"network is unreachable"*|*"Temporary failure in name resolution"*)
+      echo "this server could not reach the internet to download (DNS or the connection failed). Check that it can open https sites over IPv4, then run the same command again" ;;
+  esac
+}
+# docker_step "<what failed>" <command…> — runs it with Docker's own output shown as it comes; on a
+# failure, dies with what failed, the plain reason and the next step when Docker's text names one.
+docker_step() {
+  local what="$1" errf rc=0 why; shift
+  errf=$(mktemp)
+  "$@" 2> >(tee "$errf" >&2) || rc=$?
+  wait "$!" 2>/dev/null || true
+  if [ "$rc" != 0 ]; then
+    why=$(docker_why < "$errf"); rm -f "$errf"
+    die "$what${why:+ — $why}"
+  fi
+  rm -f "$errf"
+}
 images_present() {
   local i
   for i in "${APP_IMAGES[@]}"; do
@@ -188,10 +228,10 @@ build_images() {
     say "Building the images of release $(release_tag) from its source, the site's too (a checkout; first time: several minutes)"
   else
     say "Fetching the site's image ($(web_image | sed 's/@sha256:\(.\{12\}\).*/@sha256:\1…/'))"
-    compose pull -q web || die "the site's image could not be fetched"
+    docker_step "the site's image could not be fetched" compose pull -q web
     say "Building the images of release $(release_tag) from its source (first time: a few minutes)"
   fi
-  compose --profile backup build "${targets[@]}"
+  docker_step "the images of release $(release_tag) did not build" compose --profile backup build "${targets[@]}"
   rstamp_set images "$want"
 }
 
@@ -452,13 +492,17 @@ stuck_reason() {
 # out of time. Callers put it in their message, so a failure names the service.
 HEALTH_PROBLEM=""
 wait_healthy() { # wait_healthy <seconds> <service>... (BB_HEALTH_WAIT caps the seconds — a test's short wait)
-  local deadline=$(( $(date +%s) + ${BB_HEALTH_WAIT:-$1} )) s h pending why id
+  local deadline=$(( $(date +%s) + ${BB_HEALTH_WAIT:-$1} )) s h pending why id readers=""
   local -A base=()
   shift; HEALTH_PROBLEM=""
   while :; do
     pending=()
     for s in "$@"; do
       h=$(service_health "$s")
+      # stream-ingest's health is its chat readers', which depend on platforms outside this box: a
+      # reader that did not start is said (here, in status, and by the doctor's ingest.readers row)
+      # but never holds up `up` or fails an update. The process running is what is waited for.
+      if [ "$s" = stream-ingest ] && [ "$h" = unhealthy ]; then readers=1; continue; fi
       case "$h" in healthy|running) ;; *)
         pending+=("$s:$h")
         if [ -z "${base[$s]+x}" ]; then
@@ -470,7 +514,10 @@ wait_healthy() { # wait_healthy <seconds> <service>... (BB_HEALTH_WAIT caps the 
         if [ -n "$why" ]; then HEALTH_PROBLEM="$s: $why"; printf '   not healthy: %s\n' "$HEALTH_PROBLEM" >&2; return 1; fi ;;
       esac
     done
-    [ "${#pending[@]}" -eq 0 ] && return 0
+    if [ "${#pending[@]}" -eq 0 ]; then
+      [ -n "$readers" ] && printf '   stream-ingest runs, but a chat reader did not start — blackbranch doctor names it (Admin Panel → Stream shows the reason)\n' >&2
+      return 0
+    fi
     [ "$(date +%s)" -ge "$deadline" ] && { HEALTH_PROBLEM="${pending[*]}"; printf '   not healthy: %s\n' "$HEALTH_PROBLEM" >&2; return 1; }
     sleep 3
   done
@@ -496,7 +543,7 @@ cmd_up() {
   build_images
   say "Starting the database and applying migrations"
   local since; since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  compose up -d postgres
+  docker_step "the database did not start" compose up -d postgres
   wait_healthy 120 postgres || die "postgres did not become healthy"
   compose up -d migrate >/dev/null 2>&1 || die "migrate did not start — blackbranch logs migrate"
   if ! compose wait migrate >/dev/null 2>&1; then
@@ -509,15 +556,15 @@ cmd_up() {
   cmd_render
   say "Starting the homeserver (Synapse + MAS)"
   synapse_init
-  compose up -d mas synapse
+  docker_step "the homeserver did not start" compose up -d mas synapse
   wait_healthy 240 synapse || die "synapse did not become healthy — blackbranch logs synapse"
   wait_mas 120 || die "MAS did not answer its health check — blackbranch logs mas"
   info "synapse healthy; MAS answers"
   say "Starting stream-api and stream-ingest"
-  compose up -d stream-api stream-ingest || die "stream-api or stream-ingest failed to start — blackbranch logs stream-api"
+  docker_step "stream-api or stream-ingest failed to start (blackbranch logs stream-api)" compose up -d stream-api stream-ingest
   wait_healthy 180 stream-api || die "stream-api did not become healthy"
   say "Starting everything"
-  compose up -d
+  docker_step "the services did not start" compose up -d
   # A box from before the router had its own folder: caddy now reads rendered/caddy/, so the old
   # file is read by nothing (`render` left it while the caddy started before this release used it).
   rm -f "$BB_HOME/rendered/Caddyfile"
@@ -557,7 +604,9 @@ cmd_status() {
   printf '  %-15s %s\n' SERVICE STATE
   while read -r s; do
     h=$(service_health "$s")
-    printf '  %-15s %s\n' "$s" "$h"
+    if [ "$s" = stream-ingest ] && [ "$h" = unhealthy ]; then
+      printf '  %-15s %s\n' "$s" "running, but a chat reader did not start — blackbranch doctor names it"
+    else printf '  %-15s %s\n' "$s" "$h"; fi
     case "$h" in healthy|running) ;; *) rc=1 ;; esac
   done < <(expected_services)
   local mid
@@ -587,7 +636,12 @@ update_last_line() {
   if [ -z "$l" ]; then printf 'none yet'; return; fi
   case "$(jfield "$l" result)" in
     updated) printf '%s: %s → %s, health check passed' "$(jfield "$l" at)" "$(jfield "$l" from)" "$(jfield "$l" to)" ;;
-    rolled-back) printf '%s: %s FAILED (%s) — ROLLED BACK to %s; health after the rollback: passed' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" "$(jfield "$l" from)" ;;
+    rolled-back) printf '%s: %s FAILED (%s) — ROLLED BACK to %s; health after the rollback: passed' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" "$(jfield "$l" from)"
+      if [ "$(jfield "$l" reason)" = reader-regression ]; then
+        local n; n=$(jfield "$l" attempts); [[ "$n" =~ ^[0-9]{1,3}$ ]] || n=1
+        if [ "$n" -ge "$READER_RETRIES" ]; then printf ' — PARKED after %s attempts, each failed only by a chat reader: the timer does not try it again (blackbranch update --apply %s retries it by hand)' "$n" "$(jfield "$l" to)"
+        else printf ' — only a chat reader failed: the timer tries it again tonight (attempt %s of %s done)' "$n" "$READER_RETRIES"; fi
+      fi ;;
     rollback-failed) printf '%s: %s FAILED and going back did not finish cleanly: %s' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" ;;
     interrupted) printf '%s: the update to %s STOPPED WITHOUT FINISHING — %s' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" ;;
     *) printf '%s: %s not applied — %s' "$(jfield "$l" at)" "$(jfield "$l" to)" "$(jfield "$l" message)" ;;
@@ -670,7 +724,7 @@ cmd_process_requests() {
     # root's own records in results/ (update-last.json, backup-last.json, …), update or not.
     if update_running; then
       case "$name" in
-        update-check|doctor|backup-key|recovery-sheet) ;;
+        update-check|doctor|backup-key|recovery-sheet|site-icons) ;;
         restart-*|render|matrix-bootstrap|apply-install|backup|backup-test|update-v*)
            case "$name" in update-v*) out=update ;; esac
            request_answer "$res" "$out" "$name" "$name" false "an update is running; try again when it has finished"; continue ;;
@@ -689,6 +743,8 @@ cmd_process_requests() {
       matrix-bootstrap) verb="matrix bootstrap"; if msg=$(matrix_bootstrap 2>&1); then ok=true; fi ;;
       apply-install) verb=apply-install; if msg=$(cmd_apply_install 2>&1); then ok=true; fi ;;
       recovery-sheet) verb="recovery sheet"; if msg=$(recovery_sheet 2>&1); then ok=true; fi ;;
+      # The setup pages' icon upload (W2): the site drops the PNGs, the host checks and installs them.
+      site-icons) verb="site icons"; if msg=$(site_icons 2>&1); then ok=true; fi ;;
       # The doctor page's "Check again": the host's half of the facts, nothing else.
       doctor) verb=doctor; if msg=$(doctor_write_host_facts 2>&1); then ok=true; fi ;;
       # Backups: a backup now; the setup pages' test (a backup, then a verify of it); the SFTP key.
@@ -710,11 +766,62 @@ cmd_process_requests() {
     request_answer "$res" "$out" "$name" "$verb" "$ok" "$msg"
   done
 }
+# The site's icons from the setup pages (W2). The site cannot write site-files/ (mounted read-only
+# into it), so it drops the five PNGs into requests/site-icons/ and asks for `site-icons`. Nothing
+# there is trusted: the folder must be a real folder holding only the five names; each file is
+# copied first (at most ICON_MAX bytes) and the COPY is checked — a PNG of the exact size its name
+# says — so a file swapped after a check is never what is installed. All five, or none: the copies
+# go in by renames only once every one has passed. The drop folder is removed either way.
+ICON_FILES=(icon.png:512 icon-192.png:192 icon-512.png:512 icon-maskable-512.png:512 apple-touch-icon.png:180)
+ICON_MAX=2097152
+png_size() { # png_size <file> → "<width> <height>", or nothing when it is not a PNG
+  local b; b=$(od -An -tu1 -N24 -- "$1" 2>/dev/null | tr -s ' \n' ' ')
+  # shellcheck disable=SC2086 # the bytes, one word each
+  set -- $b
+  [ "$#" = 24 ] || return 0
+  [ "$1 $2 $3 $4 $5 $6 $7 $8" = "137 80 78 71 13 10 26 10" ] || return 0
+  [ "${13} ${14} ${15} ${16}" = "73 72 68 82" ] || return 0   # IHDR
+  printf '%s %s' $(( (${17} << 24) + (${18} << 16) + (${19} << 8) + ${20} )) $(( (${21} << 24) + (${22} << 16) + (${23} << 8) + ${24} ))
+}
+site_icons() {
+  local drop="$BB_HOME/requests/site-icons" dest="$BB_HOME/site-files" stage f n want name got e="" entry
+  if [ -L "$drop" ] || [ ! -d "$drop" ]; then rm -f -- "$drop" 2>/dev/null || true; echo "no icons were dropped (requests/site-icons/ is not a folder)"; return 1; fi
+  for entry in "$drop"/* "$drop"/.[!.]*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    name=$(basename -- "$entry"); want=""
+    for f in "${ICON_FILES[@]}"; do [ "${f%%:*}" = "$name" ] && want=1; done
+    [ -n "$want" ] || { e="unexpected file in the drop folder: $(printf '%s' "$name" | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"; break; }
+  done
+  mkdir -p "$dest"
+  stage=$(mktemp -d "$dest/.icons.XXXXXX") || { rm -rf -- "$drop"; echo "could not stage the icons (is the disk full?)"; return 1; }
+  if [ -z "$e" ]; then
+    for f in "${ICON_FILES[@]}"; do
+      name="${f%%:*}"; n="${f##*:}"
+      if [ -L "$drop/$name" ] || [ ! -f "$drop/$name" ]; then e="$name is missing"; break; fi
+      head -c $(( ICON_MAX + 1 )) -- "$drop/$name" > "$stage/$name" 2>/dev/null || { e="$name could not be read"; break; }
+      [ "$(stat -c %s "$stage/$name")" -le "$ICON_MAX" ] || { e="$name is larger than 2 MB"; break; }
+      got=$(png_size "$stage/$name")
+      [ -n "$got" ] || { e="$name is not a PNG"; break; }
+      [ "$got" = "$n $n" ] || { e="$name is ${got/ /×} pixels; it must be ${n}×${n}"; break; }
+      chmod 644 "$stage/$name"
+    done
+  fi
+  rm -rf -- "$drop"
+  if [ -n "$e" ]; then rm -rf -- "$stage"; echo "$e — no icon was changed"; return 1; fi
+  for f in "${ICON_FILES[@]}"; do
+    name="${f%%:*}"
+    mv -f -- "$stage/$name" "$dest/$name" || { rm -rf -- "$stage"; echo "could not write $name into site-files/"; return 1; }
+  done
+  rmdir -- "$stage" 2>/dev/null || rm -rf -- "$stage"
+  echo "the five icons are in site-files/"
+}
 request_answer() { # request_answer <results dir> <file name> <request> <verb> <ok> <message>
   local res="$1" tmp msg
-  # Flatten for the one-line JSON: newlines, quotes and backslashes become spaces.
-  # shellcheck disable=SC1003 # the set really is newline, double quote, backslash
-  msg=$(printf '%s' "$6" | tail -n 5 | sed 's/\x1b\[[0-9;]*m//g' | tr '\n"\\' '   ' | tr -d '\000-\037\177')
+  # One line of JSON: newlines become spaces, other control characters go, and quotes and
+  # backslashes are escaped — so a JSON line a verb ends with (matrix-bootstrap's rooms) arrives
+  # whole inside the message, for the page to read.
+  msg=$(printf '%s' "$6" | tail -n 5 | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\000-\011\013-\037\177' | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ')
+  msg="${msg% }"
   results_dir_ok "$res" || die "refusing to write a result: $res changed under us"
   tmp=$(mktemp "$res/.result.XXXXXX") || die "could not answer $3: no room in $res (is the disk full?)"
   printf '{"request":"%s","verb":"%s","ok":%s,"at":"%s","message":"%s"}\n' \
@@ -1001,7 +1108,7 @@ cmd_matrix() {
 room_id_ok() { [[ "$1" =~ ^![A-Za-z0-9._~=/+:-]+$ ]]; }
 matrix_bootstrap() {
   need_root matrix; need_install
-  local as="" domain owner localpart device token out hub general stored_hub stored_general space_name
+  local as="" domain owner localpart device token out hub general forum stored_hub stored_general space_name
   while [ $# -gt 0 ]; do
     case "$1" in --as) as="${2:?--as needs an account name}"; shift 2 ;; *) die "unknown option $1" ;; esac
   done
@@ -1040,12 +1147,17 @@ matrix_bootstrap() {
           --entrypoint node stream-api /bb-matrix/bootstrap.mjs) || die "the bootstrap did not finish (nothing it made is lost; run it again)"
   hub=$(printf '%s' "$out" | grep -oE '"hub":"[^"]+"' | cut -d'"' -f4)
   general=$(printf '%s' "$out" | grep -oE '"general":"[^"]+"' | cut -d'"' -f4)
-  if ! room_id_ok "$hub" || ! room_id_ok "$general"; then die "the bootstrap returned no room ids"; fi
+  forum=$(printf '%s' "$out" | grep -oE '"forum":"[^"]+"' | cut -d'"' -f4)
+  if ! room_id_ok "$hub" || ! room_id_ok "$general" || ! room_id_ok "$forum"; then die "the bootstrap returned no room ids"; fi
   [ "$hub" = "$stored_hub" ] || { config_set matrix.rooms.hub "\"$hub\""; info "recorded matrix.rooms.hub"; }
   [ "$general" = "$stored_general" ] || { config_set matrix.rooms.general "\"$general\""; info "recorded matrix.rooms.general"; }
-  info "community space $hub · #general $general"
+  info "community space $hub · #general $general · #forum $forum"
   # The bot's account belongs with the bot module's setup page, a later release.
   if [ "$(config_get bot.enabled)" = true ]; then info "bot account: not in this release yet"; fi
+  # Last, so the host request's answer ends with it: what exists and what this run made (W12 —
+  # the setup page says it). Only the bootstrap's own JSON line, rebuilt from checked parts.
+  printf '{"hub":"%s","general":"%s","forum":"%s","created":%s}\n' "$hub" "$general" "$forum" \
+    "$(printf '%s' "$out" | grep -oE '"created":\[[^]]*\]' | head -1 | cut -d: -f2- | grep -E '^\[("[A-Za-z0-9 #._-]*"(,"[A-Za-z0-9 #._-]*")*)?\]$' || echo '[]')"
 }
 
 cmd_federation() {
@@ -1339,7 +1451,18 @@ bb_restore() { # bb_restore <snapshot> <with_env 0|1> [--from address]
       die "could not write MAS's keys from the snapshot (is the disk full?) — they are as they were; the databases are restored and the site is stopped: run the restore again"
     fi
   fi
-  if [ -d "$home/cloudflared" ]; then cp -a "$home/cloudflared/." "$BB_HOME/cloudflared/"; fi
+  # The tunnel's files (R1.6). A box with no tunnel of its own (installed with --moving) takes the
+  # snapshot's: the same tunnel then connects from here, and its routes need no change. A box that
+  # made a tunnel of its own since keeps it: the routes it made are the ones in place, and the
+  # snapshot's would point cloudflared at a tunnel that no longer routes here (or no longer exists).
+  if [ -d "$home/cloudflared" ]; then
+    if [ -f "$BB_HOME/cloudflared/config.yml" ] && [ -f "$home/cloudflared/config.yml" ] \
+       && ! cmp -s "$home/cloudflared/config.yml" "$BB_HOME/cloudflared/config.yml"; then
+      info "kept this box's own tunnel — the snapshot's is another one (delete that one in Cloudflare's dashboard once the old server is gone)"
+    else
+      cp -a "$home/cloudflared/." "$BB_HOME/cloudflared/"
+    fi
+  fi
   # The last step also empties the scratch folder (from inside: the container wrote it).
   out=$(backup_run backup-restore restore-media "${id:-$snap}") || true
   res=$(bbresult "$out")
@@ -1499,8 +1622,43 @@ disk_free_pct() { df -P "$1" 2>/dev/null | awk 'NR == 2 && $2 > 0 { printf "%d",
 public_names() { local d; d=$(env_get BB_DOMAIN); printf '%s\n' "site:$d" "api:api.$d" "matrix:matrix.$d"; }
 answer_path() { case "$1" in site) echo /robots.txt ;; api) echo /stream/current ;; matrix) echo /_matrix/client/versions ;; esac; }
 
-doctor_host_facts() {
-  local mode mem docker_root disk="" clock upg name_json="" tunnel=null certs="" answers="" rendered="" render_err=false
+# Two app services' own reports, asked inside each one's container (neither port is published) and
+# cut down THERE to fixed fields by node — the box has no node, and these facts are written into
+# JSON as they come: no payload, no name, only states, booleans and one short error line per reader.
+#   stream-ingest  GET :3010/health   its chat readers (round 1 contract 1)
+#   stream-api     GET :3001/tts/status  read-aloud's switch, key and voice (contract 2; loopback is trusted)
+INGEST_HEALTH_JS='const line=(s)=>String(s??"").replace(/[\u0000-\u001f\u007f]/g," ").slice(0,160);
+fetch("http://127.0.0.1:3010/health",{signal:AbortSignal.timeout(5000)}).then((r)=>r.json()).then((j)=>{const readers={};
+for(const [k,v] of Object.entries((j&&j.readers)||{}).slice(0,12)){if(!/^[a-z]{1,20}$/.test(k)||!v||typeof v!=="object")continue;
+readers[k]={state:["running","starting","failed","off"].includes(v.state)?v.state:"unknown",since:typeof v.since==="string"?v.since.replace(/[^0-9TZ:.+-]/g,"").slice(0,32):null,error:line(v.error)};}
+process.stdout.write(JSON.stringify({answered:true,ok:j.ok===true,readers}));},()=>process.stdout.write("{\"answered\":false}"));'
+TTS_STATUS_JS='fetch("http://127.0.0.1:3001/tts/status",{signal:AbortSignal.timeout(5000)}).then((r)=>r.ok?r.json():Promise.reject(new Error())).then((j)=>
+process.stdout.write(JSON.stringify({answered:true,enabled:j.enabled===true,keySet:j.keySet===true,voiceSet:j.voiceSet===true})),()=>process.stdout.write("{\"answered\":false}"));'
+app_fact_json() { # app_fact_json <service> <js> → one JSON object, {"answered":false} when it did not answer
+  local out
+  out=$(compose exec -T "$1" node -e "$2" 2>/dev/null | head -c 8192 | head -n 1 || true)
+  case "$out" in '{"answered":'*'}') printf '%s' "$out" ;; *) printf '{"answered":false}' ;; esac
+}
+
+# Which setup pages have been opened (W18b): setup.state.visited, the page ids the setup flow
+# stamps ("module:stripe", "core:kick"). Only well-formed ids are kept. visited null = the setup
+# state holds no such list (an install from before the stamp, or one the database did not answer for).
+setup_facts_json() {
+  local st list="" completed=false id sep=""
+  postgres_up || { printf 'null'; return; }
+  st=$(config_get setup.state 2>/dev/null | head -c 65536 || true)
+  [ -n "$(config_get setup.completedAt 2>/dev/null || true)" ] && completed=true
+  if printf '%s' "$st" | grep -qE '"visited": ?\['; then
+    while IFS= read -r id; do list+="$sep\"$id\""; sep=","; done < <(printf '%s' "$st" | grep -oE '"visited": ?\[[^]]*\]' | head -1 \
+      | grep -oE '"(module|core):[a-z0-9_-]{1,40}"' | tr -d '"' | head -n 64)
+    printf '{"visited":[%s],"completed":%s}' "$list" "$completed"
+  else
+    printf '{"visited":null,"completed":%s}' "$completed"
+  fi
+}
+
+doctor_host_facts() { # doctor_host_facts [health] — health: the update's run, which skips the outside check
+  local mode mem docker_root disk="" clock upg name_json="" tunnel=null certs="" answers="" outside="" via rendered="" render_err=false
   local l h ok code end days missing="" k v n=0 maskeys signing=null release sep
   local caddy_txt hs_txt log_txt mas_txt
   mode=$(env_get BB_TLS_MODE)
@@ -1516,7 +1674,14 @@ doctor_host_facts() {
        && dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null | grep -q 'install ok installed'; then upg=true; else upg=false; fi
   else upg=null; fi
 
-  # The front door. Lab mode has no public names: the router is asked at this box's own port 443.
+  # The front door. Direct and lab mode: the router (caddy) is asked at this box's own port 443, by
+  # each name — so the update's check proves caddy answers without needing the home router to send
+  # the box's own public address back in (many cannot: no "NAT loopback"). Direct mode verifies the
+  # real certificate; lab mode trusts the box's own authority. Tunnel mode asks by the public names:
+  # out to Cloudflare and back in through the tunnel, which every network can do.
+  # `outside` (direct mode, never the update's run): the same three by their public names — a
+  # warning row on the doctor, because from inside many home networks it cannot succeed.
+  if [ "$mode" = tunnel ]; then via=public; else via=box; fi
   sep=""
   while IFS=: read -r l h; do
     if [ "$mode" != internal ]; then
@@ -1524,12 +1689,18 @@ doctor_host_facts() {
       name_json+="$sep{\"name\":\"$l\",\"resolves\":$ok}"
     fi
     local curl_opts=(-s -o /dev/null -w '%{http_code}' --max-time 10)
-    if [ "$mode" = internal ]; then
+    if [ "$via" = box ]; then
       curl_opts+=(--resolve "$h:443:127.0.0.1")
-      if [ -s "$BB_HOME/lab-ca/root.crt" ]; then curl_opts+=(--cacert "$BB_HOME/lab-ca/root.crt"); else curl_opts+=(-k); fi
+      if [ "$mode" = internal ]; then
+        if [ -s "$BB_HOME/lab-ca/root.crt" ]; then curl_opts+=(--cacert "$BB_HOME/lab-ca/root.crt"); else curl_opts+=(-k); fi
+      fi
     fi
     code=$(curl "${curl_opts[@]}" "https://$h$(answer_path "$l")" 2>/dev/null || true)
     answers+="$sep{\"name\":\"$l\",\"status\":$(jnum "$((10#${code:-0}))")}"
+    if [ "$mode" = direct ] && [ "${1:-}" != health ]; then
+      code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "https://$h$(answer_path "$l")" 2>/dev/null || true)
+      outside+="$sep{\"name\":\"$l\",\"status\":$(jnum "$((10#${code:-0}))")}"
+    fi
     if [ "$mode" = direct ]; then
       end=$(echo | timeout 10 openssl s_client -connect 127.0.0.1:443 -servername "$h" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
       days=null; [ -n "$end" ] && days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
@@ -1563,9 +1734,12 @@ doctor_host_facts() {
 
   printf '{"v":1,"at":"%s","release":"%s","mode":"%s","memTotalMiB":%s,"disk":[%s],"clockSynced":%s,"upgrades":%s,' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$release" "$(printf '%s' "$mode" | tr -cd '[:lower:]')" "$(jnum "$mem")" "$disk" "$clock" "$upg"
-  printf '"names":[%s],"tunnel":%s,"certs":[%s],"answers":[%s],"rendered":[%s],"renderError":%s,' \
-    "$name_json" "$(jbool "$tunnel")" "$certs" "$answers" "$rendered" "$render_err"
+  printf '"names":[%s],"tunnel":%s,"certs":[%s],"answers":[%s],"answersVia":"%s","outside":[%s],"rendered":[%s],"renderError":%s,' \
+    "$name_json" "$(jbool "$tunnel")" "$certs" "$answers" "$via" "$outside" "$rendered" "$render_err"
   printf '"secrets":{"count":%s,"missing":[%s],"masKeys":%s,"signingKey":%s},' "$n" "$missing" "$maskeys" "$(jbool "$signing")"
+  # Not on the update's own run: neither is an update check (the update compares the readers itself).
+  if [ "${1:-}" = health ]; then printf '"ingest":null,"tts":null,"setup":null,'
+  else printf '"ingest":%s,"tts":%s,"setup":%s,' "$(app_fact_json stream-ingest "$INGEST_HEALTH_JS")" "$(app_fact_json stream-api "$TTS_STATUS_JS")" "$(setup_facts_json)"; fi
   printf '"backups":%s,"updates":%s}\n' "$(backup_facts_json check)" "$(updates_facts_json)"
 }
 
@@ -1802,11 +1976,29 @@ update_state() { # update_state running|waiting|idle <step> <words>
 }
 ustep() { update_state running "$1" "$2"; say "[$1/$UPDATE_STEPS] $2"; }
 hjson() { case "$1" in '{"ok":'*) if [ "${#1}" -le 8192 ]; then printf '%s' "$1"; else printf null; fi ;; *) printf null ;; esac; }
+# Why an update went back (results/update-last.json "reason"): reader-regression when the ONLY
+# failure was a chat reader that ran before and failed after (readers_check) — a platform can blip
+# for a night, so the timer tries that release again, up to READER_RETRIES nights ("attempts"
+# counts them, in the results file so a restart keeps the count); anything else is "failure" and is
+# never retried by the timer.
+READER_RETRIES=3
+U_FAIL_KIND="" U_ATTEMPT=1
 u_record() { # u_record updated|rolled-back|rollback-failed|not-applied|interrupted <message> [health] [rollback health] [snapshot]
-  local ok=false; [ "$1" != updated ] || ok=true
-  printf '{"v":1,"at":"%s","started":"%s","from":"%s","to":"%s","result":"%s","ok":%s,"message":"%s","snapshot":"%s","health":%s,"rollbackHealth":%s}\n' \
+  local ok=false reason=""; [ "$1" != updated ] || ok=true
+  case "$1" in rolled-back|rollback-failed) reason="${U_FAIL_KIND:-failure}" ;; esac
+  printf '{"v":1,"at":"%s","started":"%s","from":"%s","to":"%s","result":"%s","ok":%s,"message":"%s","snapshot":"%s","reason":"%s","attempts":%s,"health":%s,"rollbackHealth":%s}\n' \
     "$(now_utc)" "$(printf '%s' "$U_SINCE" | tr -cd '0-9TZ:-')" "$(jsafe "$U_FROM")" "$(jsafe "$U_VERSION")" "$1" "$ok" "$(jsafe "$2")" \
-    "$(printf '%s' "${5:-}" | tr -cd '0-9a-f' | cut -c1-16)" "$(hjson "${3:-}")" "$(hjson "${4:-}")" | results_put update-last.json || true
+    "$(printf '%s' "${5:-}" | tr -cd '0-9a-f' | cut -c1-16)" "$reason" "$(jnum "$U_ATTEMPT")" "$(hjson "${3:-}")" "$(hjson "${4:-}")" | results_put update-last.json || true
+}
+# This release's attempt number: one more than the last, when the last was the same release rolled
+# back for a reader regression alone; else 1.
+update_attempt() {
+  local last; last=$(cat "$BB_HOME/results/update-last.json" 2>/dev/null || true)
+  U_ATTEMPT=1
+  if [ "$(jfield "$last" to)" = "$U_VERSION" ] && [ "$(jfield "$last" result)" = rolled-back ] && [ "$(jfield "$last" reason)" = reader-regression ]; then
+    local n; n=$(jfield "$last" attempts); [[ "$n" =~ ^[0-9]{1,3}$ ]] || n=1
+    U_ATTEMPT=$(( n + 1 ))
+  fi
 }
 u_not_applied() { rm -f "$UPDATE_DIR/env.next"; u_record not-applied "$1"; update_state idle 0 ""; echo "not applied: $1" >&2; }
 # Refused after the site was stopped for the backup: "not applied" only once the site is back.
@@ -2055,6 +2247,51 @@ update_health() {
   printf '%s' "$j"
   return "$rc"
 }
+# The chat readers across an update (the owner's security review). stream-ingest's own health never
+# holds up `up` (wait_healthy) — a reader depends on platforms outside the box — but a reader that
+# RAN before the update and has FAILED after it points at the update (a browser missing from the new
+# image, say), so it fails the update's health check and the box goes back. A reader already failed
+# or off before, or one the settings no longer switch on, never blocks. `blackbranch health` alone
+# has no before to compare with and does not do this.
+READERS_WAIT="${BB_READERS_WAIT:-150}"   # the ingest health check's start_period (compose.yaml)
+readers_states() { # readers_states <ingest facts json> → "<platform> <state>" lines
+  printf '%s' "$1" | grep -oE '"[a-z]{1,20}":\{"state":"[a-z]+"' | sed -E 's/^"([a-z]+)":\{"state":"([a-z]+)"$/\1 \2/' || true
+}
+reader_state() { readers_states "$1" | awk -v p="$2" '$1 == p { print $2 }'; }
+reader_error() { # reader_error <ingest facts json> <platform> → its one-line error (as the ingest gave it)
+  printf '%s' "$1" | grep -oE "\"$2\":\\{\"state\":\"[a-z]+\",\"since\":(null|\"[^\"]*\"),\"error\":\"([^\"\\\\]|\\\\.)*\"" | head -n 1 \
+    | sed -E 's/^.*"error":"(.*)"$/\1/; s/\\"/"/g; s/\\\\/\\/g' || true
+}
+platform_label() { case "$1" in twitch) echo Twitch ;; kick) echo Kick ;; youtube) echo YouTube ;; streamplace) echo Streamplace ;; *) echo "$1" ;; esac; }
+# readers_check <before> — notes on stderr; on a regression, the reason on stdout and status 1.
+readers_check() {
+  local before="$1" after="" p st was="" bad=() deadline waiting e
+  case "$before" in '{"answered":true'*) ;; *) echo "   chat readers: stream-ingest did not answer before the update — nothing to compare, not checked" >&2; return 0 ;; esac
+  while read -r p st; do [ "$st" = running ] && was+=" $p"; done < <(readers_states "$before")
+  [ -n "$was" ] || { echo "   chat readers: none was running before the update — nothing to compare" >&2; return 0; }
+  deadline=$(( $(date +%s) + READERS_WAIT ))
+  while :; do
+    after=$(app_fact_json stream-ingest "$INGEST_HEALTH_JS")
+    waiting=0
+    case "$after" in
+      '{"answered":true'*) for p in $was; do [ "$(reader_state "$after" "$p")" = starting ] && waiting=1; done ;;
+      *) waiting=1 ;;
+    esac
+    [ "$waiting" = 0 ] || [ "$(date +%s)" -ge "$deadline" ] && break
+    sleep "${BB_READERS_POLL:-5}"
+  done
+  case "$after" in '{"answered":true'*) ;; *) echo "stream-ingest's readers did not answer after the update (before it:$was ran)"; return 1 ;; esac
+  for p in $was; do
+    case "$(reader_state "$after" "$p")" in
+      failed|unknown) e=$(reader_error "$after" "$p"); bad+=("$(platform_label "$p"): ${e:-failed to start}") ;;
+      starting) echo "   chat readers: $(platform_label "$p") still starting after $READERS_WAIT s — not judged" >&2 ;;
+    esac
+  done
+  if [ "${#bad[@]}" -gt 0 ]; then
+    printf 'a chat reader that ran before the update failed after it — %s' "${bad[0]}"; if [ "${#bad[@]}" -gt 1 ]; then printf '; %s' "${bad[@]:1}"; fi; echo; return 1
+  fi
+  echo "   chat readers: every one that ran before the update runs ($(printf '%s' "$was" | sed 's/^ //'))" >&2
+}
 manifest_images() { grep -oE '[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}' "$1/MANIFEST.json" 2>/dev/null | LC_ALL=C sort -u | tr '\n' ' ' || true; }
 # After a good update: keep the release in use and the one before it (its images, its folder — the
 # rollback target); drop the rest. The site's image is a manifest image like the others.
@@ -2109,7 +2346,7 @@ u_rollback() { # u_rollback <previous release link> <snapshot> <why> <health>
 # after the site stops (a backup made while it runs would lose, on a rollback, everything written
 # during the minutes of fetching and building).
 update_apply() { # update_apply [version] — that version only, when given (the Admin Panel's button)
-  local want="${1:-}" next prev snap h="" hrc=0 i
+  local want="${1:-}" next prev snap h="" hrc=0 i readers_before=""
   mkdir -p "$UPDATE_DIR" "$STATE"; chmod 700 "$UPDATE_DIR"
   update_reconcile
   exec 7>"$STATE/update.lock"
@@ -2129,6 +2366,7 @@ update_apply() { # update_apply [version] — that version only, when given (the
   if [ -n "$want" ] && [ "$U_VERSION" != "$want" ]; then
     u_not_applied "the newest release on the $(update_channel) channel is now $U_VERSION, not $want — check again"; return 1
   fi
+  update_attempt; U_FAIL_KIND=failure
   next="$BB_HOME/releases/$U_VERSION"
   # A release's images are fetched and made beside the running ones: room first, not half-way.
   local need free root
@@ -2145,6 +2383,8 @@ update_apply() { # update_apply [version] — that version only, when given (the
   if ! update_build "$next"; then u_not_applied "$U_ERR (nothing live was changed)"; return 1; fi
 
   ustep 6 "stopping the site and backing up"
+  # The chat readers as they run now, to compare with after the switch (readers_check).
+  readers_before=$(app_fact_json stream-ingest "$INGEST_HEALTH_JS")
   u_progress stopped
   compose stop web stream-ingest stream-api mas synapse >/dev/null 2>&1 || true
   if ! u_wait bb_backup >&2; then
@@ -2184,7 +2424,17 @@ update_apply() { # update_apply [version] — that version only, when given (the
     else hrc=1; h='{"ok":false,"failed":["a restart: not every service came back"]}'; fi
   fi
   rm -f "$UPDATE_DIR/health.out"
-  if [ "$hrc" != 0 ]; then u_rollback "$prev" "$snap" "failed its health check" "$h"; return 1; fi
+  local why="failed its health check"
+  if [ "$hrc" != 0 ]; then U_FAIL_KIND=health; fi
+  # After the two restarts: the readers that ran before must run now (each given its start period).
+  if [ "$hrc" = 0 ] && ! u_wait readers_check "$readers_before" > "$UPDATE_DIR/readers.out"; then
+    hrc=1; U_FAIL_KIND=reader-regression
+    [ "$U_ATTEMPT" -lt "$READER_RETRIES" ] && info "(attempt $U_ATTEMPT of $READER_RETRIES: the nightly timer tries this release again)"
+    why="failed its health check: $(head -n 1 "$UPDATE_DIR/readers.out" 2>/dev/null)"
+    h=$(printf '{"ok":false,"services":true,"failed":["%s"]}' "$(jsafe "$(head -n 1 "$UPDATE_DIR/readers.out" 2>/dev/null)")")
+  fi
+  rm -f "$UPDATE_DIR/readers.out"
+  if [ "$hrc" != 0 ]; then u_rollback "$prev" "$snap" "$why" "$h"; return 1; fi
   u_progress ""
   U_DONE=1; U_HEALTH="$h"
   local tidy=""
@@ -2223,10 +2473,21 @@ update_auto() {
   [ "$U_SECURITY" = true ] || return 0
   # A release that already failed here is not tried again by the timer (it would go down and back
   # every night): it waits for a newer release, or for the operator to apply it by hand.
-  local last; last=$(cat "$BB_HOME/results/update-last.json" 2>/dev/null || true)
+  # One exception: a release whose only failure was a chat reader (readers_check) is tried again on
+  # the next nights, READER_RETRIES attempts in all — a platform can blip for a night.
+  local last n; last=$(cat "$BB_HOME/results/update-last.json" 2>/dev/null || true)
   case "$(jfield "$last" result)" in
     rolled-back|rollback-failed)
-      if [ "$(jfield "$last" to)" = "$U_VERSION" ]; then info "$U_VERSION failed its health check here before: the timer does not try it again (apply it by hand to retry)"; return 0; fi ;;
+      if [ "$(jfield "$last" to)" = "$U_VERSION" ]; then
+        n=$(jfield "$last" attempts); [[ "$n" =~ ^[0-9]{1,3}$ ]] || n=1
+        if [ "$(jfield "$last" result)" = rolled-back ] && [ "$(jfield "$last" reason)" = reader-regression ] && [ "$n" -lt "$READER_RETRIES" ]; then
+          info "$U_VERSION went back last time only because a chat reader failed: trying it again (attempt $(( n + 1 )) of $READER_RETRIES)"
+        elif [ "$(jfield "$last" reason)" = reader-regression ]; then
+          info "$U_VERSION is parked: $n nights in a row a chat reader that ran before it failed after it — the timer does not try it again (apply it by hand to retry)"; return 0
+        else
+          info "$U_VERSION failed its health check here before: the timer does not try it again (apply it by hand to retry)"; return 0
+        fi
+      fi ;;
   esac
   start=$(date +%s); U_FROM=$(current_label); U_SINCE=$(now_utc)
   # Unknown (stream-api not answering) is not live: nobody is watching a site that cannot say so,
@@ -2323,7 +2584,7 @@ cmd_health() {
   local host site="" errf site_err="" setup=false header dout drc=0 dfail probe prc=0 owner="" lp token="" services=true ok=true
   # shellcheck disable=SC2046
   wait_healthy 240 $(expected_services) || services=false
-  host=$(doctor_host_facts)
+  host=$(doctor_host_facts health)
   errf=$(mktemp)
   if ! site=$(doctor_site_facts 2>"$errf"); then site=""; site_err=$(head -1 "$errf" | tr -cd 'A-Za-z0-9 .:-' | cut -c1-80); fi
   rm -f "$errf"
@@ -2351,6 +2612,7 @@ cmd_health() {
 }
 
 cmd="${1:-}"; shift || true
+BB_ARGS=$(printf '%s' "$cmd" | tr -cd 'a-z-' | cut -c1-24)   # the command's name, for "run it with sudo"
 case "$cmd" in
   status)           cmd_status "$@" ;;
   logs)             cmd_logs "$@" ;;

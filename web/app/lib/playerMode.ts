@@ -112,7 +112,7 @@ export function liveOptions(current: LiveSource, on: readonly LiveSource[] = LIV
 const PLATFORM_LABEL: Record<string, string> = {
   youtube: "YouTube",
   twitch: "Twitch",
-  streamplace: "stream.place",
+  streamplace: "Streamplace",
   kick: "Kick",
 };
 

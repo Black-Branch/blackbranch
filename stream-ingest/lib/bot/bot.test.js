@@ -184,19 +184,48 @@ test('a Twitch mention is answered on Twitch, @-tagged; the echo of its own Twit
   assert.equal(await w.bot.onFrame(frameText({ ...msg('t3', 'nightbot', 'ava rules'), platform: 'twitch' })), 'ignored', 'a listed bot username was answered');
 });
 
-test('a YouTube mention is skipped silently and counted — no fallback post on the site', async () => {
+test('Kick, YouTube and stream.place mentions are answered in SITE chat as the bot, @-addressed, quoting the line by name — never by a chat_log id', async () => {
   const w = world();
   w.bot.startReplies();
-  assert.equal(await w.bot.onFrame(frameText({ ...msg('y1', 'carl', 'ava?'), platform: 'youtube' })), 'skipped_unlinked');
-  assert.equal(w.sent.native.length + w.sent.twitch.length + w.sent.chats.length, 0);
-  assert.equal(w.bot.report().skippedUnlinked, 1);
+  for (const [i, platform] of ['kick', 'youtube', 'streamplace'].entries()) {
+    w.tick(30_000);
+    // A platform frame's id is its chat_log row number — a site reply_to_id must not be built from it.
+    assert.equal(await w.bot.onFrame(frameText({ ...msg(500 + i, `carl${i}`, 'ava are you there?'), platform })), 'sent', platform);
+    const p = w.sent.native.at(-1);
+    assert.deepEqual(
+      [p.matrixId, p.username, p.message, p.reply_to_id, p.reply_to_username, p.reply_to_text],
+      ['@ava:example.tv', 'Ava', `@carl${i} Sure thing.`, undefined, `carl${i}`, 'ava are you there?'],
+      platform,
+    );
+  }
+  assert.equal(w.sent.twitch.length, 0, 'nothing was posted to Twitch for another platform\'s mention');
+  assert.equal(w.bot.report().skippedUnlinked, 0);
+  // Retry: the same person again inside 20 s is the usual cooldown, not a second post.
+  assert.equal(await w.bot.onFrame(frameText({ ...msg(600, 'carl2', 'ava again?'), platform: 'streamplace' })), 'cooldown');
 });
 
-test('Twitch not signed in as the bot = unlinked; the site without bot.matrixId = unlinked', async () => {
+test('a Twitch mention with Twitch not signed in as the bot is answered on the site instead', async () => {
+  const w = world();
+  const bot = createBot({
+    cfg: { get: (k) => ({ 'bot.enabled': true, 'bot.name': 'Ava', 'bot.matrixId': '@ava:example.tv' })[k] ?? null, content: () => null },
+    wrapper: { route: () => ({ enabled: true }), providesBot: () => null, chat: async () => ({ text: 'Hi.' }) },
+    log: quiet, twitch: () => null, twitchLogin: () => '', twitchSignedIn: () => false,
+    api: { postChatNative: async (p) => { w.sent.native.push(p); }, screenText: async () => ({ ok: true }), searchMemory: async () => ({ rows: [] }) },
+    embed: async () => null,
+  });
+  bot.startReplies();
+  assert.equal(await bot.onFrame(frameText({ ...msg('t1', 'bob', 'ava?'), platform: 'twitch' })), 'sent');
+  assert.equal(w.sent.native[0].message, '@bob Hi.');
+});
+
+test('no site bot account (bot.matrixId unset) and no Twitch sender = unlinked, skipped and counted', async () => {
   const w = world({ values: { 'bot.matrixId': null } });
   w.bot.startReplies();
   assert.deepEqual(w.bot.speakOn(), { site: false, twitch: 'avabot' });
   assert.equal(await w.bot.onFrame(frameText(msg(1, 'kate', 'ava hi'))), 'skipped_unlinked');
+  assert.equal(await w.bot.onFrame(frameText({ ...msg('k1', 'carl', 'ava?'), platform: 'kick' })), 'skipped_unlinked');
+  assert.equal(w.sent.native.length, 0);
+  assert.equal(w.bot.report().skippedUnlinked, 2);
 });
 
 test('spoofing: a person using the bot\'s display name is a person — answered, never marked as the bot', async () => {

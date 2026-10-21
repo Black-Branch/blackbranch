@@ -141,7 +141,7 @@ export default function BadgesSection() {
                   onClick={() => setPrice(b.id, b.coinPrice)}
                   disabled={busy || !!b.isSubscriber || !!b.isMod}
                   title={
-                    b.isSubscriber || b.isMod ? "Subscriber/mod badges can't be sold"
+                    b.isSubscriber || b.isMod ? "Supporter and mod badges can't be sold"
                     : b.coinPrice ? `In the store: ${b.coinPrice} ${currencyName(b.coinPrice)} — click to change`
                     : "Put in the coin store"
                   }

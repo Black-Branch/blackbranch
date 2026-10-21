@@ -165,7 +165,7 @@ test("no composer status line is left on the fixed-rem shell axis", () => {
   // any presence check while looking exactly like the bug. Bump this when a
   // status line is added, which is the point: a new one must make the same
   // choice deliberately.
-  const STATUS_LINES = 4; // error · failed-line retry · notice · slow mode
+  const STATUS_LINES = 5; // error · failed-line retry · notice (the long box and the line) · slow mode
   assert.equal(
     (lines[0].match(/fontSize: CHAT_FONT_SM/g) ?? []).length, STATUS_LINES,
     "every composer status line must carry the chat-relative size",

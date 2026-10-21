@@ -4,6 +4,8 @@ import { requireMod, assertCanModerate } from "@/app/lib/admin";
 import { appendModLog } from "@/app/lib/modlog";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { setSlowModeOnTwitch } from "@/app/lib/platformMod/twitch";
+import { twitchBroadcasterId } from "@/app/lib/twitch";
+import { slowModeMirrors } from "@/app/lib/slowModeCopy";
 import { NextRequest } from "next/server";
 
 // GET — public read of the current slow-mode setting, plus whether the CALLER
@@ -43,7 +45,11 @@ export async function GET() {
     }));
   }
 
-  return Response.json({ slowModeSeconds, exempt, ...(userLimits ? { userLimits } : {}) });
+  return Response.json({
+    slowModeSeconds, exempt, ...(userLimits ? { userLimits } : {}),
+    // Where the setting is copied, so the controls never promise a platform this install lacks.
+    mirrorsTo: slowModeMirrors({ twitchBroadcasterId: twitchBroadcasterId() }),
+  });
 }
 
 // POST { seconds } — mod-gated. Persists the singleton, mirrors to Twitch

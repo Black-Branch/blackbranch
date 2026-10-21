@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 // POST /api/store/prices/recompute { e, apply? } → { e, current, changes }
 //
-// Sets E — the Qorm a median engaged viewer earns per stream — and re-renders
+// Sets E — the points a median engaged viewer earns per stream — and re-renders
 // every store price against it. Admin only: it changes what everyone is
 // charged.
 //
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => null);
   const e = Math.round(Number((body as { e?: unknown } | null)?.e));
-  // Bounded, not merely positive. E is Qorm-per-stream for one viewer: single
+  // Bounded, not merely positive. E is points-per-stream for one viewer: single
   // digits make the whole store cost pennies, and four digits make a sticker
   // cost more than anyone holds. Both are typos, not intentions.
   if (!Number.isFinite(e) || e < 5 || e > 500) {

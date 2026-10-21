@@ -96,9 +96,7 @@ export function moderationSummary(action: "kick" | "ban" | "unban", rooms: RoomO
     // and deliberately never awaited, so a Twitch/Kick/YouTube failure (an
     // expired token, say) is invisible here. Say only what is actually
     // known: the site half is confirmed, the platform half is dispatched,
-    // not confirmed (final-review re-review defect #1 — the wave that fixed
-    // "Site ban applied." saying too little replaced it with a line that
-    // said too much).
+    // not confirmed — neither too little ("Site ban applied.") nor too much.
     lines.push(`Site ${noun} applied; platform ${noun}s sent.`);
   } else {
     lines.push(`Site and platform ${noun} failed${site.reason ? `: ${site.reason}` : ""}.`);

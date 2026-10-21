@@ -1,5 +1,5 @@
-// The person's own "show my linked platforms on my profile" switch (site.users.show_links, v153;
-// owner decision 2026-10-17), and the linking UI that says what is shown and when. Source scans:
+// The person's own "show my linked platforms on my profile" switch (site.users.show_links, v153),
+// and the linking UI that says what is shown and when. Source scans:
 // the route's aliased imports keep it out of node --test; the decision it feeds is pinned
 // behaviourally in profileView.test.ts.
 // Run: node --test app/lib/showLinksSwitch.test.ts
@@ -31,7 +31,7 @@ test("saving the switch tells stream-api, so the credit line follows at once", (
 
 test("GET returns the switch so the panel shows its real state", () => {
   assert.match(route, /SELECT show_links FROM site\.users WHERE matrix_id = \$1/);
-  assert.match(route, /return Response\.json\(\{ accounts, configuredPlatforms, pendingPlatforms, showLinks \}\);/);
+  assert.match(route, /return Response\.json\(\{ accounts, configuredPlatforms: configured, showLinks \}\);/);
 });
 
 test("the linking UI says linking is private by default, what mods see, when it shows, and how to hide it", () => {

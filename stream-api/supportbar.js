@@ -31,7 +31,7 @@ function createSupportBar({ pool, broadcast, getStreamId, earnTime, onAdd, notio
   let total = 0;
 
   // Recompute the running total from logged support events for the active
-  // stream. `excludeEventTypes` (index.js: money's COIN_KINDS) keeps Qorm
+  // stream. `excludeEventTypes` (index.js: money's COIN_KINDS) keeps currency
   // spends out — their historical rows are spectacle, not support.
   async function init() {
     try {
@@ -39,11 +39,11 @@ function createSupportBar({ pool, broadcast, getStreamId, earnTime, onAdd, notio
       if (!streamId) { total = 0; return total; }
       // event_type is nullable (schema.sql) and a blank kind lands as NULL
       // (money.js stores `eventType || null`) — `NULL <> ALL(...)` is NULL,
-      // and WHERE drops that row. An untyped row is not a Qorm spend, so
+      // and WHERE drops that row. An untyped row is not a currency spend, so
       // COALESCE keeps it counted rather than silently losing it.
       //
       // The exclusion is platform-scoped: `excludeEventTypes` (COIN_KINDS) is
-      // a list of event_type strings ('cheer', 'sticker', …), and a Qorm spend
+      // a list of event_type strings ('cheer', 'sticker', …), and a currency spend
       // is the ONLY producer of them — but nothing in the schema stops an
       // external platform from someday sending `event_type='cheer'`
       // (stream-ingest/lib/alerts.js already emits `bits`/'cheered' for
@@ -52,7 +52,7 @@ function createSupportBar({ pool, broadcast, getStreamId, earnTime, onAdd, notio
       // stays counted — only the site's own coin-spend rows are excluded.
       //
       // A credit whose refunds were held before it landed counts only what the live bar admitted
-      // of it (admitted_usd, v159 — review round 6 D-D); NULL is the row's own amount.
+      // of it (admitted_usd, v159); NULL is the row's own amount.
       const r = await pool.query(
         `SELECT COALESCE(SUM(COALESCE(admitted_usd, amount_usd)), 0) AS s FROM stream.support_events
           WHERE stream_id = $1 AND NOT (platform IN ${NATIVE_SQL} AND COALESCE(event_type, '') = ANY($2::text[]))`,

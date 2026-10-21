@@ -16,7 +16,7 @@ import {
   REDACT_MIN_CREDIT, REDACT_ANIMATE_MS, REDACT_REVEAL_MS, redactSegments, redactFiller, revealRefusal,
 } from "./redactedMessage.ts";
 
-/** A whole-message redaction's public text — what `scramble` used to return. */
+/** A whole-message redaction's public text. */
 const scramble = (t: string) => parseRedaction(t, true).publicText;
 /** The exact wording for a hidden part on a platform. */
 const REDACTED_LABEL = "[REDACTED]";

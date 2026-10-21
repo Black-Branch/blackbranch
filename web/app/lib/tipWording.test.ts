@@ -54,14 +54,15 @@ test("TipForm: the checkbox says Tip", () => {
 // the "Tipping $X via PayPal/Venmo" line under PayPal/Venmo, not TipForm.
 //
 // The PayPal/Venmo caption is a template literal inside a `points ? … : …`
-// ternary (the Qorm half reads "Buying <N> Qorm", the tip half
-// `Tipping $${amount || "—"}` — TWO "$" in source: one literal, one starting
-// the interpolation) followed by the JSX expression's closing `}` and the
-// literal " via " text.
+// ternary (the points half reads "Buying <N> <currency>", the tip half
+// `Tipping ${tipAmount}` — the amount written by moneyFormat's formatPrice in the
+// site's currency, never a literal "$") followed by the JSX expression's closing
+// `}` and the literal " via " text.
 test("TipPayButton: the card button and the PayPal/Venmo line both say Tip(ping), never Donat(e/ion)", () => {
   const src = read("app/features/support/TipPayButton.tsx");
-  assert.match(src, /`Tip \$\$\{amount \|\| "—"\}/);
-  assert.match(src, /`Tipping \$\$\{amount \|\| "—"\}`\} via/);
+  assert.match(src, /`Tip \$\{tipAmount\}`/);
+  assert.match(src, /`Tipping \$\{tipAmount\}`\} via/);
+  assert.match(src, /const tipAmount = amount \? formatPrice\(/, "the amount is formatted in the site's currency");
   assert.ok(!src.includes("Donate"));
   assert.ok(!src.includes("Donation"));
 });

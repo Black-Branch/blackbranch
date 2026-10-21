@@ -5,9 +5,8 @@ import AccountLinkPanel from "./AccountLinkPanel";
 import { LoadingState } from "./Spinner";
 
 type Data = {
-  linked: { platform: string; displayName: string | null; linkedAt: string; missingScopes: string[] }[];
+  linked: { platform: string; displayName: string | null; linkedAt: string; missingScopes: string[]; expired: boolean }[];
   configuredPlatforms: string[];
-  pendingPlatforms: string[];
   showLinks: boolean;
 };
 
@@ -22,7 +21,7 @@ export default function LinkedAccountsInline() {
     let cancelled = false;
     fetch("/api/account-links", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((d: { accounts?: { platform: string; displayName: string | null; linkedAt: string; missingScopes?: string[] }[]; configuredPlatforms?: string[]; pendingPlatforms?: string[]; showLinks?: boolean }) => {
+      .then((d: { accounts?: { platform: string; displayName: string | null; linkedAt: string; missingScopes?: string[]; expired?: boolean }[]; configuredPlatforms?: string[]; showLinks?: boolean }) => {
         if (cancelled) return;
         setData({
           linked: (d.accounts ?? []).map((a) => ({
@@ -30,9 +29,9 @@ export default function LinkedAccountsInline() {
             displayName: a.displayName,
             linkedAt: a.linkedAt,
             missingScopes: a.missingScopes ?? [],
+            expired: a.expired === true,
           })),
           configuredPlatforms: d.configuredPlatforms ?? [],
-          pendingPlatforms: d.pendingPlatforms ?? [],
           showLinks: d.showLinks === true,
         });
       })
@@ -50,7 +49,6 @@ export default function LinkedAccountsInline() {
       <AccountLinkPanel
         linked={data.linked}
         configuredPlatforms={data.configuredPlatforms}
-        pendingPlatforms={data.pendingPlatforms}
         showLinks={data.showLinks}
       />
     </div>

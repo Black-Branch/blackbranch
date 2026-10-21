@@ -2,12 +2,12 @@
 // Run: node --test webhooks-donor-names.test.js
 //
 // Patreon: the member's `full_name` is the name on their account — often a
-// legal name — and it was the name shown on stream, spoken, carded and written
-// to the ledger. Only a name the patron chose for public display (the included
+// legal name — so it is never shown on stream, spoken, carded or written to
+// the ledger. Only a name the patron chose for public display (the included
 // user's `vanity`) may be shown; otherwise "A patron".
 //
-// Logs: the Ko-fi, Patreon and Streamlabs log lines printed donor names to
-// journald, which is kept and read far from the people who gave. They now log
+// Logs: the Ko-fi, Patreon and Streamlabs log lines print no donor name to
+// journald, which is kept and read far from the people who gave. They log
 // the transaction / member / donation id and the amount only — on success and
 // on failure.
 

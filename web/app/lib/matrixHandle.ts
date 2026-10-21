@@ -23,7 +23,7 @@ export function setMatrixHandle(h: MxHandle): void {
 export const matrixHandle = (): MxHandle => handle;
 
 /** Hear the handle change; the unsubscribe comes back. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function onMatrixHandle(fn: (h: MxHandle) => void): () => void {
   listeners.add(fn);
   return () => { listeners.delete(fn); };

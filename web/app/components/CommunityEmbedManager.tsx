@@ -76,7 +76,7 @@ export default function CommunityEmbedManager({ onClose }: { onClose: () => void
   const add = () => flash(async () => {
     if (!yt.trim() && !tw.trim()) { setErr("Enter at least one handle"); return; }
     // Bounded: the server resolves the YouTube channel by scraping its page, and
-    // a stalling page used to pin this dialog's `busy` state indefinitely.
+    // a stalling page would otherwise pin this dialog's `busy` state indefinitely.
     await postJsonOrThrow("/api/mod/embed", {
       youtube: yt.trim() || undefined, twitch: tw.trim() || undefined,
     }, "POST", { timeoutMs: 8_000 });

@@ -49,7 +49,7 @@ export async function PATCH(req: NextRequest) {
     const raw = body.gradientColor;
     if (raw === null) gradientColor = null;
     else if (typeof raw === "string" && /^#[0-9a-fA-F]{6}$/.test(raw)) gradientColor = raw;
-    else return new Response("Bad color", { status: 400 });
+    else return new Response("Bad colour", { status: 400 });
   }
 
   // Validate every touched category up front: null clears; a string must be an

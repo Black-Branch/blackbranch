@@ -15,6 +15,7 @@ function fromSchema(name: string, extra: Partial<FormField> = {}): FormField {
 
 export const SITE_FIELDS: FormField[] = [
   fromSchema("SITE_NAME", { required: true, max: 80 }),
+  fromSchema("STREAMER_DISPLAY_NAME", { max: 80 }),
   fromSchema("SITE_SHORT_NAME"),
   fromSchema("SITE_TAGLINE", { max: 120 }),
   fromSchema("SITE_DESCRIPTION", { max: 300 }),
@@ -34,8 +35,8 @@ export const POINTS_FIELDS: FormField[] = [
   fromSchema("COMMUNITY_SCORE_NAME"),
 ];
 
-// The two "Your site" values that are settings rows, not built values.
-const INSTANCE_FIELDS = new Set(["SITE_TIME_ZONE", "SITE_DATA_SINCE"]);
+// The "Your site" values that are settings rows, not built values.
+const INSTANCE_FIELDS = new Set(["SITE_TIME_ZONE", "SITE_DATA_SINCE", "STREAMER_DISPLAY_NAME"]);
 
 type Staged = { ok: true; install: Record<string, string> } | { ok: false; error: string };
 
@@ -64,6 +65,33 @@ function validTimeZone(tz: string): boolean {
   try { new Intl.DateTimeFormat("en", { timeZone: tz }); return true; } catch { return false; }
 }
 
+/** Every time zone name this runtime knows (what a typed name is matched to).
+ *  @test-only exported so the test can anchor on the list's size (resolveTimeZone reads it here). */
+export function timeZoneNames(): string[] {
+  try { return Intl.supportedValuesOf("timeZone"); } catch { return []; }
+}
+
+/**
+ * A typed time zone → its canonical name, or null. One city can be typed several ways, and
+ * all are accepted: case, spaces for underscores and the city alone all count — "new york",
+ * "America/new york" and "America/New_York" are one zone. A city name two zones share is
+ * not guessed (null).
+ * @test-only exported so each typed form is tested alone (validateSiteStep calls it here).
+ */
+export function resolveTimeZone(input: string, zones: readonly string[] = timeZoneNames()): string | null {
+  const norm = (s: string) => s.trim().toLowerCase().replace(/[\s_]+/g, "_");
+  const want = norm(input);
+  if (!want) return null;
+  const exact = zones.find((z) => norm(z) === want);
+  if (exact) return exact;
+  if (validTimeZone(input.trim()) && !input.includes(" ")) {
+    // Names Intl takes but does not list (UTC, Etc/GMT+5): as Intl spells them.
+    try { return new Intl.DateTimeFormat("en", { timeZone: input.trim() }).resolvedOptions().timeZone; } catch { /* below */ }
+  }
+  const city = zones.filter((z) => norm(z.slice(z.lastIndexOf("/") + 1)) === want);
+  return city.length === 1 ? city[0]! : null;
+}
+
 function validDay(d: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
   const t = Date.parse(`${d}T00:00:00Z`);
@@ -71,15 +99,26 @@ function validDay(d: string): boolean {
 }
 
 export function validateSiteStep(data: Record<string, unknown>):
-  { ok: true; install: Record<string, string>; timeZone: string | null; dataSince: string | null } | { ok: false; error: string } {
+  { ok: true; install: Record<string, string>; timeZone: string | null; dataSince: string | null; displayName: string | null } | { ok: false; error: string } {
   const r = check(SITE_FIELDS, data);
   if (!r.ok) return r;
   const tz = r.raw!.SITE_TIME_ZONE ?? "", since = r.raw!.SITE_DATA_SINCE ?? "";
-  if (tz && !validTimeZone(tz)) return { ok: false, error: `Time zone: "${tz}" is not a time zone name (like Europe/Berlin or America/Chicago)` };
+  const zone = tz ? resolveTimeZone(tz) : null;
+  if (tz && !zone) return { ok: false, error: `Time zone: "${tz}" is not a time zone this site knows — pick it from the list (like America/New_York or Europe/Berlin)` };
   if (since && !validDay(since)) return { ok: false, error: "Data since: a day as YYYY-MM-DD" };
   const email = r.install.LEGAL_CONTACT_EMAIL ?? "";
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Contact e-mail: an e-mail address" };
-  return { ok: true, install: r.install, timeZone: tz || null, dataSince: since || null };
+  return { ok: true, install: r.install, timeZone: zone, dataSince: since || null, displayName: r.raw!.STREAMER_DISPLAY_NAME || null };
+}
+
+/** The day the site's history starts when setup finishes with none given: today, in the
+ *  site's time zone (UTC when it has none), as YYYY-MM-DD. */
+export function installDay(now: Date, timeZone: string | null): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: timeZone ?? "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
 }
 
 export function validatePointsStep(data: Record<string, unknown>): Staged {
@@ -121,6 +160,21 @@ export function validateCommunityStep(body: Record<string, unknown>):
   const registration = joinChoice(body.registration);
   if (!registration) return { ok: false, error: "who can join: choose open sign-up or closed" };
   return { ok: true, federation: body.federation, registration };
+}
+
+/** What the community step made, in words ("the space and #general exist" says nothing). The
+ *  host's answer to the bootstrap may carry the bootstrap's own JSON line ({hub, general, forum?,
+ *  created?}); a forum room is named only when that line names one. `created` empty = it all
+ *  existed already (a second run). */
+export function communityWords(spaceName: string, message: string | null | undefined): string {
+  let made: { forum?: unknown; created?: unknown } = {};
+  const json = (message ?? "").match(/\{[^{}]*"hub"[^{}]*\}/g)?.pop();
+  if (json) { try { made = JSON.parse(json) as typeof made; } catch { /* the plain words below */ } }
+  const rooms = [`the space “${spaceName}” (your community's home)`, "#general for chat"];
+  if (typeof made.forum === "string" && made.forum) rooms.push("a Forums room for longer posts");
+  const list = rooms.length > 2 ? `${rooms.slice(0, -1).join(", ")} and ${rooms.at(-1)}` : rooms.join(" and ");
+  const again = Array.isArray(made.created) && made.created.length === 0;
+  return `${again ? "Already there" : "Made"}: ${list}. They belong to your account, and you are in each.`;
 }
 
 /** What the stored switch means, in words for the Finish page. Unset is closed — as the host renders it. */

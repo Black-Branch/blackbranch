@@ -44,6 +44,13 @@ export type LegalFacts = {
   };
   /** The points' plural name, as the store shows it. */
   currencyName: string;
+  /** A Twitch channel is set up here (its chat is read, and alejo.io is asked for pronouns). */
+  twitch: boolean;
+  /** legal.liabilityCapUsd: the most the Terms say the site is liable for, in US dollars. */
+  liabilityCapUsd: number;
+  /** Pictures a viewer's browser fetches straight from another service: YouTube video thumbnails
+   *  (a VOD playlist is set) and news-feed pictures (a news feed is switched on). */
+  thirdPartyImages: { vods: boolean; news: boolean };
   /** Requests reach this site through Cloudflare. */
   cloudflare: boolean;
   /** The bundled homeserver's message retention, in days; null = the homeserver is run elsewhere
@@ -51,7 +58,7 @@ export type LegalFacts = {
   homeserverRetention: { dms: number; general: number } | null;
   /** Days a browser error report is kept (the pruner's own constant). */
   errorLogDays: number;
-  /** What the install's owner plugin adds; null = no plugin. */
+  /** What the install's site plugin adds; null = no plugin. */
   plugin: PluginPrivacy | null;
 };
 
@@ -78,6 +85,9 @@ export type LegalInputs = {
   /** `currency.purchasable` — the buy switch both points checkouts read. */
   pointsPurchase: boolean;
   currencyName: string;
+  twitch: boolean;
+  liabilityCapUsd: number;
+  thirdPartyImages: LegalFacts["thirdPartyImages"];
   cloudflare: boolean;
   homeserverRetention: LegalFacts["homeserverRetention"];
   errorLogDays: number;
@@ -143,6 +153,9 @@ export function legalFactsFrom(i: LegalInputs): LegalFacts {
       points: i.pointsPurchase && (i.stripe || i.paypal),
     },
     currencyName: i.currencyName,
+    twitch: i.twitch,
+    liabilityCapUsd: i.liabilityCapUsd,
+    thirdPartyImages: i.thirdPartyImages,
     cloudflare: i.cloudflare,
     homeserverRetention: i.homeserverRetention,
     errorLogDays: i.errorLogDays,

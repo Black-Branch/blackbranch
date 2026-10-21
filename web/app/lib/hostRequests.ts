@@ -14,7 +14,9 @@ import { join } from "node:path";
  *  release in the request's name (`update-v1.2.3`); the host checks it against the signed feed and
  *  answers under the fixed name `update`. */
 export type HostVerb = "render" | "matrix-bootstrap" | "apply-install" | "doctor" | "backup" | "backup-test" | "backup-key"
-  | "recovery-sheet" | "restart-stream-api" | "restart-stream-ingest" | "update-check" | `update-v${string}`;
+  | "recovery-sheet" | "restart-stream-api" | "restart-stream-ingest" | "update-check"
+  // The wizard's icon upload: the host copies the staged icons into site-files/. Like every verb, only the name travels.
+  | "site-icons" | `update-v${string}`;
 /** A release version as the host accepts one (install/blackbranch VERSION_RE). */
 export const RELEASE_VERSION = /^(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})(-[0-9a-z-]+(\.[0-9a-z-]+)*)?$/;
 export type HostResult = { ok: boolean; at: string; message: string };

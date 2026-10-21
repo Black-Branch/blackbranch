@@ -6,7 +6,7 @@ import { NATIVE_SQL } from "@/app/lib/nativePlatform";
 
 // POST /api/mod/identity/resolve { ids: string[] } → { ids: { [publicId]: { canonicalId, matrixId } } }
 //
-// Chat lines carry only per-platform public ids (owner decision 2026-10-17); the moderation tools
+// Chat lines carry only per-platform public ids; the moderation tools
 // act by canonical id and site account. A moderator's chat resolves the ids on screen through here
 // — batched and cached per page (modIdentity.ts), so a control has its target before it is clicked.
 // Moderators only. `matrixId` is the site account linked to the identity, if any (a moderator sees

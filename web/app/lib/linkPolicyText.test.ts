@@ -1,6 +1,6 @@
-// The privacy policy and the About page say what is shown about linked accounts, and when (owner
-// decision 2026-10-17), and what happens to platform chat after an account is deleted (D2). They
-// said "recognise you as the same person across platforms" and nothing about who sees the link.
+// The privacy policy and the About page say what is shown about linked accounts, and when,
+// and what happens to platform chat after an account is deleted — not only "recognise you as
+// the same person across platforms" with nothing about who sees the link.
 // Run: node --test app/lib/linkPolicyText.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -3,7 +3,7 @@
 // commands. No writes, no identity resolution beyond lookups. web uses
 // /user/lookup; the bot gets per-user context via POST /bot/retrieve.
 //
-// Two answers (review round 5, PB1):
+// Two answers:
 //   • MERGED — the whole person: every platform's lines, the aggregate tiers, the plugin's fields,
 //     and the identity's preferred name (names.js: the SITE name when there is a site account).
 //     What a lookup without `platform` answers (web's card asks by canonical and decides itself
@@ -16,7 +16,7 @@
 //     What a lookup WITH `platform` answers (the !rank / !karma command in platform chat), unless
 //     every account on the person shows its links (noOptOutSql, the one consent predicate, plus a
 //     site account with show_links on), when it is the merged one. Answering a Twitch handle with
-//     the site name, or with figures another handle would share, published a hidden link to the
+//     the site name, or with figures another handle would share, publishes a hidden link to the
 //     whole chat; and a name is looked up on the asking platform only, so a site name (or another
 //     platform's handle) asked from Twitch is "no record" unless the person shows their links.
 
@@ -59,7 +59,7 @@ const CONSENT_SQL = `SELECT (${noOptOutSql('$1')}) AND EXISTS (
 
 
 /** @param {{ pool, requireInternal, wrap, profileExtras?: (ctx: { pool, canonicalId: string }) => Promise<object> }} deps
- *  profileExtras: the owner plugin's fields for /user/lookup (absent = none). */
+ *  profileExtras: the site plugin's fields for /user/lookup (absent = none). */
 function registerProfileRoutes(app, { pool, requireInternal, wrap, profileExtras = null }) {
   // The merged profile of a canonical (see the head of this file); null = no profile row.
   async function mergedProfile(canonicalId) {
@@ -82,8 +82,8 @@ function registerProfileRoutes(app, { pool, requireInternal, wrap, profileExtras
     if (!r.rows.length) return null;
 
     const row = r.rows[0];
-    // The owner plugin's own fields on the card (e.g. its bot's standing read on the person, or a
-    // scoring plugin's label and its rank — the product derives no label: review round 4, step 2b),
+    // The site plugin's own fields on the card (e.g. its bot's standing read on the person, or a
+    // scoring plugin's label and its rank — the product derives no label),
     // under names it chooses. Best-effort: a failing extra never costs the profile.
     const extras = profileExtras
       ? await profileExtras({ pool, canonicalId }).catch((e) => { console.warn('[profiles] plugin extras:', e.message); return {}; })

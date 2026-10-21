@@ -75,7 +75,10 @@ export default function DmHost() {
       }
       patch(seq, { phase: "open", roomId: room.roomId, invite: false });
     } catch (e) {
-      patch(seq, { phase: "error", error: e instanceof Error && e.message ? `Couldn't open the conversation: ${e.message}` : "Couldn't open the conversation." });
+      // Plain words for the person; the SDK's own text (an M_ code, a URL) goes to the console
+      // only, never onto the screen (polish handoff A8).
+      console.warn("[dm] could not open the conversation:", e);
+      patch(seq, { phase: "error", error: "Couldn't open the conversation — try again in a moment." });
     }
   }, [patch]);
 

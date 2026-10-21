@@ -101,7 +101,7 @@ test("no .ui-range element carries a utility the unlayered class would silently 
   // check-layering does not cover height/background/cursor/appearance/opacity,
   // so this is the guard: globals.css is unlayered and wins over any Tailwind
   // utility for the same property, whatever the markup says.
-  // (The owner plugin's mod Dials slider has its own copy of this guard, in its own folder.)
+  // (A site plugin's mod Dials slider has its own copy of this guard, in its own folder.)
   const files = ["app/components/SettingsControls.tsx"];
   let seen = 0;
   for (const f of files) {

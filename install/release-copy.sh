@@ -114,7 +114,7 @@ rsync -a --delete --checksum --itemize-changes \
   --exclude='/stream-ingest/config/' "${private[@]}" \
   --include='/config/***' --include='/install/***' --include='/stream-api/***' \
   --include='/stream-ingest/***' --include='/web/***' \
-  --include='/migrations/' --include='/migrations/baseline/***' "${newer[@]}" \
+  --include='/migrations/' --include='/migrations/README.md' --include='/migrations/baseline/***' "${newer[@]}" \
   "${licence[@]}" --exclude='*' \
   "$src/" "$staging/" > "$log"
 # The licence travels with every copy of the source: at the root of a public tree or a release, in

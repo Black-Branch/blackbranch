@@ -1,10 +1,10 @@
-// The sign-in hand-off is bound to the browser that signed in (external review S6).
+// The sign-in hand-off is bound to the browser that signed in.
 //
 // The sign-in callbacks finish by sending the browser to /auth/federated-complete?token=…, whose
-// page redeems the one-time token for the Auth.js cookie. Before this binding, the token alone was
+// page redeems the one-time token for the Auth.js cookie. Without this binding, the token alone is
 // enough: someone who completed a sign-in to THEIR OWN account and sent the link on could make
 // another browser sign in as them (login CSRF) — the victim then acts, posts or pays under the
-// attacker's account. Now the callback also sets a per-token httpOnly cookie holding a secret, the
+// attacker's account. So the callback also sets a per-token httpOnly cookie holding a secret, the
 // pending row is keyed by a hash of link token AND secret, and the redeem needs both, atomically.
 //
 // Run: node --test app/lib/loginHandoff.test.ts   (with SQL_PARSE_DATABASE_URL for the real-schema case)

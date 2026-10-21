@@ -202,3 +202,74 @@ test('after release() the relay refuses to park anything new', () => {
     'a web ask during the drain must not be held for askTimeoutMs against a dying process');
   assert.equal(relay.stats().pending, 0, 'nothing may be added to pending during a drain');
 });
+
+// ── a help desk with no brain ───────────────────────────────────────────────
+
+test('a timed-out ask leaves the queue, so 20 unanswered questions do not refuse every later one', (t) => {
+  // With the AI off nothing ever polls: each question waits, then 504s. If it stayed queued, after
+  // maxQueue of them every new question would be refused "busy" until a restart.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const relay = createSupportRelay({ askTimeoutMs: 1000, maxQueue: 2 });
+  for (let round = 0; round < 3; round++) {
+    const a = mockRes(); const b = mockRes();
+    relay.ask({ matrixId: '@a:x', username: 'a', text: `q${round}a`, history: [] }, a);
+    relay.ask({ matrixId: '@b:x', username: 'b', text: `q${round}b`, history: [] }, b);
+    assert.equal(a.code, 200, `round ${round}: a question was refused "busy" — timed-out jobs are still queued`);
+    t.mock.timers.tick(1001);
+    assert.equal(a.code, 504); assert.equal(b.code, 504);
+    assert.equal(relay.stats().queued, 0, `round ${round}: timed-out jobs stayed in the queue`);
+  }
+  // And a brain that turns up later is not handed a stale question nobody is waiting for.
+  const brain = mockRes();
+  relay.next(brain);
+  assert.equal(brain.sent, undefined, 'the brain was handed a question whose asker had already been told "timeout"');
+});
+
+test('a delivered job that times out is not "removed" twice — the queue keeps the others', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const relay = createSupportRelay({ askTimeoutMs: 1000 });
+  relay.ask({ matrixId: '@a:x', username: 'a', text: 'first', history: [] }, mockRes());
+  relay.next(mockRes()); // the brain takes "first"
+  t.mock.timers.tick(500);
+  relay.ask({ matrixId: '@b:x', username: 'b', text: 'second', history: [] }, mockRes());
+  t.mock.timers.tick(501); // "first" times out — it is not in the queue any more
+  assert.equal(relay.stats().queued, 1, '"second" was dropped by first\'s timeout');
+  const brain = mockRes();
+  relay.next(brain);
+  assert.equal(brain.sent.text, 'second');
+});
+
+test('status: aiFreeText is false until the brain polls, true while it does, false again once it stops', () => {
+  let clock = 1_000_000;
+  const relay = createSupportRelay({ now: () => clock });
+  assert.deepEqual(relay.status(), { aiFreeText: false }, 'a help desk nothing has polled offered free text');
+  const poll = mockRes();
+  relay.next(poll); // parked
+  assert.deepEqual(relay.status(), { aiFreeText: true });
+  relay.ask({ matrixId: '@a:x', username: 'a', text: 'q', history: [] }, mockRes()); // fed to the parked poll
+  clock += 60_000; // a minute-long model call: not polling, still answering
+  assert.equal(relay.status().aiFreeText, true, 'a brain busy answering read as gone');
+  relay.reply(poll.sent.requestId, 'a');
+  clock += 89_000;
+  assert.equal(relay.status().aiFreeText, true);
+  clock += 2_000; // 91 s since its last sign of life, nothing parked: switched off or down
+  assert.equal(relay.status().aiFreeText, false, 'a brain that stopped polling still offered free text');
+  relay.next(mockRes()); // it comes back (restart of stream-ingest, switch turned on)
+  assert.equal(relay.status().aiFreeText, true, 'a returning brain was not noticed');
+});
+
+test('GET /bot/support/status is registered behind requireInternal and answers the relay\'s status', () => {
+  const { registerHelpdeskRoutes } = require('./helpdesk-relay');
+  const routes = {};
+  const requireInternal = () => {};
+  registerHelpdeskRoutes(
+    { get: (p, ...h) => { routes[p] = h; }, post: (p, ...h) => { routes[p] = h; } },
+    { requireInternal, wrap: (fn) => fn, relay: { status: () => ({ aiFreeText: false }) } },
+  );
+  const h = routes['/bot/support/status'];
+  assert.ok(h, 'the status route is not registered');
+  assert.equal(h[0], requireInternal, 'the status route is not behind requireInternal');
+  const res = mockRes();
+  h.at(-1)({}, res);
+  assert.deepEqual(res.sent, { aiFreeText: false });
+});

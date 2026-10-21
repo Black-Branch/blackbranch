@@ -1,9 +1,9 @@
-// Round 7 (k, after round 6) against a REAL Postgres (v159): POST /support/reconcile credits an
+// Against a REAL Postgres (v159): POST /support/reconcile credits an
 // unpriced payment under its OWN stream. When that stream is the one live right now, the live bar
 // and the timer move by the credit's ADMITTED amount (the net of any refunds held for it) — the
-// same supportBar.add alert.js calls, so the money bus (sponsor pool, meter) sees it once. Before
-// this, nothing moved live, but the bar's restart rebuild sums every credit row of the stream —
-// so the bar jumped by that amount at the next restart.
+// same supportBar.add alert.js calls, so the money bus (sponsor pool, meter) sees it once. If
+// nothing moved live, the bar would still jump by that amount at the next restart, because the
+// restart rebuild sums every credit row of the stream.
 //
 // Every case passes its original path, a RESTART (a fresh bar rebuilt from the ledger equals the
 // live bar) and a RETRY (the same reconcile twice, and one whose COMMIT is lost, move it once).

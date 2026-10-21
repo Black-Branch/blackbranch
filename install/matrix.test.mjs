@@ -91,7 +91,7 @@ test("the public room list: exactly the bootstrap's two aliases may be listed, n
   try {
     const r = runRender(home); assert.equal(r.status, 0, r.stderr);
     const hs = readFileSync(path.join(home, "rendered/synapse/homeserver.yaml"), "utf8");
-    assert.match(hs, /\nroom_list_publication_rules:\n {2}- alias: "#community-hub:example\.test"\n {4}action: allow\n {2}- alias: "#general:example\.test"\n {4}action: allow\n {2}- action: deny\n/);
+    assert.match(hs, /\nroom_list_publication_rules:\n {2}- alias: "#community-hub:example\.test"\n {4}action: allow\n {2}- alias: "#general:example\.test"\n {4}action: allow\n {2}- alias: "#forum:example\.test"\n {4}action: allow\n {2}- action: deny\n/);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -319,7 +319,7 @@ test("the router's config is in its own folder: render writes rendered/caddy/Cad
     assert.ok(existsSync(path.join(home, "rendered/Caddyfile")));
     const up = read("blackbranch").match(/\ncmd_up\(\) \{\n([\s\S]*?)\n\}\n/)?.[1] ?? "";
     assert.match(up, /\n {2}info "all services healthy"$/, "the whole of cmd_up was read");
-    assert.match(up, /\n {2}compose up -d\n(?: {2}[^\n]*\n)*? {2}rm -f "\$BB_HOME\/rendered\/Caddyfile"\n/, "the old router file goes after everything is started on the new mount");
+    assert.match(up, /\n {2}docker_step "the services did not start" compose up -d\n(?: {2}[^\n]*\n)*? {2}rm -f "\$BB_HOME\/rendered\/Caddyfile"\n/, "the old router file goes after everything is started on the new mount");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -404,7 +404,7 @@ function bootstrap(base, env = {}, token = "tok") {
   });
 }
 
-test("bootstrap: creates the space and #general as the owner, idempotently, writing only Matrix's m.* state", async () => {
+test("bootstrap: creates the space, #general and #forum as the owner, idempotently, writing Matrix's m.* state and the product's forum flag", async () => {
   const { srv, rooms, writes } = fakeHomeserver();
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${srv.address().port}`;
@@ -412,8 +412,15 @@ test("bootstrap: creates the space and #general as the owner, idempotently, writ
     const first = await bootstrap(base);
     assert.equal(first.code, 0, first.err);
     const ids = JSON.parse(first.out);
-    assert.deepEqual(ids.created, ["community space", "#general", "m.space.child", "m.space.parent"]);
-    const hub = rooms.get(ids.hub), general = rooms.get(ids.general);
+    assert.deepEqual(ids.created, ["community space", "#general", "#forum", "m.space.child", "m.space.parent", "m.space.child", "m.space.parent"]);
+    const hub = rooms.get(ids.hub), general = rooms.get(ids.general), forum = rooms.get(ids.forum);
+    // W12: a forum room, so the Forums tab has one on a fresh install — flagged by the product's own
+    // state event (web isForumRoom), in the space, public like #general.
+    assert.ok(forum, "a forum room was made");
+    assert.equal(forum.body.room_alias_name, "forum"); assert.equal(forum.body.room_version, "12"); assert.equal(forum.body.visibility, "public");
+    assert.deepEqual(forum.state.get("app.blackbranch.room_type\u0000"), { type: "forum" });
+    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.forum}`), { via: ["example.test"] });
+    assert.deepEqual(forum.state.get(`m.space.parent\u0000${ids.hub}`), { via: ["example.test"] });
     assert.equal(hub.body.room_version, "12"); assert.equal(general.body.room_version, "12");
     assert.deepEqual(hub.body.creation_content, { type: "m.space" });
     assert.equal(hub.body.name, "Example Stream"); assert.equal(hub.body.room_alias_name, "community-hub");
@@ -426,19 +433,21 @@ test("bootstrap: creates the space and #general as the owner, idempotently, writ
     const second = await bootstrap(base, { MX_STORED_HUB: ids.hub, MX_STORED_GENERAL: ids.general });
     assert.equal(second.code, 0, second.err); assert.deepEqual(JSON.parse(second.out).created, []);
     const third = await bootstrap(base);
-    assert.equal(third.code, 0, third.err); assert.deepEqual(JSON.parse(third.out), { hub: ids.hub, general: ids.general, created: [] });
+    assert.equal(third.code, 0, third.err); assert.deepEqual(JSON.parse(third.out), { hub: ids.hub, general: ids.general, forum: ids.forum, created: [] });
     assert.equal(writes.length, before, "a repeat run wrote something");
-    // Every state type written is Matrix's own: no site namespace — so none under any prefix.
+    // Every state type written is Matrix's own, but one: the forum flag, in the PRODUCT's namespace
+    // (the same on every install) — never an install's own prefix.
     const types = writes.filter((w) => w !== "createRoom" && !w.startsWith("creation_content."));
-    assert.ok(types.length >= 3, "vacuity: the fake recorded the writes");
-    for (const t of types) assert.match(t, /^m\./, `bootstrap wrote ${t}`);
+    assert.ok(types.length >= 5, "vacuity: the fake recorded the writes");
+    for (const t of types) assert.match(t, /^(m\.|app\.blackbranch\.room_type$)/, `bootstrap wrote ${t}`);
+    assert.equal(types.filter((t) => !t.startsWith("m.")).length, 1, "the forum flag, once");
     // A recorded room that is gone is reported, not replaced by a second one…
     const gone = await bootstrap(base, { MX_STORED_HUB: "!gone", MX_STORED_GENERAL: ids.general });
     assert.equal(gone.code, 1); assert.match(gone.err, /the recorded room !gone is gone .* not making a second one silently/);
-    assert.equal(rooms.size, 2);
+    assert.equal(rooms.size, 3);
     // …unless asked; then the alias (still there) is reused rather than a duplicate made.
     const re = await bootstrap(base, { MX_STORED_HUB: "!gone", MX_STORED_GENERAL: ids.general, MX_RECREATE: "1" });
-    assert.equal(re.code, 0, re.err); assert.equal(JSON.parse(re.out).hub, ids.hub); assert.equal(rooms.size, 2);
+    assert.equal(re.code, 0, re.err); assert.equal(JSON.parse(re.out).hub, ids.hub); assert.equal(rooms.size, 3);
     // A token for another server's account, or none, stops it before anything is written.
     const n0 = writes.length;
     assert.equal((await bootstrap(base, {}, "")).code, 1);

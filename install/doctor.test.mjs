@@ -21,9 +21,12 @@ const greenHost = () => ({
   v: 1, at: "2026-10-10T00:00:00Z", release: "r1", mode: "tunnel", memTotalMiB: 3922,
   disk: [{ what: "install", freePct: 60 }, { what: "docker", freePct: 60 }], clockSynced: true, upgrades: true,
   names: [{ name: "site", resolves: true }, { name: "api", resolves: true }, { name: "matrix", resolves: true }],
-  tunnel: true, certs: [], answers: [{ name: "site", status: 200 }, { name: "api", status: 200 }, { name: "matrix", status: 200 }],
+  tunnel: true, certs: [], answers: [{ name: "site", status: 200 }, { name: "api", status: 200 }, { name: "matrix", status: 200 }], answersVia: "public", outside: [],
   rendered: [{ file: "Caddyfile", match: true }, { file: "synapse/homeserver.yaml", match: true }], renderError: false,
   secrets: { count: 15, missing: [], masKeys: true, signingKey: true },
+  // stream-ingest's own report (contract 1) and read-aloud's (contract 2), asked inside each container.
+  ingest: { answered: true, ok: true, readers: { twitch: { state: "running", since: "2026-10-09T20:00:00Z", error: "" }, kick: { state: "off", since: null, error: "" } } },
+  tts: { answered: true, enabled: true, keySet: true, voiceSet: true },
   // A backup 5 hours before these facts, checked two days before them; the target answers.
   backups: { last: { at: "2026-10-09T19:00:00Z", ok: true, lastOkAt: "2026-10-09T19:00:00Z" },
     verify: { at: "2026-10-08T00:00:00Z", ok: true, failed: [] }, target: { kind: "local", repo: "ok" } },
@@ -80,7 +83,7 @@ test("all green facts: every check this release makes is ok, and the later areas
     else if (id === "site.legacyId") { assert.equal(r.status, "grey"); assert.match(r.detail, /^not needed: a fresh install/); }
     else assert.equal(r.status, "ok", `${id}: ${r.detail}`);
   }
-  assert.equal(Object.keys(rows).length, 40, "vacuity: the list was read whole");
+  assert.equal(Object.keys(rows).length, 43, "vacuity: the list was read whole");
 });
 
 // One red fixture per check: [id, mutate(host, site), detail it must say].
@@ -117,6 +120,8 @@ const RED = [
   ["services.api", (h, s) => { s.services.api.reachable = false; }, /does not answer the site/],
   ["services.ingest", (h, s) => { s.services.ingest.reportedMinutesAgo = 40; s.services.platforms[0].set = false; }, /last reported 40 min ago/],
   ["services.platforms", (h, s) => { s.services.platforms[0].connected = false; }, /Twitch: connection broken/],
+  ["ingest.readers", (h) => { h.ingest.ok = false; h.ingest.readers.youtube = { state: "failed", since: "2026-10-09T20:00:00Z", error: "the browser did not start" }; }, /YouTube: the browser did not start/],
+  ["tts.ready", (h) => { h.tts.voiceSet = false; }, /switched on, but a voice id is not set — nothing is read aloud/],
   ["platforms.credentials", (h, s) => { s.platforms[0] = { id: "twitch", label: "Twitch", set: true, ok: false, detail: "rejected (HTTP 403)" }; }, /Twitch: rejected \(HTTP 403\)/],
   ["backups.age", (h) => { h.backups.last = { at: "2026-10-08T11:00:00Z", ok: true, lastOkAt: "2026-10-08T11:00:00Z" }; }, /the last good backup is 37 hours old/],
   ["backups.verify", (h) => { h.backups.verify = { at: "2026-10-09T00:00:00Z", ok: false, failed: ["tables", "signingKey"] }; }, /the last check failed \(tables and signingKey\)/],
@@ -127,8 +132,8 @@ const RED = [
 
 test("each check goes red on its own fact, says what is wrong, and carries a fix line", () => {
   const ids = DOCTOR.CHECKS.filter((c) => c.side !== "later").map((c) => c.id);
-  // modules.skipped, modules.failsafe and alerts.channel are amber at worst; payments.cloudflare is grey at worst.
-  assert.deepEqual([...RED.map((x) => x[0]), "modules.skipped", "modules.failsafe", "payments.cloudflare", "alerts.channel"].sort(), [...ids].sort(), "a red fixture for every check");
+  // modules.skipped, modules.failsafe, alerts.channel and door.outside are amber at worst; payments.cloudflare is grey at worst.
+  assert.deepEqual([...RED.map((x) => x[0]), "modules.skipped", "modules.failsafe", "payments.cloudflare", "alerts.channel", "door.outside"].sort(), [...ids].sort(), "a red fixture for every check");
   for (const [id, mutate, says] of RED) {
     const rows = run(mutate);
     assert.equal(rows[id].status, "fail", `${id} did not go red`);
@@ -175,6 +180,11 @@ test("updates: the feed quiet for 3 days is red, a failed read amber, a rollback
   assert.equal(last({}).detail, "1.0.0 → 1.0.1 (2026-10-05)");
   const rb = last({ result: "rolled-back", to: "1.0.2", message: "failed its health check; the box is back on 1.0.1" , from: "1.0.1" });
   assert.equal(rb.status, "warn"); assert.match(rb.detail, /^1\.0\.2 failed its health check \(2026-10-05\); the box went back to 1\.0\.1/);
+  // Only a chat reader failed: retried by the timer, three nights in all, then parked — said either way.
+  const reader = (attempts) => last({ result: "rolled-back", to: "1.0.2", from: "1.0.1", reason: "reader-regression", attempts, message: "failed its health check: a chat reader that ran before the update failed after it — YouTube: x; the box is back" });
+  assert.match(reader(1).detail, /only a chat reader failed: the timer tries it again tonight \(attempt 1 of 3 done\)$/);
+  assert.equal(reader(3).status, "warn"); assert.match(reader(3).detail, /parked after 3 attempts, each failed only by a chat reader/);
+  assert.doesNotMatch(rb.detail, /chat reader|parked/, "any other failure: as before");
   assert.equal(last({ result: "not-applied", message: "a key no migration explains: X" }).status, "warn");
   assert.equal(last({ result: "interrupted", message: "stopped at step 7" }).status, "fail");
   assert.match(last({ result: "interrupted", message: "stopped at step 7" }).fix, /blackbranch restore <snapshot> --yes/);
@@ -202,6 +212,127 @@ test("the update's health verdict: the checks an update can affect, nothing else
   const setup = verdict(() => {}, { site: null, siteError: "setting up", setupRunning: true });
   assert.equal(setup.ok, true, "while setup runs the site serves no facts: the box's checks only");
   assert.deepEqual(verdict((h) => { h.secrets.missing = ["AUTH_SECRET"]; }, { site: null, setupRunning: true }).failed, ["secrets.bootstrap"]);
+});
+
+// R1.1: a direct-mode box behind a home router often cannot reach its own public address (no NAT
+// hairpin). The update's check asks caddy on the box itself, by name, with the real certificate;
+// the by-public-name answer is its own row, amber at worst, and never part of an update's verdict.
+test("direct mode: the update's front-door check is caddy on this box; the public-name answer is a warning that no update waits on", () => {
+  assert.ok(DOCTOR.UPDATE_CHECKS.includes("door.answers"), "the router answering by name still gates an update");
+  assert.ok(!DOCTOR.UPDATE_CHECKS.includes("door.outside"), "reaching the box from outside never gates an update");
+  const direct = (outside) => (h) => {
+    h.mode = "direct"; h.tunnel = null; h.answersVia = "box";
+    h.certs = [{ name: "site", daysLeft: 80 }, { name: "api", daysLeft: 80 }, { name: "matrix", daysLeft: 80 }];
+    h.outside = outside;
+  };
+  const noHairpin = [{ name: "site", status: 0 }, { name: "api", status: 0 }, { name: "matrix", status: 0 }];
+  const rows = run(direct(noHairpin));
+  assert.equal(rows["door.answers"].status, "ok");
+  assert.match(rows["door.answers"].detail, /asked at this box's own router/);
+  assert.equal(rows["door.outside"].status, "warn", "amber, never red");
+  assert.match(rows["door.outside"].detail, /the site, api\. and matrix\. did not answer this box by their public names/);
+  assert.match(rows["door.outside"].fix, /Wi-Fi off/);
+  assert.match(rows["door.outside"].fix, /NAT loopback/);
+  const i = { host: (() => { const h = greenHost(); direct(noHairpin)(h); return h; })(), hostState: "ok", site: greenSite(), siteError: null };
+  assert.deepEqual(DOCTOR.health(DOCTOR.evaluate(i), i), { ok: true, failed: [], rows: [] }, "no hairpin: the update's verdict passes");
+  assert.equal(run(direct([{ name: "site", status: 200 }, { name: "api", status: 200 }, { name: "matrix", status: 200 }]))["door.outside"].status, "ok");
+  assert.equal(run(direct([]))["door.outside"].status, "grey", "not asked (the update's own run skips it)");
+  assert.equal(run(direct(undefined))["door.outside"].status, "grey", "an older box's facts: grey");
+  // Tunnel mode: the router row IS the outside path (out to Cloudflare and back in); lab mode has no outside.
+  assert.equal(run()["door.outside"].status, "ok"); assert.match(run()["door.outside"].detail, /through the tunnel/);
+  assert.equal(run((h) => { h.answers[0].status = 0; })["door.outside"].status, "warn", "the tunnel's failure is the row above's red, here amber");
+  assert.equal(run((h) => { h.mode = "internal"; })["door.outside"].status, "grey");
+});
+
+// Round 1 contract 1: the readers stream-ingest reports, named when one failed to start.
+test("ingest.readers: a reader that failed is named with its reason; off is ignored; no answer is grey; never an update check", () => {
+  const row = (mut) => run((h) => mut(h.ingest, h))["ingest.readers"];
+  assert.equal(row(() => {}).detail, "Twitch: running", "an off reader is not listed");
+  const bad = row((g) => { g.ok = false; g.readers.youtube = { state: "failed", since: null, error: "browserType.launch: Executable doesn't exist" }; g.readers.kick = { state: "failed", since: null, error: "" }; });
+  assert.equal(bad.status, "fail");
+  assert.equal(bad.detail, "Kick: failed to start; YouTube: browserType.launch: Executable doesn't exist");
+  assert.equal(bad.fix, "Admin Panel → Stream shows the reason; blackbranch logs stream-ingest.");
+  assert.equal(row((g) => { g.readers.youtube = { state: "starting", since: null, error: "" }; }).status, "ok", "starting under two minutes counts as ok (the service says ok)");
+  const slow = row((g) => { g.ok = false; g.readers.youtube = { state: "starting", since: null, error: "" }; });
+  assert.equal(slow.status, "warn"); assert.match(slow.detail, /YouTube still starting after two minutes/);
+  assert.equal(row((g) => { g.readers = { kick: { state: "off" } }; }).detail, "no platform is switched on");
+  assert.equal(run((h) => { h.ingest = { answered: false }; })["ingest.readers"].status, "grey");
+  assert.equal(run((h) => { delete h.ingest; })["ingest.readers"].status, "grey", "an older box's facts");
+  assert.ok(!DOCTOR.UPDATE_CHECKS.includes("ingest.readers"), "a platform outside the box never rolls an update back");
+});
+
+// The host asks stream-ingest inside its container with blackbranch's own snippet; run that snippet
+// here against a stand-in /health: it keeps fixed fields only and one cleaned line per reader.
+test("the host's ingest snippet: fixed fields only, a cleaned one-line error, {answered:false} when nothing answers", async () => {
+  const js = /\nINGEST_HEALTH_JS='([^']+)'\n/.exec(readFileSync(path.join(here, "blackbranch"), "utf8"))?.[1];
+  assert.ok(js, "the snippet is where this test reads it");
+  const { createServer } = await import("node:http");
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, bot: "running", extra: "dropped",
+      readers: { youtube: { state: "failed", since: "2026-10-20T01:02:03Z<b>", error: "line one\nline two\u0007", payload: { text: "a viewer's words" } },
+        "Bad Key": { state: "running" }, kick: { state: "weird" } } }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    // Async: the stand-in is served from this process, so the child must not block its event loop.
+    const { execFile } = await import("node:child_process");
+    const run1 = (src) => new Promise((resolve) => execFile(process.execPath, ["-e", src], { encoding: "utf8", timeout: 20_000 }, (e, stdout) => resolve(stdout)));
+    const out = JSON.parse(await run1(js.replace("127.0.0.1:3010", `127.0.0.1:${server.address().port}`)));
+    assert.deepEqual(out, { answered: true, ok: false, readers: {
+      youtube: { state: "failed", since: "2026-10-20T01:02:03Z", error: "line one line two " },
+      kick: { state: "unknown", since: null, error: "" } } });
+  } finally { server.close(); }
+  assert.deepEqual(JSON.parse(run1Closed(js)), { answered: false });
+  const tts = /\nTTS_STATUS_JS='([^']+)'\n/.exec(readFileSync(path.join(here, "blackbranch"), "utf8"))?.[1];
+  assert.ok(tts, "the read-aloud snippet is where this test reads it");
+  assert.deepEqual(JSON.parse(run1Closed(tts)), { answered: false }, "it parses and runs");
+});
+const run1Closed = (js) => spawnSync(process.execPath, ["-e", js.replace(/127\.0\.0\.1:30(10|01)/, "127.0.0.1:9")], { encoding: "utf8", timeout: 20_000 }).stdout;
+
+// Round 1 contract 2: read-aloud's readiness, only while it is switched on.
+test("tts.ready: switched off is skipped; on without the key or a voice is red with the Voice page's fix", () => {
+  const row = (mut) => run((h) => mut(h.tts))["tts.ready"];
+  assert.equal(row(() => {}).status, "ok");
+  const off = row((t) => { t.enabled = false; t.keySet = false; t.voiceSet = false; });
+  assert.equal(off.status, "grey"); assert.equal(off.detail, "skipped: read-aloud is switched off");
+  const both = row((t) => { t.keySet = false; t.voiceSet = false; });
+  assert.equal(both.status, "fail"); assert.match(both.detail, /the ElevenLabs key and a voice id are not set/);
+  assert.equal(both.fix, "Admin Panel → Voice: set the ElevenLabs key and a voice id");
+  assert.equal(run((h) => { h.tts = { answered: false }; })["tts.ready"].status, "grey");
+});
+
+// W18b: a fresh install's failing rows were all "module on, keys not set". A module that is
+// untouched (switched on, never configured, its page never opened — the site's fact) is amber
+// "not set up yet" until its page is visited; then its Test counts as before.
+test("modules.tests: an untouched module is 'not set up yet' (amber), a visited one fails as before", () => {
+  const failing = (untouched) => (h, s) => { s.modules[0].tests[0] = { step: "websocket", ok: false, detail: "refused" }; s.modules[0].untouched = untouched; };
+  const fresh = run(failing(true))["modules.tests"];
+  assert.equal(fresh.status, "warn");
+  assert.equal(fresh.detail, "not set up yet: obs — switched on, but its page has not been opened");
+  assert.match(fresh.fix, /set it up, or switch the module off/);
+  assert.equal(run(failing(false))["modules.tests"].status, "fail", "visited: its Test counts");
+  assert.equal(run(failing(undefined))["modules.tests"].status, "fail", "a site that does not report the fact: as before");
+  // The setup flow's stamp, read by the host: setup.state.visited ("module:<id>").
+  const stamped = (setup) => run((h, s) => { failing(undefined)(h, s); h.setup = setup; })["modules.tests"].status;
+  assert.equal(stamped({ visited: ["core:kick", "module:stripe"], completed: false }), "warn", "obs's page not in the list: not set up yet");
+  assert.equal(stamped({ visited: ["module:obs"], completed: true }), "fail", "visited: its Test counts");
+  assert.equal(stamped({ visited: null, completed: false }), "warn", "no list during setup = nothing visited yet");
+  assert.equal(stamped({ visited: null, completed: true }), "fail", "an install that finished setup before the stamp existed: as before");
+  assert.equal(stamped(null), "fail", "the host could not read it: as before");
+  const mixed = run((h, s) => { failing(true)(h, s); s.modules.push({ id: "youtube", on: true, servesMedia: false, tests: [{ step: "channel", ok: false, detail: "not found" }] }); })["modules.tests"];
+  assert.equal(mixed.status, "fail"); assert.equal(mixed.detail, "youtube: not found; not set up yet: obs");
+});
+
+test("the printout's header: one line per group, each saying what it asks of the reader", () => {
+  const rows = DOCTOR.evaluate({ host: (() => { const h = greenHost(); h.memTotalMiB = 1990; return h; })(), hostState: "ok", site: greenSite(), siteError: null });
+  const head = DOCTOR.text(rows).split("\n").slice(0, 4);
+  const n = (st) => rows.filter((r) => r.status === st).length;
+  assert.deepEqual(head.map((l) => l.trim().split(" ")[0]).map(Number), [n("fail"), n("warn"), n("ok"), n("grey")]);
+  assert.match(head[0], /^ ?1 failing {5}something does not work — fix these first; each says how$/);
+  assert.match(head[2], /^\d+ ok$/);
+  assert.deepEqual(DOCTOR.summary(rows).map((g) => [g.status, g.n]), [["fail", n("fail")], ["warn", n("warn")], ["ok", n("ok")], ["grey", n("grey")]]);
+  assert.equal(n("fail") + n("warn") + n("ok") + n("grey"), rows.length, "every row in one group");
 });
 
 test("site.legacyId: needed only where the site had visitors before the platform-key rename", () => {
@@ -288,8 +419,8 @@ test("grey, never red, when a fact is missing: no host facts, a site that did no
   // site.legacyId is grey on these green facts for its own reason (a fresh install needs no old id).
   // matrix.federation is grey there for its own reason: a homeserver the bundle does not run has no switch to match.
   for (const id of siteIds.filter((x) => x !== "media.tunnel" && x !== "payments.cloudflare" && x !== "site.legacyId" && x !== "matrix.federation" && x !== "matrix.lockdown")) assert.notEqual(owner[id].status, "grey", `${id} needs no host facts`);
-  assert.match(owner["matrix.federation"].detail, /^managed outside Blackbranch/);
-  assert.match(owner["matrix.lockdown"].detail, /^managed outside Blackbranch/, "the lockdown reaches only a homeserver the bundle runs");
+  assert.match(owner["matrix.federation"].detail, /^managed outside Black Branch/);
+  assert.match(owner["matrix.lockdown"].detail, /^managed outside Black Branch/, "the lockdown reaches only a homeserver the bundle runs");
   assert.match(owner["site.legacyId"].detail, /^not needed: a fresh install/, "judged on the site's facts with no host facts at all");
   const fresh = run(() => {}, { host: null, hostState: "missing" });
   assert.match(fresh["box.disk"].detail, /not checked yet/);
@@ -363,7 +494,7 @@ test("blackbranch doctor prints the list, exits 1 on a red, and writes nothing b
     const r = doctor(h, [], siteEnv(h));
     // No router answers in a scratch home, so the front door is red: exit 1, with its fix line.
     assert.equal(r.status, 1, r.stderr);
-    assert.match(r.stdout, /\[FAIL\] The site, api\. and matrix\. answer through their public names/);
+    assert.match(r.stdout, /\[FAIL\] The site, api\. and matrix\. answer by name/);
     assert.match(r.stdout, /fix: blackbranch status shows which service is down/);
     assert.match(r.stdout, /\[ok {2}\] The rendered config files match a fresh render — 4 files match/);
     assert.match(r.stdout, /\[ok {2}\] Every bootstrap secret is present — 15 present/);

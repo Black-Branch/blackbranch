@@ -1,5 +1,5 @@
 // A deleted account's ban follows its platform ids (stream.erased_restrictions, v154), against a
-// REAL Postgres (security review of L4):
+// REAL Postgres:
 //   • a fresh identity for a restricted platform id is written in ONE transaction with its mark —
 //     a mark that cannot be written leaves no identity behind;
 //   • a failed restriction lookup mints nothing;
@@ -102,7 +102,7 @@ test('erased_restrictions against real Postgres', async (t) => {
     await pool.query(`DELETE FROM site.user_marks WHERE reason IN ('earliest', 'later')`);
   });
 
-  await t.test('a merge keeps a carried mark over an EARLIER automatic one, so the evidence sweep cannot take the restriction with it (round 6 D-E)', async () => {
+  await t.test('a merge keeps a carried mark over an EARLIER automatic one, so the evidence sweep cannot take the restriction with it', async () => {
     // automod.js's daily job deletes open source='automod' marks whose evidence is gone. Had the
     // merge kept the earlier automatic mark and closed the carried one into it, that sweep would
     // remove the only open mark — a restriction cleared by a clean-up.
@@ -129,7 +129,7 @@ test('erased_restrictions against real Postgres', async (t) => {
     assert.deepEqual(row, { matrix_id: '@g1r-gone:site.test', reason: 'ban', expires_at: null });
   });
 
-  // ── Review round 5: a timeout's restriction ENDS (v156 expires_at) ──────────────────────────
+  // ── a timeout's restriction ENDS (v156 expires_at) ──────────────────────────────────────────
   const { RESTRICTION_UPSERT_SQL } = require('./account-erase');
   const restrict = (pid, reason, expiresAt) => pool.query(RESTRICTION_UPSERT_SQL, [['twitch'], [pid], '@g1r-gone3:site.test', reason, expiresAt]);
   const expiresOf = async (pid) => (await pool.query(`SELECT reason, expires_at FROM stream.erased_restrictions WHERE platform_id = $1`, [pid])).rows[0];

@@ -66,9 +66,10 @@ test("pending restart: any restart setting, not only a switch — a channel, a c
 test("the restart set is the SCHEMA's: every reload:'restart' setting a service reads goes pending when it runs an old value", () => {
   // Derived, never a hand list: a new restart setting is covered the day it is declared.
   const restartKeys = INSTANCE_KEYS.filter((e) => e.reload === "restart" && e.tier !== "install" && !isHostRendered(e.key) && e.packages.some((p) => p !== "web"));
-  assert.ok(restartKeys.length >= 8, `vacuity: ${restartKeys.length} restart settings`);
+  assert.ok(restartKeys.length >= 6, `vacuity: ${restartKeys.length} restart settings`);
   const ids = restartKeys.map((e) => e.key);
-  for (const sample of ["platform.twitch.channel", "platform.kick.slug", "platform.youtube.channelId", "streamlabs.socketToken", "obs.password", "modules.obs"]) {
+  // The platform channels apply live since the ingest reconciles on every settings load.
+  for (const sample of ["tts.enabled", "streamlabs.socketToken", "obs.password", "modules.obs"]) {
     assert.ok(ids.includes(sample), `${sample} is a restart setting a service reads`);
   }
   for (const e of restartKeys) {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildHomePayload, statusFromStream, newsFromRss, type HomeLoaders } from "./homePayload.ts";
+import { buildHomePayload, statusFromStream, newsFromRss, homePlatforms, type HomeLoaders } from "./homePayload.ts";
 import { getLastStream } from "./lastStream.ts";
 import { FACE_IDS, WINDOW_IDS, type HomeBoards } from "./boardFaces.ts";
 
@@ -14,7 +14,17 @@ const ok: HomeLoaders = {
   news: async () => [{ id: "a", feedId: 1, feedTitle: "Feed", guid: "g", title: "Headline", link: "https://x/1", summary: null, imageUrl: null, publishedAt: null }],
   vods: async () => [{ id: "v1", title: "Replay", duration: "1:00:00", when: "2d ago" }],
   threads: async () => [{ roomId: "!c", roomName: "Content", eventId: "$e", title: "Stream lead-up videos", replyCount: 1, lastTs: 1788746815623 }],
+  platforms: async () => ["twitch", "kick"],
 };
+
+test("platforms: the set-up platforms for the sign-in logos; a failed read is [] — never a guess", async () => {
+  assert.deepEqual((await buildHomePayload(ok)).platforms, ["twitch", "kick"]);
+  assert.deepEqual((await buildHomePayload({ ...ok, platforms: async () => { throw new Error("x"); } })).platforms, []);
+  const none = { twitch: false, kick: false, streamplace: false };
+  assert.deepEqual(homePlatforms({ chat: none, youtube: false, discord: false, patreon: false }), []);
+  assert.deepEqual(homePlatforms({ chat: { ...none, kick: true, streamplace: true }, youtube: true, discord: true, patreon: true }),
+    ["kick", "streamplace", "youtube", "discord", "patreon"]);
+});
 
 test("every loader answers → every key is filled and generatedAt is the clock", async () => {
   const p = await buildHomePayload(ok, Date.UTC(2026, 8, 25, 12));
@@ -45,6 +55,7 @@ test("loaders run in parallel, not one after another", async () => {
     vods: slow("vods", 5) as unknown as HomeLoaders["vods"],
     threads: async () => [],
     boards: async () => emptyBoards(),
+    platforms: async () => [],
   });
   assert.deepEqual(order, ["status", "vods", "news"], "vods (5ms) must finish before news (20ms)");
 });

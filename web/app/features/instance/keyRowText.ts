@@ -63,7 +63,8 @@ export function pendingRestarts(keys: readonly Row[]): { service: string; labels
 
 /** What a row holds now, as a non-secret editor shows it: the saved value; with none saved, what
  *  the website reads (else the first service that reads it), else the default. Never a secret's.
- *  @test-only the rows read it through currentList and draftOf; exported so its precedence is pinned. */
+ *  The rows read it through currentList and draftOf; the help desk's picture card reads the bot
+ *  account through it. */
 export function currentValue(k: Row): unknown {
   if (k.secret) return null;
   if (k.stored) return k.stored.display;

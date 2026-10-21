@@ -1,11 +1,11 @@
 // Regression for the ytInitialPlayerResponse extractor.
 // Run: node --test platforms/playerResponse.test.js
 //
-// The old lazy regex /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;(?:\s*var\b|...)/
-// stopped at the FIRST `};var` in the page. That sequence can legitimately appear
-// inside a JSON string (a video title or description), which truncated the JSON,
-// failed the parse, and returned null — indistinguishable from "the stream ended".
-// A video title was enough to take the YouTube connector offline.
+// A lazy regex /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;(?:\s*var\b|...)/
+// stops at the FIRST `};var` in the page. That sequence can legitimately appear
+// inside a JSON string (a video title or description), which truncates the JSON,
+// fails the parse, and returns null — indistinguishable from "the stream ended".
+// A video title would be enough to take the YouTube connector offline.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';

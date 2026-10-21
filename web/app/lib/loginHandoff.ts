@@ -4,8 +4,8 @@
 // The callback writes a site.federated_pending row and sends the browser to
 // /auth/federated-complete?token=…, whose page redeems the token through the "federated-completion"
 // provider (auth.ts). A token alone must not be enough: whoever completes a sign-in to their own
-// account could pass the link to someone else, and that browser would sign in as them (login CSRF —
-// external review S6). So the row is bound to the browser that ran the callback: the callback also
+// account could pass the link to someone else, and that browser would sign in as them (login CSRF).
+// So the row is bound to the browser that ran the callback: the callback also
 // sets an httpOnly cookie holding a random secret, and the row's key (federated_pending.token) is
 // SHA-256 of the link's token AND that secret — neither half alone names a row. The redeem deletes
 // the row by that key and its expiry in one atomic statement, so a refused attempt leaves the row

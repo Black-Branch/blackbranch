@@ -8,13 +8,13 @@
 //   2. POST web.kick.com/api/v1/realtime/auth/connection — a short-lived guest JWT for that client.
 //   3. Open the socket, `connect` with the token, `subscribe` to the channels, answer pings, and
 //      `refresh` the token before its ttl runs out.
-// The descriptor is how the move off Pusher was found: the old Pusher app key began refusing new
-// connections (close 4001, "not in this cluster") while sockets already open kept working, so the
-// break showed only at the next restart. A descriptor naming another provider is logged as an error.
+// A transport change shows here first: Kick's former Pusher app key refuses new connections
+// (close 4001, "not in this cluster") while sockets already open keep working, so such a break
+// shows only at the next restart. A descriptor naming another provider is logged as an error.
 
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
-import { chromium } from 'playwright';
+import { launchBrowser } from '../lib/browser.js';
 import { processMessage } from '../lib/pipeline.js';
 import { normalizeKickEvent } from '../lib/alerts.js';
 import { postAlert, postPlatformDelete } from '../lib/api.js';
@@ -46,7 +46,9 @@ function idsFrom(data) {
 let lastGoodViewers = null; // { count, at }
 let loggedViewerShape = false;
 let loggedOfficialShape = false;
+let unknownSaid = false; // the keyless "live status unknown" line, once per episode
 const KICK_VIEWER_STALE_MS = 5 * 60 * 1000;
+const kickKeysSet = () => Boolean(instanceConfig.get('kick.clientId') && instanceConfig.get('kick.clientSecret'));
 
 // App access token for the official public API (client credentials — no user).
 let appToken = null; // { token, expiresAt }
@@ -128,8 +130,19 @@ export async function fetchKickState(slug = instanceConfig.get('platform.kick.sl
     usedOfficial = token != null;
     const r = usedOfficial ? await viewersViaOfficial(slug, token) : await viewersViaV2(slug);
     if (r.live && r.viewers != null) lastGoodViewers = { count: r.viewers, at: Date.now() };
+    unknownSaid = false;
     return { state: r.live ? 'live' : 'offline', viewers: r.viewers };
   } catch (e) {
+    if (!usedOfficial && !kickKeysSet()) {
+      // No app keys: only kick.com's bot-protected page is left to ask, and when it refuses, live
+      // status is UNKNOWN — never offline. Said once per episode, with what fixes it, instead of a
+      // bare "HTTP 403" every tick.
+      if (!unknownSaid) {
+        unknownSaid = true;
+        console.warn(`[kick] live status unknown: kick.com refused the lookup (${e.message}) and no Kick app keys are set — add the Kick app client id + secret in the Admin Panel for live detection`);
+      }
+      return { state: 'unknown', viewers: lastGoodViewers && Date.now() - lastGoodViewers.at < KICK_VIEWER_STALE_MS ? lastGoodViewers.count : null };
+    }
     if (usedOfficial) {
       try {
         const r = await viewersViaV2(slug);
@@ -159,7 +172,7 @@ async function resolveViaApi(slug) {
 // satisfies Kick's Kasada bot check far more often than a bare fetch. Reuses the
 // Playwright dependency already needed for YouTube. One-shot at startup.
 async function resolveViaBrowser(slug) {
-  const browser = await chromium.launch({
+  const browser = await launchBrowser({
     headless: true,
     args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
   });
@@ -174,25 +187,41 @@ async function resolveViaBrowser(slug) {
   }
 }
 
-async function resolveIds(slug, { allowEnvOverride = true } = {}) {
-  // KICK_CHATROOM_ID + KICK_CHANNEL_ID override the HOME channel only; a relay for another
-  // streamer must resolve its own ids. Chat needs both (the channel id names the realtime
-  // descriptor), so a chatroom id on its own is not enough to skip the lookup.
-  if (allowEnvOverride && process.env.KICK_CHATROOM_ID) {
-    if (process.env.KICK_CHANNEL_ID) {
-      return { chatroomId: process.env.KICK_CHATROOM_ID.trim(), channelId: process.env.KICK_CHANNEL_ID.trim() };
-    }
-    console.warn('[kick] KICK_CHATROOM_ID is set without KICK_CHANNEL_ID — chat needs the channel id too, so looking both up');
+// What to tell the operator when no lookup works. Kick's own public API (api.kick.com, the one the
+// app keys open) has NO chatroom or channel id in its channel answer — only the slug and the
+// broadcaster's user id (docs.kick.com, checked 2026-10-21) — so app keys cannot stand in for this
+// lookup; the settings can.
+export const KICK_IDS_HELP = 'Kick refused the chatroom lookup (its bot protection) — set "Kick chatroom id" and "Kick channel id" in the Admin Panel settings (open kick.com/api/v2/channels/YOUR-CHANNEL in a browser: chatroom.id and id)';
+
+/**
+ * The chatroom + channel id of a Kick channel. Tried in order: the settings (kick.chatroomId +
+ * kick.channelId — env KICK_CHATROOM_ID / KICK_CHANNEL_ID through the same schema keys), kick.com's
+ * v2 API, the same API in a browser. Home channel only for the settings: a relay for another
+ * streamer resolves its own.
+ * @returns {Promise<{ ids: { chatroomId: string, channelId: string } | null, error: string }>}
+ */
+export async function resolveIds(slug, {
+  allowOverride = true, get = (k) => instanceConfig.get(k), viaApi = resolveViaApi, viaBrowser = resolveViaBrowser,
+} = {}) {
+  if (allowOverride) {
+    const chatroomId = String(get('kick.chatroomId') ?? '').trim();
+    const channelId = String(get('kick.channelId') ?? '').trim();
+    // Chat needs both (the channel id names the realtime descriptor): one alone is not enough.
+    if (chatroomId && channelId) return { ids: { chatroomId, channelId }, error: '' };
+    if (chatroomId || channelId) console.warn('[kick] only one of "Kick chatroom id" / "Kick channel id" is set — chat needs both, so looking them up');
   }
   try {
-    return await resolveViaApi(slug);
+    return { ids: await viaApi(slug), error: '' };
   } catch (e1) {
     console.warn(`[kick] api channel lookup failed (${e1.message}); retrying via browser`);
     try {
-      return await resolveViaBrowser(slug);
+      return { ids: await viaBrowser(slug), error: '' };
     } catch (e2) {
-      console.warn(`[kick] browser channel lookup failed (${e2.message}); set KICK_CHATROOM_ID and KICK_CHANNEL_ID in .env to override (stable per channel)`);
-      return null;
+      // A missing browser is its own reason (lib/browser.js); otherwise the bot check refused both.
+      const missing = /^browser missing:/.test(e2.message);
+      const error = missing ? `${KICK_IDS_HELP}; no browser to retry in` : KICK_IDS_HELP;
+      console.warn(`[kick] browser channel lookup failed (${e2.message}) — ${allowOverride ? KICK_IDS_HELP : 'relay channel unavailable'}`);
+      return { ids: null, error };
     }
   }
 }
@@ -200,9 +229,8 @@ async function resolveIds(slug, { allowEnvOverride = true } = {}) {
 // Map a raw Kick monetization event → /alert. Home connection only. Field names vary and can't
 // be tested synthetically, so every event logs its SHAPE — the event id and the payload's
 // top-level keys (lib/logShape.js) — which is enough to see where a field moved and to find the
-// event again on Kick's side. Never the values: until round 7 this line printed the first 400
-// characters of the raw payload, which names the subscriber, the gifter and every giftee, and the
-// journal keeps that for months. Exported for platforms/kickLogs.test.js.
+// event again on Kick's side. Never the values: the raw payload names the subscriber, the gifter
+// and every giftee, and the journal keeps it for months. Exported for platforms/kickLogs.test.js.
 export function handleKickMonetization(eventName, dataStr) {
   let d;
   try { d = JSON.parse(dataStr); } catch { d = {}; }
@@ -410,6 +438,10 @@ export async function startKick(opts = {}) {
   let watchdog = null;
   let resolveTimer = null;
   let resolveWake = null; // resolver of the current retry sleep — called by stop()
+  // For /health (lib/platformStarter.js): `starting` until chat is subscribed, `failed` while the
+  // chatroom cannot be found (with the reason), `running` once subscribed.
+  let lookupError = '';
+  let subscribed = false;
   const STALE_OVERRIDE_MS = Number(process.env.KICK_STALE_MS) || 0;
 
   const clearSocketTimers = () => {
@@ -530,7 +562,10 @@ export async function startKick(opts = {}) {
         const what = pending.get(frame.id);
         pending.delete(frame.id);
         if (frame.connect) onConnected(frame.connect);
-        else if (frame.subscribe) console.log(`[${tag}] subscribed ${what}${what?.startsWith('channel.') ? ' for monetization' : ''}`);
+        else if (frame.subscribe) {
+          if (what?.startsWith('chatrooms.')) subscribed = true;
+          console.log(`[${tag}] subscribed ${what}${what?.startsWith('channel.') ? ' for monetization' : ''}`);
+        }
         else if (frame.refresh) {
           console.log(`[${tag}] token refreshed (ttl ${frame.refresh.ttl ?? 'none'}s)`);
           if (frame.refresh.expires && Number(frame.refresh.ttl) > 0) scheduleRefresh(Number(frame.refresh.ttl));
@@ -570,6 +605,7 @@ export async function startKick(opts = {}) {
     });
 
     sock.on('close', (code, reason) => {
+      subscribed = false;
       clearSocketTimers();
       if (ws === sock) ws = null;
       if (stopped) return;
@@ -601,11 +637,13 @@ export async function startKick(opts = {}) {
   // failing Kick API never blocks startup of the other platform connectors.
   const resolveThenConnect = async () => {
     for (let attempt = 1; !stopped; attempt++) {
-      const ids = await resolveIds(slug, { allowEnvOverride: !onMessage }).catch((e) => {
+      const r = await resolveIds(slug, { allowOverride: !onMessage }).catch((e) => {
         console.warn(`[${tag}] resolveIds threw: ${e.message}`);
-        return null;
+        return { ids: null, error: `chatroom lookup failed: ${e.message}` };
       });
       if (stopped) return;
+      const ids = r.ids;
+      lookupError = ids ? '' : r.error;
       if (ids?.chatroomId && ids?.channelId) {
         chatroomId = ids.chatroomId;
         channelId = ids.channelId;
@@ -622,7 +660,13 @@ export async function startKick(opts = {}) {
   };
   resolveThenConnect();
 
+  let lastHealth = null; // { state, since }
   return {
+    health: () => {
+      const state = lookupError ? 'failed' : subscribed ? 'running' : 'starting';
+      if (lastHealth?.state !== state) lastHealth = { state, since: Date.now() };
+      return { state, error: lookupError, since: lastHealth.since };
+    },
     stop: () => {
       stopped = true;
       // Resolve (not just clear) the retry sleep: clearing alone would leave the

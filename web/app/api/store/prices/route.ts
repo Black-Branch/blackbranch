@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 // Public: prices are public information and the store renders for guests.
 //
-// `e` (Qorm per stream) rides along so the client can render "≈ N streams"
+// `e` (points per stream) rides along so the client can render "≈ N streams"
 // without a second round trip. It is the anchor every price derives from.
 // `purchasable` and `clockMultiplier` ride along too: the
 // Store hides its top-up box when buying is off, and the sponsor clock's

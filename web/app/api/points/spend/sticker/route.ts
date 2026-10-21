@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
   if (delivery.outcome === "unconfirmed") {
     // NO refund: the deadline aborts our WAIT, not stream-api's WORK — the
     // sticker may well have appeared and credited the bar, and refunding an
-    // unconfirmed spend is exactly the double-credit this route used to have.
+    // unconfirmed spend would be exactly a double-credit.
     // The spendId outcome recorded on stream-api keeps a later manual refund
     // safe if it truly never ran.
     console.error("[spend/sticker] unconfirmed delivery — coins kept, spendId:", spendId);

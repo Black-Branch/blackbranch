@@ -1,4 +1,4 @@
-// A site cookie authorizes only while its sign-in row lives (external review S1).
+// A site cookie authorizes only while its sign-in row lives.
 //
 // The Auth.js cookie is a stateless JWT: before this check, logging out or revoking a session
 // deleted its site.user_sessions row and its Matrix tokens, yet a COPY of the cookie went on

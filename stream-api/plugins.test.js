@@ -18,7 +18,7 @@ test('an owner folder is loaded', () => {
   assert.equal(loadOwnerPlugin(dir).id, 'x');
 });
 
-test('a broken owner plugin fails loudly instead of reading as absent', () => {
+test('a broken site plugin fails loudly instead of reading as absent', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugins-'));
   fs.mkdirSync(path.join(dir, 'owner'));
   fs.writeFileSync(path.join(dir, 'owner', 'index.js'), "throw new Error('boom');\n");

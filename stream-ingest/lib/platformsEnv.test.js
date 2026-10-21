@@ -6,7 +6,7 @@ import { parsePlatforms, choosePlatforms } from './platformsEnv.js';
 
 const KNOWN = ['twitch', 'kick', 'youtube', 'streamplace'];
 
-test('unset, empty and "none" all mean no platforms — the old default was all three', () => {
+test('unset, empty and "none" all mean no platforms — never all three', () => {
   for (const raw of [undefined, '', '   ', 'none', ' NONE ']) {
     const r = parsePlatforms(raw, KNOWN);
     assert.deepEqual(r.enabled, [], `PLATFORMS=${JSON.stringify(raw)} started ${r.enabled}`);

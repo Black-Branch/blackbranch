@@ -108,6 +108,14 @@ export type CommandNode = {
   run?: HandlerKey | PluginHandlerKey;
   /** Leaf node: send the line as chat, with an overridden destination. */
   route?: Route;
+  /**
+   * The part of the install this command needs (siteFeatures.ts: a module id from
+   * config/modules.mjs, or a fact feature — "tts", "subscriptions", "purchasable"). While it is
+   * off the command is neither offered nor run. On a branch it covers every leaf.
+   * Only for a part that can really be off: a command whose routes are always mounted (the
+   * timer, the support bar, the emote manifest, the link gate) carries none.
+   */
+  module?: string;
 };
 
 const DURATION = (name: string, def?: string): ArgSpec => ({ kind: "duration", name, default: def });
@@ -373,11 +381,11 @@ export const COMMANDS: CommandNode[] = [
     aliases: ["k"], route: { destination: "kick" }, args: [MESSAGE],
   },
   {
-    name: "streamplace", desc: "Send just this message to stream.place", scope: "all",
+    name: "streamplace", desc: "Send just this message to Streamplace", scope: "all",
     aliases: ["s"], route: { destination: "streamplace" }, args: [MESSAGE],
   },
   {
-    name: "youtube", desc: "Send just this message to YouTube", scope: "all",
+    name: "youtube", desc: "Send just this message to YouTube", scope: "all", module: "youtube",
     aliases: ["y"], route: { destination: "youtube" }, args: [MESSAGE],
   },
   {
@@ -396,7 +404,7 @@ export const COMMANDS: CommandNode[] = [
     aliases: ["hl"], route: { destination: null, spend: "highlight" }, args: [MESSAGE],
   },
   {
-    name: "tts", desc: `Have this message read aloud (${currencyLabel(TTS_PRICE)})`, scope: "all",
+    name: "tts", desc: `Have this message read aloud (${currencyLabel(TTS_PRICE)})`, scope: "all", module: "tts",
     aliases: ["speak"], route: { destination: null, spend: "tts" }, args: [MESSAGE],
   },
 
@@ -482,6 +490,15 @@ export function routeAvailable(
   if (r.encrypted) return v.isSupporter !== false;
   if (r.destination === null) return true;   // the site is always a destination
   return !v.dests || v.dests.includes(r.destination);
+}
+
+/**
+ * Is the part this command needs switched on here (`module`)? `features` undefined means
+ * THE CALLER DID NOT SAY and is unconstrained, like routeAvailable's fields; ChatInput always
+ * passes it (siteFeatures.ts featureOn).
+ */
+export function moduleAvailable(node: CommandNode, v: { features?: (id: string) => boolean }): boolean {
+  return !node.module || !v.features || v.features(node.module);
 }
 
 /** Does this token name the node (by name or alias)? Case-insensitive. */

@@ -1,5 +1,5 @@
 // A moderator's chat resolves the public ids on screen to canonical ids for the moderation tools
-// (owner decision 2026-10-17: the public socket and history carry no canonical). One batched
+// (the public socket and history carry no canonical). One batched
 // request per tick, cached for the page; the route is moderators only.
 // Run: node --test app/lib/modIdentity.test.ts
 import { test } from "node:test";

@@ -2,10 +2,26 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { foldForVisit, OPEN_HOME_EVENT, OPEN_LIVE_EVENT } from "./visitFold.ts";
 
-test("offline desktop: fold the player, fold the chat, open Home", () => {
+test("W31 — offline desktop: fold the player, open Home, and leave the chat SHOWN (a first visit) or as the viewer left it", () => {
   assert.deepEqual(
     foldForVisit({ live: false, narrow: false, storedPlayerMode: "live", storedPanelMode: null }),
-    { player: "fold", chat: "chatFolded", openHome: true },
+    { player: "fold", chat: null, openHome: true },
+  );
+  assert.deepEqual(
+    foldForVisit({ live: false, narrow: false, storedPlayerMode: "live", storedPanelMode: "normal" }),
+    { player: "fold", chat: null, openHome: true },
+    "an unfolded chat is never folded by a visit",
+  );
+});
+
+test("W31 — a community feed on at load unfolds the video to it; the chat stays as left", () => {
+  assert.deepEqual(
+    foldForVisit({ live: false, community: true, narrow: false, storedPlayerMode: "none", storedPanelMode: null }),
+    { player: "unfold", chat: null, openHome: false },
+  );
+  assert.deepEqual(
+    foldForVisit({ live: false, community: true, narrow: true, storedPlayerMode: "community", storedPanelMode: null }),
+    { player: null, chat: null, openHome: false },
   );
 });
 

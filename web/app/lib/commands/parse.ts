@@ -1,5 +1,5 @@
 import {
-  COMMANDS, leaves, nodeMatches, routeAvailable, scopeAllows, signature,
+  COMMANDS, leaves, moduleAvailable, nodeMatches, routeAvailable, scopeAllows, signature,
   type ArgSpec, type CommandNode,
 } from "./spec.ts";
 
@@ -22,6 +22,8 @@ export type Viewer = {
   dests?: string[];
   /** Active site Supporter subscription — gates `/redact`. */
   isSupporter?: boolean;
+  /** Is a module / fact feature on here — gates a command's `module` (moduleAvailable). */
+  features?: (id: string) => boolean;
 };
 
 /** What the caret is positioned to complete. */
@@ -151,7 +153,7 @@ export function suggestFor(
 ): Suggestion[] {
   if (!p.isCommand) return [];
   const allowed = (n: CommandNode) =>
-    !n.hidden && scopeAllows(viewer, n.scope) && routeAvailable(n, viewer);
+    !n.hidden && scopeAllows(viewer, n.scope) && routeAvailable(n, viewer) && moduleAvailable(n, viewer);
 
   if (p.completing === "command") {
     const typed = p.token.replace(/^\//, "").toLowerCase();
@@ -272,10 +274,10 @@ export function helpText(query: string, viewer: Viewer): string {
   const q = query.trim().replace(/^\//, "").toLowerCase();
   const all = leaves().filter(({ path }) => {
     const root = COMMANDS.find((c) => c.name === path[0]);
-    return root && !root.hidden;
+    return root && !root.hidden && moduleAvailable(root, viewer);
   });
   const visible = all.filter(
-    ({ node }) => scopeAllows(viewer, node.scope) && routeAvailable(node, viewer),
+    ({ node }) => scopeAllows(viewer, node.scope) && routeAvailable(node, viewer) && moduleAvailable(node, viewer),
   );
 
   if (q) {

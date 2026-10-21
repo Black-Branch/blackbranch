@@ -77,7 +77,8 @@ export async function claimPlatformAccount(pool: Pick<Pool, "connect">, c: LinkC
          expires_at            = EXCLUDED.expires_at,
          scope                 = EXCLUDED.scope,
          linked_at             = now(),
-         account_display_name  = EXCLUDED.account_display_name
+         account_display_name  = EXCLUDED.account_display_name,
+         refresh_failed_at     = NULL
        WHERE site.accounts.matrix_id = EXCLUDED.matrix_id`,
       [c.matrixId, c.platform, c.platformUserId, c.accessToken, c.refreshToken, c.expiresAt, c.scope, c.displayName],
     );

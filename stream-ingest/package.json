@@ -2,8 +2,14 @@
   "name": "stream-ingest",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Black-Branch/blackbranch.git",
+    "directory": "stream-ingest"
+  },
   "type": "module",
-  "description": "Server-side 24/7 multi-platform chat ingestion + normalization, and host process for the owner plugin's bot. Owns platform tokens, viewer poll, and stream lifecycle.",
+  "description": "The chat service: reads chat from Twitch, YouTube, Kick and Streamplace into the site, counts viewers, tells the site when the stream goes live or ends, and runs the chat bot.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

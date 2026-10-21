@@ -13,7 +13,7 @@ test("destMark: the site's room is #<short name>, lower-cased; a platform reads 
   assert.equal(destMark("twitch"), "twitch", "platformLabel's wording, lower-cased");
   assert.equal(destMark("youtube"), "youtube");
   assert.equal(destMark("kick"), "kick");
-  assert.equal(destMark("streamplace"), "stream.place");
+  assert.equal(destMark("streamplace"), "streamplace");
   assert.equal(destMark("all"), "all");
   assert.equal(destMark(ENCRYPTED_DEST), "#example · redacted");
 });

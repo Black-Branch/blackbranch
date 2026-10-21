@@ -1,4 +1,5 @@
 import { instanceBool, instanceString } from "./instanceConfigServer.ts";
+import { paypalCurrencyCode } from "./moneyFormat.ts";
 // PayPal API client — low-level only. No routes, no UI live here; the routes
 // that CONSUME this module:
 //   POST /api/billing/paypal/order    (createPaypalOrder, paypalConfigured)
@@ -173,7 +174,7 @@ export async function createPaypalOrder(
       intent: "CAPTURE",
       purchase_units: [
         {
-          amount: { currency_code: "USD", value: args.amountUsd.toFixed(2) },
+          amount: { currency_code: paypalCurrencyCode(), value: args.amountUsd.toFixed(2) },
           custom_id: args.customId,
         },
       ],

@@ -55,7 +55,7 @@ export async function pinAuthor(platform: string, messageId: number, query: PinA
           // One link row per canonical is enough: every row of a person's
           // links names the same account. The banner is public, and a Twitch
           // line wearing its author's SITE badges, colour and style shows the
-          // link between them (owner decision 2026-10-17): only an account that
+          // link between them: only an account that
           // shows its links (site.users.show_links) is resolved, and only when every
           // account linked to that line's canonical does — another account's
           // choice is never this person's consent.

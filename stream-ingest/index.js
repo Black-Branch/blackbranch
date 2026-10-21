@@ -17,10 +17,11 @@ import { startMemoryFeed } from './lib/embeddings.js';
 import { createSupervisor } from './lib/supervisor.js';
 import { startHelpdesk, helpdeskWanted } from './lib/helpdesk/index.js';
 import { startBotFeed } from './lib/bot/index.js';
-import { choosePlatforms } from './lib/platformsEnv.js';
+import { choosePlatforms, PLATFORM_KEYS } from './lib/platformsEnv.js';
 import { createPlatformStarter, startPlatformsWhenLoaded } from './lib/platformStarter.js';
 import { registerScorer } from './lib/scoring.js';
 import { registerChannelEmotes } from './lib/emotes.js';
+import { startHealthServer, healthBody } from './lib/health.js';
 
 const STARTERS = {
   twitch: startTwitch,
@@ -30,8 +31,9 @@ const STARTERS = {
 };
 
 // PLATFORMS, when set, is the list ("none" = no platform); unset or empty = the platforms
-// the settings set up (lib/platformsEnv.js) — chosen after the boot load, and again when the
-// settings first arrive if that load failed (lib/platformStarter.js).
+// the settings set up (lib/platformsEnv.js) — chosen after the boot load and again on every
+// settings load after it, so a platform switched on, off or changed later follows without a
+// restart (lib/platformStarter.js).
 
 const running = [];
 
@@ -77,18 +79,27 @@ async function main() {
   }
   // The process runs until it is told to stop (shutdown, below) — never until its event loop happens
   // to empty. Every timer here is unref'd, so on an install with no platform set up the internal
-  // socket to stream-api was the ONLY live handle: stream-api restarting (an update restarts it
-  // twice) closed it, node exited 0 during the 5 s reconnect wait, and Docker restart-looped the
-  // service (found by the release-candidate rehearsal; processLifetime.test.js runs it).
+  // socket to stream-api would be the ONLY live handle: a stream-api restart closes it, node would
+  // exit 0 during the 5 s reconnect wait, and Docker would restart-loop the service
+  // (processLifetime.test.js runs it).
   const lifetime = setInterval(() => {}, 60 * 60_000);
   running.push({ stop: () => clearInterval(lifetime) });
-  console.log(`[main] owner plugin ${await loadOwnerPlugin() ? 'loaded' : 'not present'}`);
+  // One plain line either way: no plugin is the normal state of an install, not an alarm.
+  console.log(`[main] site plugin: ${await loadOwnerPlugin() ? 'loaded' : 'none'}`);
   running.push(startAiReporting());
   // The chat bot hears the feed from the first frame (the history replay seeds its recent chat),
   // so it is listening before the socket opens; whether it ANSWERS is the supervisor's below.
+  // A reader started with new values has applied its restart-applied keys: the Credentials page
+  // is told at once (one report per burst of starts), not at the next 5-minute re-read.
+  let appliedReport = null;
   const platforms = createPlatformStarter({
     starters: STARTERS,
     choose: () => choosePlatforms(process.env.PLATFORMS, Object.keys(STARTERS), (k) => instanceConfig.get(k)),
+    onApplied: (name) => {
+      instanceConfig.markApplied(PLATFORM_KEYS[name] || []);
+      appliedReport ??= setTimeout(() => { appliedReport = null; instanceConfig.reportNow(); }, 1000);
+      appliedReport.unref?.();
+    },
   });
   const botFeed = startBotFeed({ twitch: () => platforms.handle('twitch') });
   running.push(botFeed);
@@ -100,18 +111,26 @@ async function main() {
   running.push(startMemoryFeed());
   // Product modules with a loop or a listener, started and stopped from their settings — no
   // restart (lib/supervisor.js).
-  running.push(createSupervisor([
+  const supervisor = createSupervisor([
     { name: 'helpdesk', wanted: () => helpdeskWanted(), start: () => startHelpdesk() },
     { name: 'bot', wanted: () => botFeed.bot.wanted(), start: () => botFeed.bot.startReplies() },
-  ], { onLoad: (fn) => instanceConfig.onLoad(fn) }));
+  ], { onLoad: (fn) => instanceConfig.onLoad(fn) });
+  running.push(supervisor);
+  // GET /health (lib/health.js): the readers' states, before any reader starts, so a slow start
+  // reads as `starting` rather than as no answer at all.
+  const health = startHealthServer({
+    snapshot: () => healthBody({ readers: platforms.states(), wanted: (n) => platforms.wanted(n), bot: supervisor.isRunning('bot') }),
+  });
+  running.push(health);
   await startSessionPolling();
   console.log('[main] session polling started');
 
   running.push(platforms);
-  await startPlatformsWhenLoaded({ platforms, config: instanceConfig, bootLoaded });
+  const offPlatforms = await startPlatformsWhenLoaded({ platforms, config: instanceConfig, bootLoaded });
+  running.push({ stop: offPlatforms });
   console.log(`[main] platforms: ${platforms.names().join(', ') || '(none)'}`);
 
-  // The owner plugin's start (e.g. a chat bot that subscribes to stream-api's WS and replies when
+  // The site plugin's start (e.g. a chat bot that subscribes to stream-api's WS and replies when
   // mentioned, gated by its own switch; it gets the home Twitch sender to reply on Twitch). No
   // plugin, or one without a start: nothing here. The sender forwards to whichever Twitch reader
   // is running at send time, so a reader started after a late settings load is reached too.
@@ -126,7 +145,7 @@ async function main() {
     try {
       running.push(ownerPlugin.start({ twitchClient }));
     } catch (err) {
-      console.error('[main] owner plugin failed to start:', err.message);
+      console.error('[main] site plugin failed to start:', err.message);
     }
   }
 
@@ -139,7 +158,12 @@ async function main() {
         // Closures (not method refs): a handle may be null if the platform is
         // disabled or failed to start — the poller then records NULL / scrapes.
         getStreamplaceViewers: () => platforms.handle('streamplace')?.getViewers?.() ?? null,
-        getYtVideoId: () => platforms.handle('youtube')?.getVideoId?.() ?? '',
+        // stream.place's live vote, read off its chat socket; null = no reader to ask.
+        getStreamplaceState: () => platforms.handle('streamplace')?.getLiveState?.() ?? null,
+        // The YouTube reader's verified live id ('' = not live). null = NO reader is running: the
+        // poller then asks YouTube itself while YouTube is chosen, rather than vote offline.
+        getYtVideoId: () => { const h = platforms.handle('youtube'); return h?.getVideoId ? h.getVideoId() : null; },
+        ytWanted: () => platforms.wanted('youtube'),
       }));
     } catch (err) {
       console.error('[main] poller failed to start:', err.message);

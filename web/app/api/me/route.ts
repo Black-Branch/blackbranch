@@ -7,6 +7,7 @@ import { canonicalFromMatrixSql } from "@/app/lib/canonicalFromMatrix";
 import { getBannerMxc } from "@/app/lib/bannerServer";
 import { matrixLocalpart } from "@/app/lib/chatIdentity";
 import { readPresenceStatus } from "@/app/lib/presenceServer";
+import { listViewerSubscriptions } from "@/app/lib/subscriptions/entitlement";
 
 export async function GET() {
   const session = await auth();
@@ -49,6 +50,11 @@ export async function GET() {
 
   // Self-set presence status (v120) — the account card's picker reads it back.
   const presence = await readPresenceStatus(session.user.id);
+
+  // Every subscription record the viewer holds, one per subscription per service (subscription
+  // sources, v161) — the account page's list from S2. Isolated like the banner: a failed read loses
+  // only the list. During S1 the billing fields below keep meaning "their own Stripe subscription".
+  const subscriptions = await listViewerSubscriptions(pool, session.user.id).catch(() => []);
 
   // ── ENTITLEMENT vs BILLING — two different questions ────────────────────────
   //
@@ -107,6 +113,7 @@ export async function GET() {
     giftExpiresAt: giftExpires,
     // Who it came from; null when anonymous or unknown.
     giftFrom: giftFromDisplay(rows[0]?.gift_from),
+    subscriptions,
     presenceStatus: presence.status,
     presenceStatusText: presence.statusText,
   });

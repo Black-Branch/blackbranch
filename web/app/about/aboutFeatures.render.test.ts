@@ -1,4 +1,4 @@
-// The About page names only what this install runs (round 5 legal backlog): the chat platforms
+// The About page names only what this install runs: the chat platforms
 // that are set up, subscriptions only with a tier price, and the YouTube uses this install has —
 // public channel data only with an API key.
 // Run: node --test app/about/aboutFeatures.render.test.ts
@@ -26,7 +26,7 @@ test("a fresh install names no chat platform it does not ingest", () => {
 
 test("each set-up platform is named, in order, and only those", () => {
   const html = about({ platforms: { twitch: true, kick: false, streamplace: true }, shown: { youtube: true } });
-  assert.match(html, /combines\s+messages from Twitch, YouTube, stream\.place, and Example Stream itself/);
+  assert.match(html, /combines\s+messages from Twitch, YouTube, Streamplace, and Example Stream itself/);
   assert.doesNotMatch(html, /Kick/);
 });
 

@@ -143,8 +143,8 @@ const YT_SYMBOL = {
   Rp: 'IDR', RM: 'MYR', 'zł': 'PLN', CHF: 'CHF', '₪': 'ILS',
   'CN¥': 'CNY', '₫': 'VND', 'E£': 'EGP', '₴': 'UAH',
 };
-// A symbol this table does not know is UNKNOWN — never USD. Labelling it USD is
-// how ARS 5,000 (about $5) was credited as $3,500: the label hid it from
+// A symbol this table does not know is UNKNOWN — never USD. Labelling it USD
+// would credit ARS 5,000 (about $5) as $3,500: the label hides it from
 // stream-api's toUSD, which credits $0 and logs loudly for a code it cannot
 // price. stream-api keeps such an event in stream.unpriced_support for a person
 // to reconcile, and the alert shows `amountText`, the raw string.
@@ -188,7 +188,7 @@ export function parseGiftCount(text, author = '') {
   return Number.isFinite(n) && n > 0 && n <= GIFT_MAX ? { count: n, verified: true } : { count: 1, verified: false };
 }
 
-// The banner text as it may be logged (review round 5, L14): YouTube's wording, never the gifter's
+// The banner text as it may be logged: YouTube's wording, never the gifter's
 // name. The known author is masked wherever it appears; with no author, everything before the LAST
 // "gifted"/"sent" (YouTube's own verb comes last — parseGiftCount above) is the name. With neither,
 // nothing in the text can be told apart from a name, so only its length is logged. Bounded.

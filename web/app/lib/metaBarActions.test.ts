@@ -31,8 +31,8 @@ test("a resting circle is 28 wide: no gap- inside moneyCircle, the label's spaci
 });
 
 test("one flat shape: 28px circles, no gloss, no border, the same 7.5px pad", () => {
-  // The mismatch was a flat bordered Qorm circle beside two glossy ones, and a
-  // gloss nothing else on the site uses. All four now share 7.5 + 13 + 7.5 = 28.
+  // A flat bordered points circle beside two glossy ones is a mismatch, and so is
+  // a gloss nothing else on the site uses. All four share 7.5 + 13 + 7.5 = 28.
   const box = src.match(/const moneyCircle = \(skin: string\) =>\s*`([^`]*)`/)?.[1] ?? "";
   assert.match(box, /\bh-\[28px\] min-w-\[28px\] rounded-full\b/);
   assert.match(box, /\bmoney-hit\b/, "a fingertip tap area on touch (globals.css)");
@@ -70,9 +70,8 @@ test("the 780px layout and its measured terms are gone, not orphaned", () => {
   assert.equal(existsSync(new URL("./supportActionsWidth.test.ts", import.meta.url)), false);
 });
 
-// ── carried forward from supportActionsWidth.test.ts (deleted with metaBarLayout.ts,
-//    but these four guards were never about the 780px geometry — re-pinned here
-//    against the new fixed-circle mechanism, fix round 1) ──────────────────────────
+// ── four guards that are not about the bar's geometry, pinned against the
+//    fixed-circle mechanism ──────────────────────────────────────────────────────
 
 test("the meter is gone from the site bar: no SupportMeterPill import, no --meter-w", () => {
   // The support meter is not on the SITE bar — OBS has it
@@ -84,8 +83,7 @@ test("the meter is gone from the site bar: no SupportMeterPill import, no --mete
 });
 
 test("the money buttons do NOT stretch to fill the bar", () => {
-  // The old pills' "do not stretch" guarantee was flex-grow: none. The circles
-  // guarantee it the same way now that they're in flow: shrink-0 keeps them
+  // The circles guarantee "do not stretch" in flow: shrink-0 keeps them
   // off the row's shrink budget, min-w-[28px] pins their resting floor, and
   // nothing here participates in flex-grow.
   const box = src.match(/const moneyCircle = \(skin: string\) =>\s*`([^`]*)`/)?.[1] ?? "";
@@ -103,8 +101,8 @@ test("one row: no caret, no expanded state, no second row", () => {
 test("the secondary line must truncate, never wrap", () => {
   // The meta line ELLIPSIZES rather than wrapping into a row the bar does not
   // have — and `text-overflow` only runs on a block box's own inline content, so
-  // the line must not be a flex container (it was one, and hard-clipped
-  // mid-glyph while its comment described an ellipsis that never ran).
+  // the line must not be a flex container (one hard-clips mid-glyph, and the
+  // ellipsis never runs).
   assert.match(src, /className="mt-0\.5 text-xs text-secondary whitespace-nowrap truncate"/,
     "the secondary line must truncate, never wrap");
   assert.doesNotMatch(src, /flex[^"]*whitespace-nowrap truncate/,

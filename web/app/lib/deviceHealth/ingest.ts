@@ -10,7 +10,7 @@ import { MAX_REPORT_BYTES } from "./report.ts";
 import { createSlidingWindowLimiter } from "../rateLimit.ts";
 import { normalizePlatform } from "../nativePlatform.ts";
 
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export const MAX_SEQ = 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PLAYER_SRCS = new Set(["none", "native", "streamplace", "youtube", "twitch", "replay", "community", "radio"]);

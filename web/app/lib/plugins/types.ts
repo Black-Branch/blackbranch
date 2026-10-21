@@ -1,4 +1,4 @@
-// What an install's owner plugin may add to the site.
+// What an install's site plugin may add to the site.
 //
 // The product renders whatever a plugin contributes and nothing when it contributes nothing, so
 // every field is optional and every consumer must work with it absent. Product code reads a

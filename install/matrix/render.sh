@@ -118,12 +118,14 @@ matrix_authentication_service:
   secret: "$MX_MAS_SECRET"
 # The site's mod-power code assumes the room v12 creator rule.
 default_room_version: "12"
-# The public room list holds the community's two rooms (the bootstrap's aliases) and nothing else.
+# The public room list holds the community's three rooms (the bootstrap's aliases) and nothing else.
 # Listing a room still takes that room's own power, so only their owner can list them.
 room_list_publication_rules:
   - alias: "#community-hub:$MX_SERVER_NAME"
     action: allow
   - alias: "#general:$MX_SERVER_NAME"
+    action: allow
+  - alias: "#forum:$MX_SERVER_NAME"
     action: allow
   - action: deny
 # Avatars for signed-out visitors need unauthenticated profile reads (the default, stated).

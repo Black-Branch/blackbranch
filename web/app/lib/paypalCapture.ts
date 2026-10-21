@@ -3,6 +3,7 @@
 // and the webhook route need — nothing else. "Pure-ish" because a failed
 // extraction logs loudly (see `fail` below) — an intentional, documented side
 // effect, not a network call or a mutation of its input.
+import { paypalCurrencyCode } from "./moneyFormat.ts";
 //
 // ── The real shape is FLAT ──────────────────────────────────────────────────
 // The webhook `resource` is the capture object directly — no
@@ -161,7 +162,7 @@ export function extractPaypalCapture(event: unknown): PaypalCaptureResult {
   if (grossCurrency !== netCurrency) {
     return fail(`gross and net currency_code disagree (gross=${grossCurrency}, net=${netCurrency})`, captureId);
   }
-  if (grossCurrency !== 'USD') {
+  if (grossCurrency !== paypalCurrencyCode()) {
     return fail(
       `currency_code is not USD (saw ${grossCurrency}) — createPaypalOrder only ever mints USD orders, ` +
         `so a non-USD capture is unmodeled here; the tip is still recorded by Task 10, this function just ` +

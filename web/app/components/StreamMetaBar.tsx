@@ -72,13 +72,14 @@ type StreamMetaBarProps = {
   liveViewers: number | null;
   subscribed: boolean;
   openSupport: (section: "donation" | "subscribe", fallbackUrl: string) => void;
-  donateUrl: string;
+  /** null = this install has nowhere to donate (no provider, no outside link): no button. */
+  donateUrl: string | null;
   /** null = this install has nowhere to subscribe (no Stripe, no outside link): no button. */
   subscribeUrl: string | null;
 };
 
 // The player's bottom Bar — ONE ROW, always: avatar · title (truncates) · meta
-// line (truncates) · the Qorm / Donate / Gift actions. A second row would be
+// line (truncates) · the currency / Donate / Gift actions. A second row would be
 // dead space, and would keep the two panels' bottom bars from lining up.
 //
 // The support meter is not on this bar: `stream-api/meter.js` broadcasts
@@ -189,16 +190,19 @@ export function StreamMetaBar({
               the compact form. */}
           <div className="flex items-center gap-1.5 shrink-0 h-[28px]">
             {featured ? (
+              // A featured entry from Twitch alone has no YouTube channel to visit: its Twitch one.
               <a
-                href={`https://youtube.com/channel/${featured.youtube_channel_id}`}
+                href={featured.youtube_channel_id
+                  ? `https://youtube.com/channel/${featured.youtube_channel_id}`
+                  : `https://twitch.tv/${encodeURIComponent(featured.twitch_login ?? "")}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={moneyCircle("px-[7.5px] text-on-accent hover:brightness-110")}
-                style={{ backgroundColor: PLATFORM_COLORS.youtube }}
+                style={{ backgroundColor: featured.youtube_channel_id ? PLATFORM_COLORS.youtube : PLATFORM_COLORS.twitch }}
                 title="Visit channel"
                 aria-label="Visit channel"
               >
-                <YoutubeGlyph />
+                {featured.youtube_channel_id ? <YoutubeGlyph /> : <PlatformIcon platform="twitch" size="13px" />}
                 <span className={moneyClip}><span className={moneyLabel}>Visit channel</span></span>
               </a>
             ) : (
@@ -218,7 +222,7 @@ export function StreamMetaBar({
                   <PointsIcon size={13} />
                   <span className={moneyClip}><span className={moneyLabel}>{currencyTitle()}</span></span>
                 </button>
-                <button
+                {donateUrl !== null && <button
                   type="button"
                   onClick={() => openSupport("donation", donateUrl)}
                   title="Donate"
@@ -228,7 +232,7 @@ export function StreamMetaBar({
                 >
                   <CurrencyDollar size={13} weight="bold" />
                   <span className={moneyClip}><span className={moneyLabel}>Donate</span></span>
-                </button>
+                </button>}
                 {subscribeUrl !== null && <button
                   type="button"
                   onClick={() => openSupport("subscribe", subscribeUrl)}

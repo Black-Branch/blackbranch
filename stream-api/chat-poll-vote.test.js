@@ -1,6 +1,6 @@
 'use strict';
 
-// L2 (owner decision): while a poll runs, a line that is ONLY a valid option number (1–N) is counted
+// While a poll runs, a line that is ONLY a valid option number (1–N) is counted
 // as the sender's vote and NOT shown — not stored, not broadcast, not in the replay buffer.
 // Outside a poll, or a number that is not an option, the line displays normally. /chat/native
 // answers { ok: true, id: null, pollVote: { optionN } } for a swallowed vote.

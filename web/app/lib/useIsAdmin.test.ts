@@ -1,5 +1,5 @@
 // No precedent for testing fetch-driven hook state in this codebase — pins
-// the hook's shape by source scan (same finding as usePaymentResult.test.ts).
+// the hook's shape by source scan (same approach as usePaymentResult.test.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

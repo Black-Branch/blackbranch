@@ -5,7 +5,7 @@
 // panel, profile card…). A banned/timed-out branch that swapped ChatInput out
 // for a bare notice would cost a viewer serving a routine 10-minute timeout
 // their avatar, settings, linked accounts, the support panel (the one appeal
-// channel), and sign-out — and the MetaBar's Donate / Subscribe / Qorm buttons
+// channel), and sign-out — and the MetaBar's Donate / Subscribe / points buttons
 // would dispatch events NOBODY hears.
 //
 // The invariant: every branch the composer slot renders for a SIGNED-IN viewer

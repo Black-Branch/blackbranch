@@ -1,4 +1,4 @@
-// The Matrix media proxy's relay (external review S8): the upstream body is
+// The Matrix media proxy's relay: the upstream body is
 // streamed through with a byte cap and cancellation instead of buffered whole,
 // and a small gate bounds how many relays run at once. Every fake is a few
 // bytes against a cap set to less — never a large transfer.

@@ -63,9 +63,9 @@ test("every Behavior entry — and only those — carries behavior: true", () =>
   assert.deepEqual(flagged, [...BEHAVIOR_KEYS].sort());
 });
 
-test("defaults: sound off, highlights on, own tint off, filter off, dots on, history Default", () => {
+test("defaults: sound off, highlights on except the streamer spotlight (opt-in), own tint off, filter off, dots on, history Default", () => {
   for (const [k, v] of [
-    ["mentionSound", '"off" as MentionSound'], ["mentionHl", "true"], ["upvoteHl", "true"], ["eventHl", "true"], ["spotlightOn", "true"],
+    ["mentionSound", '"off" as MentionSound'], ["mentionHl", "true"], ["upvoteHl", "true"], ["eventHl", "true"], ["spotlightOn", "false"],
     ["ownTint", "false"], ["profanityFilter", "false"], ["unreadDots", "true"], ["histLength", '"default" as HistoryLength'],
     ["hideBots", "false"], ["firstMark", "true"],
   ] as const) {

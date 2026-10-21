@@ -1,4 +1,4 @@
-// Qorm earn failures must be VISIBLE.
+// Points earn failures must be VISIBLE.
 //
 // An earn path that ends in a bare `.catch(() => {})` turns a schema change, a
 // pool exhaustion or a bug in coinsServer into silently zeroed viewer earning —

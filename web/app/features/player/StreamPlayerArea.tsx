@@ -60,6 +60,12 @@ type StreamPlayerAreaProps = {
    *  reporting effect keys on this identity, and a fresh arrow every render
    *  would loop it. */
   onPlayerLive: (live: boolean | null, scope: "live" | "community") => void;
+  /** False = this install has no live source set up: the Live tab says so instead of
+   *  mounting an embed with an empty channel. Default true. */
+  livePlayable?: boolean;
+  /** The Kick channel, "" when unset. There is no Kick player yet: with no other source, a live
+   *  stream links to Kick instead. */
+  kickChannel?: string;
 };
 
 // What every cross-origin player iframe carries. YouTube's own oEmbed markup,
@@ -201,6 +207,7 @@ export function StreamPlayerArea({
   tab, live, active, spSrc, ytSrc, twSrc, twitchChannel, twStartMuted, community, communitySource,
   loopVideos, embedHost, selectedVod, vodStartMuted, spThinPlayer, spStartMuted, spChannel,
   onToggleSpPlayer, isSignedIn, fallbackCollapsed, onToggleFallbackCollapsed, onPlayerLive,
+  livePlayable = true, kickChannel = "",
 }: StreamPlayerAreaProps) {
   const { ids: fallbackIds, fallbackFor } = usePlayerFallbacks();
   const fallback = fallbackFor(tab);
@@ -229,7 +236,9 @@ export function StreamPlayerArea({
   // be seen. MEASUREMENT ONLY — nothing pauses or changes a player because of it.
   const boxRef = useRef<HTMLDivElement>(null);
   const seen = usePlayerSeen(boxRef);
-  const src = playerSrcFor(!!fallback, tab, live, active, spThinPlayer, !!selectedVod, !!community, !!loopSrc);
+  const src = playerSrcFor(!!fallback, tab, live && livePlayable, active, spThinPlayer, !!selectedVod, !!community, !!loopSrc);
+  // Live with no source this site can play: never an embed with an empty channel.
+  const playLive = live && livePlayable;
   useEffect(() => { setPlayerSeen(seen); }, [seen]);
   // The per-device debug log (?playerdebug=1) — inert unless switched on.
   usePlayerDebug(boxRef, src);
@@ -279,13 +288,32 @@ export function StreamPlayerArea({
           )}
 
           {/* Live tab — the streamer's stream on the chosen platform. */}
-          {tab === "live" && live && active === "sp" && (
+          {tab === "live" && live && !livePlayable && (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted">
+              {kickChannel ? (
+                <>
+                  <p>Live on Kick — this site has no Kick player yet.</p>
+                  <a
+                    href={`https://kick.com/${encodeURIComponent(kickChannel)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md bg-surface-2 px-3 py-1.5 text-body hover:bg-surface-3"
+                  >
+                    Watch on Kick
+                  </a>
+                </>
+              ) : (
+                <p>Live — but no player is set up on this site yet.</p>
+              )}
+            </div>
+          )}
+          {tab === "live" && playLive && active === "sp" && (
             spThinPlayer ? (
               <StreamplaceThinPlayer startMuted={spStartMuted} channel={spChannel} onFallback={onToggleSpPlayer} />
             ) : (
               <iframe
                 src={spSrc}
-                title="Live stream — stream.place"
+                title="Live stream — Streamplace"
                 className={IFRAME_CLASS}
                 allow={IFRAME_ALLOW}
                 referrerPolicy={IFRAME_REFERRER}
@@ -293,7 +321,7 @@ export function StreamPlayerArea({
               />
             )
           )}
-          {tab === "live" && live && active === "yt" && ytSrc && (
+          {tab === "live" && playLive && active === "yt" && ytSrc && (
             <YouTubeFrame
               key={ytSrc}
               src={ytSrc}
@@ -305,7 +333,7 @@ export function StreamPlayerArea({
               ready={ready}
             />
           )}
-          {tab === "live" && live && active === "tw" && (
+          {tab === "live" && playLive && active === "tw" && (
             <TwitchPlayer
               // Load-bearing, not decoration: adapters/twitch.ts has no destroy()
               // ("the caller empties the container"), so if this instance stayed

@@ -1,5 +1,5 @@
-// mxc:// → proxied HTTP URL helpers (extracted from MatrixShared.tsx — audit
-// C1/B2 — so components like Avatar can use them without importing the whole
+// mxc:// → proxied HTTP URL helpers (kept apart from MatrixShared.tsx so
+// components like Avatar can use them without importing the whole
 // message-row module). Both route through the app's authenticated media proxy.
 //
 // An mxc reaching here is user-influenced (a federated server's upload answer, a profile field), and

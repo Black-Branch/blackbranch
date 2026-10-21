@@ -48,11 +48,11 @@ export function rankNames(store: FrecencyEntry[], now: number, exists: (name: st
 /**
  * Record a use of `name`: decay-then-+1, cap to RECENT_MAX.
  *
- * Deliberately does NOT filter by `exists`. It used to, which made a single emote
+ * Deliberately does NOT filter by `exists`: that would make a single emote
  * pick DESTRUCTIVELY prune every entry missing from the manifest *at that moment* —
- * and the manifest genuinely does collapse sometimes (the 7TV "found 178, was 1150"
- * episode that `emoteManifestGuard` now defends against). One click during a
- * degraded fetch permanently erased the user's whole frecency history, with no way
+ * and the manifest genuinely does collapse sometimes (a 7TV fetch can report 178 of
+ * 1150 — what `emoteManifestGuard` defends against). One click during a
+ * degraded fetch would permanently erase the user's whole frecency history, with no way
  * to recover it.
  *
  * Existence is a *view* concern: rankNames() already filters to emotes that

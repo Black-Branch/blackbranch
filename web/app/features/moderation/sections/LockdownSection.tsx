@@ -22,6 +22,7 @@ import { getJson, postJson } from "@/app/lib/http";
 import { INGEST_PLATFORMS, LOCKDOWN_EXPIRY, expiryBody, type ExpiryChoice } from "@/app/lib/lockdownLevers";
 import { platformLabel } from "@/app/lib/platforms";
 import { card, h2, btn, input, timeAgo, shortName } from "../shared";
+import { ageLeverText, type Checkable } from "../lockdownAge";
 
 type Lockdown = {
   signupsDisabled: boolean;
@@ -37,8 +38,11 @@ type Lockdown = {
   updatedBy: string | null;
   updatedAt: string | null;
   /** Homeserver sign-up: a bundle closes it with the signups lever; elsewhere it is managed outside
-   *  Blackbranch (null = could not be read). */
+   *  Black Branch (null = could not be read). */
   homeserver?: { managed: "outside" } | { managed: "bundle"; registration: "open" | "closed"; closedByLockdown: boolean; applied?: boolean } | null;
+  /** Per platform, whether an account's age can be checked (stream-api /lockdown/checkable; null =
+   *  could not be read). The age lever holds only the checkable ones. */
+  checkable?: Checkable | null;
 };
 
 /** What the signups lever says about sign-up on the homeserver — a site ban does not reach a
@@ -46,7 +50,7 @@ type Lockdown = {
 function homeserverSignupLine(h: Lockdown["homeserver"], signupsOn: boolean): string {
   if (!h) return "Homeserver sign-up could not be read.";
   if (h.managed === "outside") {
-    return "Homeserver sign-up is separate and managed outside Blackbranch: close it in your homeserver's sign-in service (with MAS: password registration) — an account made there can still join the community's rooms.";
+    return "Homeserver sign-up is separate and managed outside Black Branch: close it in your homeserver's sign-in service (with MAS: password registration) — an account made there can still join the community's rooms.";
   }
   // The lockdown's last change has not reached the homeserver (its render failed; it is retried).
   const pending = h.applied === false ? " Not applied to the homeserver yet — retrying." : "";
@@ -129,6 +133,7 @@ export default function LockdownSection({ note }: { note: (m: string) => void })
   const ageOn = minAge > 0;
   const paused = state?.ingestPaused ?? [];
   const subOnly = state?.subOnly === true;
+  const age = ageLeverText(minAge, state?.checkable);
   const anyOn = signups || crosspost || ageOn || paused.length > 0 || subOnly;
   const allOn = signups && crosspost && ageOn;
 
@@ -268,7 +273,7 @@ export default function LockdownSection({ note }: { note: (m: string) => void })
           busy={busy || state === null}
           // Names the actual risk. Without this the lever reads as a chat nicety rather than "we
           // are a megaphone pointed at four platforms".
-          detail={`Blocks sending to Twitch/Kick/StreamPlace/YouTube. Messages still post on ${siteName()}.`}
+          detail={`Blocks sending to Twitch/Kick/Streamplace/YouTube. Messages still post on ${siteName()}.`}
           onToggle={() => apply(
             { crosspostDisabled: !crosspost },
             !crosspost ? "Cross-posting to platforms is now BLOCKED." : "Cross-posting re-enabled.",
@@ -279,19 +284,18 @@ export default function LockdownSection({ note }: { note: (m: string) => void })
           label={`Minimum account age${ageOn ? ` — ${minAge}d` : ""}`}
           on={ageOn}
           busy={busy || state === null}
-          // The Kick consequence is stated HERE, at the switch, not in a doc. Kick publishes no
-          // account creation date at all, so "unknown age" is every Kick viewer, and unknowns are
-          // withheld.
+          // Which platforms it holds is stated HERE, at the switch: a platform whose account age
+          // cannot be checked (all of Kick; Twitch without the app's keys; YouTube without an API
+          // key) is never held, and each one says so.
           detail={
-            ageOn
-              ? `Holding Twitch/YouTube accounts under ${minAge}d — and ALL Kick chat (Kick publishes no account age). Held messages wait in review, not deleted.`
-              : "Holds new platform accounts for review. ⚠ Also holds ALL Kick chat — Kick publishes no account age."
+            <>
+              {age.detail}
+              {age.unknown.map((line) => <span key={line} className="block" data-age-unknown>{line}</span>)}
+            </>
           }
           onToggle={() => apply(
             { minAccountAgeDays: ageOn ? 0 : DEFAULT_MIN_AGE_DAYS },
-            ageOn
-              ? "Account-age filter off."
-              : `Holding platform accounts under ${DEFAULT_MIN_AGE_DAYS} days — including all Kick chat.`,
+            ageOn ? "Account-age filter off." : age.armed(DEFAULT_MIN_AGE_DAYS),
             { thrown: !ageOn },
           )}
         />

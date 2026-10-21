@@ -9,12 +9,26 @@
 // is a private conversation. Long-poll over localhost is why this needs no
 // new auth surface — requireInternal's IP trust already covers the brain.
 
-function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQueue = 20 } = {}) {
+// How long after its last poll (or reply) the brain still counts as answering. Its loop re-polls the
+// moment a poll returns, but one turn is a model call of up to a minute (the helpdesk.answer slot's
+// timeout), during which it is not polling. Past this, nobody is reading the queue: the help desk
+// is switched off, it has no model, or stream-ingest is down — the brain's loop polls only while
+// helpdesk.enabled is on and the task resolves (stream-ingest/lib/helpdesk).
+const BRAIN_SEEN_MS = 90_000;
+
+function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQueue = 20, now = () => Date.now() } = {}) {
   const queue = [];            // jobs waiting for the brain
   const pending = new Map();   // requestId -> { res, timer } — held web responses
   let waiter = null;           // the brain's parked poll: { res, timer }
   let draining = false;        // set by release(); no new socket may be parked after
   let seq = 0;
+  let brainSeenAt = null;      // ms of the brain's last poll or reply
+
+  /** Is anything answering free-text questions? Measured from the brain itself (its polls), not
+   *  from a setting this process might read differently from stream-ingest. */
+  function brainAnswering() {
+    return !!waiter || (brainSeenAt !== null && now() - brainSeenAt < BRAIN_SEEN_MS);
+  }
 
   function deliver(job, res) {
     res.json(job);
@@ -35,8 +49,12 @@ function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQu
     const job = { requestId, ...payload };
     const timer = setTimeout(() => {
       // The brain never answered — release the browser; a late reply() finds
-      // nothing and returns false.
+      // nothing and returns false. A job still QUEUED leaves the queue with it: nobody is waiting
+      // for its answer any more, and left there it counted against maxQueue forever — after 20
+      // unanswered questions (a help desk with no brain) every new one was refused as "busy".
       pending.delete(requestId);
+      const i = queue.indexOf(job);
+      if (i >= 0) queue.splice(i, 1);
       res.status(504).json({ error: 'timeout' });
     }, askTimeoutMs);
     pending.set(requestId, { res, timer });
@@ -54,6 +72,7 @@ function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQu
     // Draining: reply empty so the brain re-polls against the NEW process instead
     // of parking a 25s request on a socket this one is trying to close.
     if (draining) { res.json({}); return; }
+    brainSeenAt = now();
     const job = queue.shift();
     if (job) { deliver(job, res); return; }
     if (waiter) {
@@ -83,6 +102,7 @@ function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQu
   }
 
   function reply(requestId, text) {
+    brainSeenAt = now();
     const held = pending.get(requestId);
     if (!held) return false;
     pending.delete(requestId);
@@ -95,14 +115,19 @@ function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQu
     return { queued: queue.length, pending: pending.size, brainParked: !!waiter };
   }
 
+  /** GET /bot/support/status: may the site offer a free-text box? false while nothing answers. */
+  function status() {
+    return { aiFreeText: brainAnswering() };
+  }
+
   // Release every socket this relay is holding open. Called from the SIGTERM
   // drain in index.js.
   //
   // This is REQUIRED for a graceful shutdown, not a nicety. The brain's poll is
-  // parked for up to pollTimeoutMs (25s) — LONGER than the shutdown grace — and
-  // it is an ACTIVE request, so closeIdleConnections() cannot touch it and
-  // server.close() waits on it. Without this, every restart runs to the
-  // forced-exit backstop and systemd records status=1/FAILURE.
+  // parked for up to pollTimeoutMs (25s) and it is an ACTIVE request, so
+  // closeIdleConnections() cannot touch it and server.close() waits on it.
+  // Without this, every restart waits out the poll — most of the 30s grace, a
+  // dark site meanwhile.
   //
   // The brain gets the same empty body its poll timeout would have produced, so
   // it simply polls again against the new process. Held web asks get 503 rather
@@ -126,7 +151,7 @@ function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQu
     queue.length = 0;
   }
 
-  return { ask, next, reply, stats, release };
+  return { ask, next, reply, stats, status, release };
 }
 
 // Route shells. All requireInternal; /bot/support/* rather than /support/*
@@ -158,6 +183,11 @@ function registerHelpdeskRoutes(app, { requireInternal, wrap, relay }) {
   }));
 
   app.get('/bot/support/next', requireInternal, wrap(async (_req, res) => relay.next(res)));
+
+  // { aiFreeText } — the site's help panel shows its free-text box only while this is true. False
+  // when the help desk's AI is switched off, has no model, or stream-ingest is down: a question typed
+  // then waited 30 s for "I can't reach my brain".
+  app.get('/bot/support/status', requireInternal, (_req, res) => res.json(relay.status()));
 
   app.post('/bot/support/reply', requireInternal, wrap(async (req, res) => {
     const body = req.body || {};

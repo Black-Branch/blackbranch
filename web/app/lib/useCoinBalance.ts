@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 let balance: number | null = null; // null = unknown / signed out
-// The EARNED part of that balance — earned Qorm plus legacy winnings, never
+// The EARNED part of that balance — earned points plus legacy winnings, never
 // purchased. Held beside `balance` rather than in a store of its own: they
 // come from one response and must never be shown from two different moments,
 // or the parenthetical contradicts the number it is inside.

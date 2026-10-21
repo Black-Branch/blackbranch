@@ -1,9 +1,9 @@
-// PB2 (review round 5) against a REAL Postgres (v156): a refund or dispute of a native payment
+// Against a REAL Postgres (v156): a refund or dispute of a native payment
 // the support ledger does not hold YET is held (stream.support_reversal_holds), and the credit
 // takes it back in the same transaction when it lands — through POST /support/reconcile (a
-// ledger_failed / unpriced row) or through a late delivery of the event itself. Before v156 the
-// route answered 404 `unknown_event`, web logged "nothing reversed" and answered the provider 200,
-// and a later reconcile credited the refunded payment in full.
+// ledger_failed / unpriced row) or through a late delivery of the event itself. Without the hold,
+// the route answers 404 `unknown_event`, web logs "nothing reversed" and answers the provider 200,
+// and a later reconcile credits the refunded payment in full.
 //
 // Fixtures are scoped to ids containing `g5test` and removed before and after.
 // Run: SQL_PARSE_DATABASE_URL=postgres://postgres:probe@localhost:55432/stream node --test support-reversal-holds.db.test.js
@@ -101,7 +101,7 @@ test('reversals that arrive before their credit, against real Postgres', async (
   };
   const credited = async (spend) => (await pool.query(`SELECT 1 FROM stream.support_events WHERE event_id = $1`, [keyOf(spend)])).rowCount;
 
-  await t.test('PB2: a full refund of a failed-ledger donation, then reconcile → the ledger nets 0.00', async () => {
+  await t.test('a full refund of a failed-ledger donation, then reconcile → the ledger nets 0.00', async () => {
     const id = await failedDonation('g5test-a');
     const r = await refund('g5test-a', 'stripe:refund:g5test-ra');
     assert.equal(r.statusCode, 202, 'a refund the ledger cannot apply yet must be HELD, not answered "nothing to reverse"');
@@ -115,14 +115,14 @@ test('reversals that arrive before their credit, against real Postgres', async (
     assert.ok(sponsorResets >= 1, 'reconcile must rebuild the sponsor pool after taking a held reversal back');
   });
 
-  await t.test('PB2: a partial refund before reconcile nets the remainder', async () => {
+  await t.test('a partial refund before reconcile nets the remainder', async () => {
     const id = await failedDonation('g5test-b');
     assert.equal((await refund('g5test-b', 'stripe:refund:g5test-rb', { refunded: 250, gross: 1000 })).statusCode, 202);
     await call('/support/reconcile', { id, amountUsd: 10 });
     assert.deepEqual(await net('g5test-b'), { usd: 7.5, reversals: 1 });
   });
 
-  await t.test('PB2: replayed webhooks are idempotent — before the credit, after it, and after reconcile', async () => {
+  await t.test('replayed webhooks are idempotent — before the credit, after it, and after reconcile', async () => {
     const id = await failedDonation('g5test-c');
     for (let i = 0; i < 3; i++) assert.equal((await refund('g5test-c', 'stripe:refund:g5test-rc')).statusCode, 202);
     assert.equal((await pool.query(`SELECT COUNT(*)::int AS n FROM stream.support_reversal_holds WHERE event_id = $1`, [keyOf('g5test-c')])).rows[0].n, 1);
@@ -134,7 +134,7 @@ test('reversals that arrive before their credit, against real Postgres', async (
     assert.deepEqual(await net('g5test-c'), { usd: 0, reversals: 1 });
   });
 
-  await t.test('PB2: reconcile and reverse at the same time net exactly once', async () => {
+  await t.test('reconcile and reverse at the same time net exactly once', async () => {
     for (let i = 0; i < 12; i++) {
       const spend = `g5test-race${i}`;
       const id = await failedDonation(spend);
@@ -146,7 +146,7 @@ test('reversals that arrive before their credit, against real Postgres', async (
     }
   });
 
-  await t.test('PB2: a refund of a payment found NOWHERE is held, and the late delivery takes it back', async () => {
+  await t.test('a refund of a payment found NOWHERE is held, and the late delivery takes it back', async () => {
     const r = await refund('g5test-d', 'stripe:refund:g5test-rd');
     assert.equal(r.statusCode, 202);
     assert.equal(r.body.held, 'pending');
@@ -157,7 +157,7 @@ test('reversals that arrive before their credit, against real Postgres', async (
     assert.equal(reversedCalls, 1, 'a late delivery that took a held reversal back must rebuild the sponsor pool');
   });
 
-  await t.test('PB2: a late delivery that settles a ledger_failed row takes a held partial refund back', async () => {
+  await t.test('a late delivery that settles a ledger_failed row takes a held partial refund back', async () => {
     await failedDonation('g5test-e', 8);
     await refund('g5test-e', 'stripe:refund:g5test-re', { refunded: 500, gross: 1000 });
     await quietly(() => alert.fireStreamEffects({ platform: 'native', eventType: 'donation', username: 'casey', userId: DONOR,
@@ -167,7 +167,7 @@ test('reversals that arrive before their credit, against real Postgres', async (
     assert.equal(st, 'reconciled');
   });
 
-  await t.test('PB2: a restore of a held refund cancels it; the credit then lands whole', async () => {
+  await t.test('a restore of a held refund cancels it; the credit then lands whole', async () => {
     const id = await failedDonation('g5test-f');
     await refund('g5test-f', 'stripe:refund:g5test-rf');
     const restore = await call('/support/reverse', { kind: 'donation', spendId: 'donation:g5test-f', ref: 'stripe:refund:g5test-rf', reason: 'restore' });
@@ -177,7 +177,7 @@ test('reversals that arrive before their credit, against real Postgres', async (
     assert.deepEqual(await net('g5test-f'), { usd: 10, reversals: 0 });
   });
 
-  await t.test('PB2: a restore that arrives FIRST makes its late opening event take nothing', async () => {
+  await t.test('a restore that arrives FIRST makes its late opening event take nothing', async () => {
     const id = await failedDonation('g5test-g');
     const restore = await call('/support/reverse', { kind: 'donation', spendId: 'donation:g5test-g', ref: 'stripe:dispute:g5test-dg', reason: 'restore' });
     assert.equal(restore.body.held, 'cancelled');
@@ -192,7 +192,7 @@ test('reversals that arrive before their credit, against real Postgres', async (
     assert.deepEqual(await net('g5test-g'), { usd: 10, reversals: 0 });
   });
 
-  await t.test('PB2: a dismissed row keeps its hold pending and credits nothing', async () => {
+  await t.test('a dismissed row keeps its hold pending and credits nothing', async () => {
     const id = await failedDonation('g5test-h');
     await refund('g5test-h', 'stripe:refund:g5test-rh');
     await call('/support/reconcile', { id, dismiss: true });
@@ -201,9 +201,9 @@ test('reversals that arrive before their credit, against real Postgres', async (
     assert.equal(hold.status, 'pending');
   });
 
-  // Round-5 follow-up: a credit that lands already fully refunded celebrates NOTHING — no alert, no
+  // A credit that lands already fully refunded celebrates NOTHING — no alert, no
   // sound/TTS, no chat card. The ledger row is still written, with its reversal, in one transaction,
-  // and since round 6 (D-D) the bar and the timer move by its net — nothing here. A partial refund
+  // and the bar and the timer move by its net — nothing here. A partial refund
   // still celebrates.
   const shows = () => frames.filter((f) => f.type === 'showAlert').length;
   const cards = () => frames.filter((f) => f.type === 'message' && f.platform === 'system' || f.system === 'donation').length;
@@ -217,8 +217,7 @@ test('reversals that arrive before their credit, against real Postgres', async (
     assert.equal(out.refunded, true);
     assert.equal(await credited('g5test-i'), 1, 'the ledger row must still be written');
     assert.deepEqual(await net('g5test-i'), { usd: 0, reversals: 1 });
-    // Round 6 D-D (k, 2026-10-18) replaced the round-4 rule this line used to pin (`[10]`): a credit
-    // whose held refunds cover it whole moves the bar and the timer by nothing. Net, live and
+    // A credit whose held refunds cover it whole moves the bar and the timer by nothing. Net, live and
     // rebuilt: support-held-net-bar.db.test.js.
     assert.deepEqual(barAdds, [], 'a fully refunded credit moved the bar/timer');
   });

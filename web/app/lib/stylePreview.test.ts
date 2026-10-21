@@ -72,7 +72,7 @@ test("StyledName renders with the same custom properties the chat row uses", () 
 });
 
 test("badges come BEFORE the name, the way chat orders them", () => {
-  // ChatMessage renders badges then the username; StyledName used to trail
+  // ChatMessage renders badges then the username; StyledName must not trail
   // them. Order is not cosmetic in a preview whose whole job is prediction.
   const src = read("../components/profileCardParts.tsx");
   const fn = src.slice(src.indexOf("export function StyledName"));

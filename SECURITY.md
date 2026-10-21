@@ -17,17 +17,18 @@ gets around the signature check on updates; and secrets or personal data in this
 
 ## Which versions get security fixes
 
-Black Branch releases come on two channels (`blackbranch update --channel stable|beta`):
+Black Branch is in **preview**. Every release so far is a preview, published on the **beta** channel
+(<https://blackbranch.app/releases>); the **stable** channel has no release yet.
 
 | Channel | Gets security releases |
 |---|---|
-| **stable** | yes — the newest stable release |
-| **beta** | yes — the newest beta release |
+| **beta** | yes — the newest preview |
+| **stable** | none yet — no stable release has been made |
 
-A fix ships as a new release on each channel, marked as a **security release**. An install applies a
-security release by itself at its quiet hour, never while the stream is live, so a box that is up to
-date on either channel needs nothing from you. Older releases are not patched: update to the newest
-release on your channel.
+A fix ships as a new release, marked as a **security release**. An install applies a security release
+by itself at its quiet hour, never while the stream is live, so a box that is up to date on its
+channel needs nothing from you. Older releases are not patched: update to the newest release. A box
+installed from a clone follows stable until you run `sudo blackbranch update --channel beta`.
 
 ## How releases are protected
 

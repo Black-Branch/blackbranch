@@ -44,10 +44,36 @@ function platformsFromSettings(get) {
 }
 
 /**
+ * The settings each reader is started with. A reader whose values change is restarted with the
+ * new ones (lib/platformStarter.js), and these keys then count as applied (the Credentials page
+ * stops showing them as waiting for a restart).
+ */
+export const PLATFORM_KEYS = {
+  twitch: ['platform.twitch.channel'],
+  kick: ['platform.kick.slug', 'kick.chatroomId', 'kick.channelId'],
+  youtube: ['platform.youtube.channelId', 'modules.youtube'],
+  streamplace: ['platform.streamplace.did'],
+};
+
+/**
+ * One string per platform naming the values its reader would start with now. Pure.
+ * @param {string[]} names  @param {(key: string) => unknown} get
+ * @returns {Record<string, string>}
+ */
+function platformSignatures(names, get) {
+  const out = {};
+  for (const name of names) out[name] = JSON.stringify((PLATFORM_KEYS[name] || []).map((k) => get(k) ?? null));
+  return out;
+}
+
+/**
  * PLATFORMS when it says anything (unset, empty and "none" all say "not set here"), else the settings.
+ * `signatures` names the values each chosen reader would start with (see platformSignatures).
  * @param {string|undefined} raw  @param {string[]} known  @param {(key: string) => unknown} get
+ * @returns {{ enabled: string[], unknown: string[], note: string, signatures: Record<string, string> }}
  */
 export function choosePlatforms(raw, known, get) {
   const text = String(raw ?? '').trim();
-  return text ? parsePlatforms(raw, known) : platformsFromSettings(get);
+  const chosen = text ? parsePlatforms(raw, known) : platformsFromSettings(get);
+  return { ...chosen, signatures: platformSignatures(chosen.enabled, get) };
 }

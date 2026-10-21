@@ -30,9 +30,8 @@ test("dampen clamps movement to 10% of the previous price", () => {
 });
 
 test("every damped price lands ON the rounding ladder", () => {
-  // THE BUG THIS FIXES. Damping used to clamp AFTER rounding, so a transition
-  // showed viewers prices like 149, 2475 and 45 for however many streams it
-  // took to converge — computed artifacts, exactly what roundPrice exists to
+  // Damping must not clamp AFTER rounding: a transition would show viewers
+  // prices like 149, 2475 and 45 for however many streams it takes to converge — computed artifacts, exactly what roundPrice exists to
   // prevent. A price is only "chosen-looking" if it is chosen-looking the
   // whole way, not just at the destination.
   for (const [prev, target] of [
@@ -66,7 +65,7 @@ test("dampen never overshoots the target", () => {
 });
 
 test("a cheap price moves by a whole ladder step or not at all", () => {
-  // At 25 Qorm one step IS 100%, and there is nothing finer on the ladder. The
+  // At 25 points one step IS 100%, and there is nothing finer on the ladder. The
   // honest behaviour is a single step — smaller is not representable.
   assert.equal(dampen(25, 50), 50);
   // ...and it cannot be pushed below the ladder's floor.

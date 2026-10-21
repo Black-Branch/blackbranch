@@ -1,7 +1,7 @@
 // Which focus targets raise the soft keyboard. The keyboard-height hook
-// PREDICTS a lift on focusin, and it used to predict for every <input> — so
+// PREDICTS a lift on focusin; predicting for every <input> would mean that
 // tapping the colour swatch in chat appearance (an <input type="color">, which
-// opens a picker, not a keyboard) would shove the whole page up for nothing.
+// opens a picker, not a keyboard) shoves the whole page up for nothing.
 // Only text-entry inputs type.
 
 const TEXT_INPUT_TYPES = new Set([

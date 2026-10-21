@@ -64,7 +64,7 @@ test("the pager owns the middle only on narrow AND unsplit — off it, the pair 
 });
 
 test("the middle is ONE element in TWO skins — a second element here remounts the column and eats a draft", () => {
-  // The review finding this file exists to keep fixed. React reconciles by
+  // The defect this file exists to keep fixed. React reconciles by
   // position AND shape: `pagerOn ? <div…> : <div…>` where one side is a keyed
   // child LIST and the other is static children is a SHAPE change, so the whole
   // column unmounted on every flip — and `narrow`/`split` both flip in normal
@@ -162,9 +162,8 @@ test("the Matrix slot latches on a COMMIT or a click, never on an approach", () 
 });
 
 test("there is ONE spelling of open-a-pane: the bar is handed selectPane, it does not carry a copy", () => {
-  // The bar used to re-spell the commit body verbatim for its pager-less path —
-  // two copies of "open a pane", which is exactly the drift the single-commit-
-  // path comment claimed did not exist.
+  // A bar that re-spells the commit body for its pager-less path makes two
+  // copies of "open a pane" — exactly the drift a single commit path prevents.
   assert.match(SIDEBAR, /selectPane=\{selectPane\}/, "the bar is no longer handed the host's commit function");
   assert.match(TABBAR, /selectPane: \(k: ChatTabKey\) => void;/, "the prop is gone from the bar's contract");
   assert.match(TABBAR, /\}\s*selectPane\(k\);\s*\};/, "the bar's fall-through no longer calls selectPane");

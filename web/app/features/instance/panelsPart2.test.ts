@@ -35,7 +35,7 @@ test("the moved places are in the Admin Panel, once each", () => {
   }
   // Timer, Support bar and Effects are OBS's own places (nested under it).
   const util = adminRail([]).filter((x) => x.section === "utility");
-  assert.deepEqual(util.map((x) => [x.sub, x.depth]), [["obs", 0], ["timer", 1], ["bar", 1], ["effects", 1], ["tts", 0]]);
+  assert.deepEqual(util.map((x) => [x.sub, x.depth]), [["obs", 0], ["timer", 1], ["bar", 1], ["effects", 1], ["tts", 0], ["overlays", 0]]);
   const panel = stripComments(read("app/features/instance/AdminPanel.tsx"));
   for (const [cond, el] of [
     ['section === "payments" && sub === "history"', '<PaymentHistory onSetup={() => go("payments/connections")} />'],

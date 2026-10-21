@@ -98,7 +98,7 @@ test('wiring: index.js builds the one pronouns module, registers its routes and 
   const src = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
   assert.match(src, /const pronouns = createPronouns\(\{ pool, resolveCanonical, resolveOrCreate \}\);/);
   assert.match(src, /pronouns\.registerPronounRoutes\(app, \{ requireInternal, wrap \}\);/);
-  assert.match(src, /createChat\(\{ pool, resolveOrCreate, resolveCanonical, pronouns, pollEngine,/);
+  assert.match(src, /createChat\(\{ pool, resolveOrCreate, resolveCanonical, pronouns, banHold, pollEngine,/);
   const chat = fs.readFileSync(path.join(__dirname, 'chat.js'), 'utf8');
   assert.match(chat.slice(-120), /module\.exports = \{ createChat \};\s*$/, 'END anchor');
 });

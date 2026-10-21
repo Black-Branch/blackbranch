@@ -1,4 +1,4 @@
-// The legal page states what THIS install runs (owner decision, review round 4: a beta rewrite).
+// The legal page states what THIS install runs.
 // Two configurations are built from switch VALUES only — a fresh install's schema defaults, and an
 // install with every optional part on (AI features with a plugin bot, YouTube linking, card and
 // PayPal payments, Ko-fi and Patreon, Cloudflare in front, a homeserver run elsewhere) — and each
@@ -54,6 +54,7 @@ const DEFAULT: LegalInputs = {
   botName: null,
   youtube: { publicData: false, linking: false },
   stripe: false, subscriptions: false, paypal: false, pointsPurchase: false, currencyName: "points", cloudflare: false,
+  twitch: false, liabilityCapUsd: defaultOf("legal.liabilityCapUsd") as number, thirdPartyImages: { vods: false, news: false },
   homeserverRetention: { dms: HOMESERVER_DEFAULT_RETENTION_DAYS, general: HOMESERVER_GENERAL_RETENTION_DAYS },
   errorLogDays: 30,
   plugin: null,
@@ -77,6 +78,7 @@ const EVERYTHING: LegalInputs = {
   botName: "Gadget",
   youtube: { publicData: true, linking: true },
   stripe: true, subscriptions: true, paypal: true, pointsPurchase: true, currencyName: "gems", cloudflare: true,
+  twitch: true, liabilityCapUsd: 120, thirdPartyImages: { vods: true, news: true },
   homeserverRetention: null,
   errorLogDays: 30,
   plugin: {
@@ -97,13 +99,35 @@ function common(html: string) {
   assert.match(html, /Direct messages started on Example Stream are end-to-end encrypted/);
   assert.match(html, /Other rooms are encrypted\s+only if encryption was switched on for them/);
   assert.doesNotMatch(html, /Private and direct Matrix rooms are end-to-end encrypted/, "the old, wrong encryption claim");
-  assert.match(html, /alejo\.io/);
-  // Round 6 L-2: the page said deletion waited for new reports; since round 5 a daily prune runs
+  // Deletion does not wait for new reports: a daily prune runs
   // (clientErrorPrune.ts, started by instrumentation.ts — held by the source test below).
   assert.match(html, /Error reports are\s+deleted once they are 30 days old\.\s*<\/li>/);
   assert.doesNotMatch(html, /as new error\s+reports arrive|until the next ones come in/, "the round-5 sentence: deletion no longer waits for new reports");
   assert.match(html, /the sign-in tokens that platform gives us, stored encrypted/, "linked-account tokens (site.accounts) are named");
 }
+
+test("alejo.io is named only on an install with a Twitch channel", () => {
+  assert.doesNotMatch(render(DEFAULT), /alejo/, "no Twitch: nobody's pronouns are looked up there");
+  assert.match(render(EVERYTHING), /<strong class="text-body-dim">alejo\.io<\/strong> — when you chat on Twitch/);
+});
+
+test("the liability cap is the install's legal.liabilityCapUsd, not a literal", () => {
+  assert.equal(defaultOf("legal.liabilityCapUsd"), 50, "precondition: the schema's default");
+  assert.match(render(DEFAULT), /the twelve months before the claim or\s+USD \$50\./);
+  const html = render(EVERYTHING);
+  assert.match(html, /the twelve months before the claim or\s+USD \$120\./);
+  assert.doesNotMatch(html, /USD \$50/);
+});
+
+test("pictures the browser fetches from another service are named, each only when that part is on", () => {
+  const none = render(DEFAULT);
+  assert.ok(none.length > 8000, "vacuity: the page rendered");
+  assert.doesNotMatch(none, /straight from the service|i\.ytimg|news-feed pictures/);
+  const html = render(EVERYTHING);
+  assert.match(html, /Some pictures load straight from the service that hosts them: thumbnails of past broadcasts\s+from YouTube and news-feed pictures from the site that published the item\. That service sees\s+your IP address when your browser fetches the picture\./);
+  assert.match(render({ ...EVERYTHING, thirdPartyImages: { vods: true, news: false } }), /hosts them: thumbnails of past broadcasts\s+from YouTube\. That service/);
+  assert.match(render({ ...EVERYTHING, thirdPartyImages: { vods: false, news: true } }), /hosts them: news-feed pictures from the site that published the item\. That service/);
+});
 
 test("a fresh install's page claims no AI, no payments, no YouTube, no Cloudflare", () => {
   const html = render(DEFAULT);
@@ -175,7 +199,7 @@ test("the product's own bot: its replies are chat lines, and it keeps no other l
 // Automod's records, as stream-api/automod.js writes them: site.automod_held (the verdict WITH the
 // message text), deleted AUTOMOD_HELD_RETENTION_DAYS after it was held, and site.user_marks (the
 // "suspicious" mark, no message text). An open mark automod placed is deleted by the same daily
-// job once none of its evidence is left; nothing else deletes a mark (round 6 D-E — see the
+// job once none of its evidence is left; nothing else deletes a mark (see the
 // source test below).
 const AUTOMOD_KEPT = /<strong class="text-body-dim">AI-derived data:<\/strong>[^<]*automod keeps a record of each chat message it judges risky: the message’s text, who sent it, the kind of risk it saw, how sure it was and the reason it gave, for moderators to review\. That record, the message’s text with it, is deleted 30 days after the message was held, whatever a moderator decided\. Someone with several such messages in a short time gets a “suspicious” mark that moderators see; the mark holds no message text\. Automatic marks are removed when their last supporting evidence is deleted \(at the next daily run\); a mark a moderator has cleared is kept as a moderation record with no time limit, also after an account is deleted\./;
 
@@ -216,7 +240,7 @@ test("held rows are pruned by automod.js at the page's number; only automod's op
   // goes when its last evidence is deleted, and a cleared mark stays. All three are held here: the
   // ONE prune of site.automod_held and the ONE delete of site.user_marks are stream-api/automod.js's,
   // the delete is limited to OPEN marks of source 'automod' with no evidence row left, and the
-  // daily run does both (round 6 D-E). L-2's daily error-report prune is held at the end.
+  // daily run does both. The daily error-report prune is held at the end.
   const files: string[] = [];
   const walk = (dir: string) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -246,7 +270,7 @@ test("held rows are pruned by automod.js at the page's number; only automod's op
     "the mark sweep reaches a carried, a moderator's or a cleared mark, or one with evidence left");
   assert.match(automod, /const held = await pruneHeld\(\);\s+const marks = await sweepOrphanMarks\(\);/, "the daily run does not sweep marks after the held rows");
   assert.match(automod, /const pruneRun = \(\) => dailyPrune\(\)/, "the timer does not run the daily job");
-  // L-2: "deleted once they are N days old" holds on a quiet install only because clientErrorPrune.ts runs daily from boot.
+  // "deleted once they are N days old" holds on a quiet install only because clientErrorPrune.ts runs daily from boot.
   const errPrune = readFileSync(join(REPO, "web", "app", "lib", "clientErrorPrune.ts"), "utf8");
   assert.match(errPrune, /\nconst DAY_MS = 24 \* 60 \* 60_000;\n/, "the error-report prune is no longer daily");
   assert.match(readFileSync(join(REPO, "web", "instrumentation.ts"), "utf8"), /\n\s+startClientErrorPrune\(\);\n/, "the error-report prune is not started at boot");

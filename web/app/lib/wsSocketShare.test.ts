@@ -86,13 +86,12 @@ test("useChatSocket is called directly only by page-scoped hooks — never by a 
     "the pool via useSponsorClock() (SponsorClockContext) instead");
 });
 
-// Round-2 re-review finding: the test above pins direct `useChatSocket(`
-// callers, but the ACTUAL historical bug was `SponsorClockBadge` calling the
+// The test above pins direct `useChatSocket(`
+// callers, but the real bug shape was `SponsorClockBadge` calling the
 // WRAPPER hook `useSponsorState()` directly — a call that never contains the
 // substring `useChatSocket(` at all (that literal only appears inside
-// `useSponsorState.ts` itself). A RED repro built by adding a raw
-// `useChatSocket(() => {})` call to `SponsorClockBadge.tsx` proved the test
-// above catches THAT shape, but the re-reviewer showed — correctly — it would
+// `useSponsorState.ts` itself). The test above catches a raw
+// `useChatSocket(() => {})` call in `SponsorClockBadge.tsx`, but it would
 // NOT catch the real bug shape (`useSponsorState()` re-added to the badge),
 // because that call site has no `useChatSocket(` substring for the other scan
 // to find. Same mechanism, same house pattern, applied to the wrapper hook

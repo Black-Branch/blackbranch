@@ -1,8 +1,8 @@
 'use strict';
 // Extract stream-api's HTTP route surface from source.
 //
-// WHY THIS EXISTS. The catastrophic failure mode for the H7 decomposition of
-// index.js is not a crash — it is a route quietly losing `requireInternal`, or
+// WHY THIS EXISTS. The catastrophic failure mode for splitting
+// index.js into modules is not a crash — it is a route quietly losing `requireInternal`, or
 // disappearing, while everything still boots and the suite still passes. The
 // money and mod endpoints live in that file. So the surface is snapshotted as a
 // contract you can diff across a refactor.
@@ -67,7 +67,7 @@ function collectRoutes(dir) {
 }
 
 /** One stable line per route. File is EXCLUDED on purpose — moving a route between
- *  files is exactly what H7 does, and must not read as a contract change. */
+ *  files is exactly what a module split does, and must not read as a contract change. */
 function routeLine(r) {
   const mw = r.middleware.length ? ` [${r.middleware.join(' ')}]` : ' [PUBLIC]';
   return `${r.method} ${r.path}${mw}`;
@@ -80,7 +80,7 @@ function surface(dir) {
 
 /**
  * The surface split by where the routes come from: `product` is what a public install
- * (no owner/ folder) can mount, `owner` what this install's owner plugin adds. Same lines as
+ * (no owner/ folder) can mount, `owner` what this install's site plugin adds. Same lines as
  * surface(), partitioned by file.
  */
 function surfaceByOrigin(dir) {

@@ -15,10 +15,9 @@
 // A payment the ledger does not hold YET (its ledger write failed and it waits for reconciliation,
 // or its credit is still on its way) is HELD by stream-api (202 { held: 'pending' },
 // stream.support_reversal_holds, v156) and taken back when the credit lands — durable there, so
-// there is nothing for the provider to redeliver. Review round 5, PB2: this used to treat 404
-// `unknown_event` as "nothing to reverse" and answer success, and a later reconcile then credited
-// the refunded payment in full. A 404 now comes only from a stream-api older than v156, and it
-// THROWS like any refusal, so the provider keeps the reversal alive until the new one is running.
+// there is nothing for the provider to redeliver. A 404 `unknown_event` is never "nothing to
+// reverse": answering success would let a later reconcile credit the refunded payment in full.
+// A 404 comes only from a stream-api older than v156, and it THROWS like any refusal, so the provider keeps the reversal alive until the new one is running.
 //
 // Server-only (rides streamApi.ts and its secret).
 

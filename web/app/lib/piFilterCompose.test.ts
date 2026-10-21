@@ -1,7 +1,7 @@
 // The platform indicator's `filter`: saturation AND drop-shadow, in one
-// declaration (W4 / S-08 / S-09).
+// declaration (S-08 / S-09).
 //
-// WHAT WAS BROKEN, both runtime-proven before the fix:
+// THE TWO FAILURES this shape prevents, both runtime-proven:
 //   S-08 — the DEFAULT indicator (the bar) had no shadow at all. It was never
 //          in the shadow rule's selector list, and could not have been: the bar
 //          is a child of the message ROW, a sibling of `.chat-msg-body`, so

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type SyntheticEvent } from "react";
 import { X } from "@phosphor-icons/react/dist/ssr";
 import type { ConvoState } from "./conversation";
 import type { BadgeDef } from "@/app/lib/BadgesContext";
 import { useBotName } from "@/app/lib/useBotName";
+import { siteIcon } from "@/app/lib/siteIcons";
 
 // The help desk — the support conversation surface. An ordinary element of the chat column,
 // mounted between the messages and the composer: never a pop-up portalled to <body>. A pop-up
@@ -19,6 +20,13 @@ import { useBotName } from "@/app/lib/useBotName";
 // letter circle to exactly the people meeting the help desk for the first time.
 // By ROLE, so this client file carries no account id (the bot's id is an instance setting).
 const BOT_PFP = "/api/avatar/public/bot";
+
+/** No bot avatar set (a fresh install) → the site's own icon, once. */
+function botPfpFallback(e: SyntheticEvent<HTMLImageElement>): void {
+  const img = e.currentTarget;
+  const icon = siteIcon("icon-192.png");
+  if (!img.src.endsWith(icon)) img.src = icon;
+}
 
 type Props = {
   state: ConvoState;
@@ -49,7 +57,7 @@ export function SupportPanel({ state, onPick, onClose, self }: Props) {
     >
       {/* Header: his face, his name, the way out. */}
       <div className="flex items-center gap-2 border-b border-edge px-3 py-2">
-        <img src={BOT_PFP} alt="" className="h-6 w-6 rounded-full object-cover" />
+        <img src={BOT_PFP} onError={botPfpFallback} alt="" className="h-6 w-6 rounded-full object-cover" />
         <span className="text-sm font-semibold text-heading">{name}</span>
         <span className="text-xs text-muted">support</span>
         <button
@@ -67,7 +75,7 @@ export function SupportPanel({ state, onPick, onClose, self }: Props) {
         {state.msgs.map((m) =>
           m.role === "bot" ? (
             <div key={m.id} className="flex items-start gap-2">
-              <img src={BOT_PFP} alt="" className="mt-0.5 h-5 w-5 shrink-0 rounded-full object-cover" />
+              <img src={BOT_PFP} onError={botPfpFallback} alt="" className="mt-0.5 h-5 w-5 shrink-0 rounded-full object-cover" />
               <p className="text-sm leading-snug text-body">{m.text}</p>
             </div>
           ) : (

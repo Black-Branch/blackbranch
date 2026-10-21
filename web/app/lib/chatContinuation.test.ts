@@ -29,8 +29,8 @@ test("the glyph is gone but the spacer element survives", () => {
     "the continuation spacer was deleted — continuation text will lose the wrap-indent gutter");
   assert.doesNotMatch(src, /›/,
     "the '›' continuation glyph is back in ChatMessage");
-  // Inline margins used to fight the CSS (the group rule needed `margin: 0
-  // !important` to win). Geometry belongs in one place now.
+  // Inline margins fight the CSS (the group rule would need `margin: 0
+  // !important` to win). Geometry belongs in one place.
   assert.doesNotMatch(src, /chat-continuation[^>]*style=/,
     "inline styles are back on the continuation spacer — geometry lives in globals.css");
 });

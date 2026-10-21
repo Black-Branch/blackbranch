@@ -116,6 +116,39 @@ export function kickSendOutcome(body: unknown): SendOutcome {
   return { sent: true, ...(id != null && id !== "" ? { id: String(id) } : {}) };
 }
 
+/** A Kick answer whose sentence names a KNOWN refusal ("slow mode", "followers"…), or null.
+ *  Checked before the status is judged: a 429 carrying "slow mode" is the channel's mode, not
+ *  Kick failing. */
+export function kickKnownRefusal(body: unknown): string | null {
+  const message = (body as { message?: unknown } | null)?.message;
+  if (typeof message !== "string") return null;
+  for (const [re, phrase] of KICK_PATTERNS) if (re.test(message)) return phrase;
+  return null;
+}
+
+/**
+ * Kick's bare 403 ("Forbidden", no sentence to read) on a chat send, classified per CHANNEL
+ * (contract 10): Kick says the same word for a followers-only chat, a ban and a missing grant. A
+ * channel whose chat Kick reports as followers-only (`followersOnly` true) → a followers-only
+ * refusal: viewer-actionable, one note per session. Anything else — not followers-only, or the
+ * mode could not be read — is not assumed: silent like infrastructure, and the
+ * route logs its shape.
+ */
+export function kickForbiddenOutcome(followersOnly: boolean | null): { refused: true; reason: string } | Unavailable {
+  if (followersOnly === true) return { refused: true, reason: FOLLOWERS_ONLY };
+  return { error: UNAVAILABLE, reason: "upstream", code: "kick.http_403" };
+}
+
+/** A JSON body's SHAPE for a log line — keys and value types, two levels deep, never a value:
+ *  `{data:{},message:string}`. What a platform says can name people; its shape cannot. */
+export function bodyShape(body: unknown, depth = 0): string {
+  if (body === null) return "null";
+  if (Array.isArray(body)) return depth >= 2 ? "[…]" : `[${body.length ? bodyShape(body[0], depth + 1) : ""}]`;
+  if (typeof body !== "object") return typeof body;
+  if (depth >= 2) return "{…}";
+  return `{${Object.keys(body as Record<string, unknown>).slice(0, 12).map((k) => `${k}:${bodyShape((body as Record<string, unknown>)[k], depth + 1)}`).join(",")}}`;
+}
+
 /** Kick's non-2xx answer. A 4xx carrying a sentence is the channel refusing the
  *  message (followers-only, banned…); anything else is a failure to reach it. */
 export function kickErrorOutcome(status: number, body: unknown): { refused: true; reason?: string } | { refused: false } {
@@ -163,11 +196,30 @@ export function youtubeErrorOutcome(status: number, body: string): Unavailable |
   return httpUnavailable("youtube", status) ?? { error: "send_failed" };
 }
 
+// A TypeError that is NOT fetch's own network failure is a bug in our code (an undefined read):
+// silent to viewers like every infrastructure failure, but its stack is logged — at most once per
+// STACK_LOG_MS per message — so it can be found. Server-side only in practice: the senders
+// call this.
+const STACK_LOG_MS = 10 * 60_000;
+const stackLogged = new Map<string, number>();
+
 /** A platform send that threw instead of answering: our own 8 s abort, the network, or our token/DB code. */
-export function thrownFailure(err: unknown): Unavailable {
+export function thrownFailure(err: unknown, now: number = Date.now(), log: Pick<Console, "error"> = console): Unavailable {
   const name = err instanceof Error ? err.name : "";
   if (name === "TimeoutError" || name === "AbortError") return { error: UNAVAILABLE, reason: "timeout", code: "timeout" };
-  if (err instanceof TypeError) return { error: UNAVAILABLE, reason: "upstream", code: "network" };
+  // fetch (undici) rejects a failed connection as TypeError("fetch failed") with the cause attached.
+  if (err instanceof TypeError && (err.message === "fetch failed" || err.cause !== undefined)) {
+    return { error: UNAVAILABLE, reason: "upstream", code: "network" };
+  }
+  if (err instanceof TypeError) {
+    const key = err.message.slice(0, 200);
+    const last = stackLogged.get(key);
+    if (last === undefined || now - last >= STACK_LOG_MS) {
+      stackLogged.set(key, now);
+      log.error(`[sendDelivery] a platform send threw a TypeError (our code, not the network) — the viewer was not told:\n${err.stack ?? err.message}`);
+    }
+    return { error: UNAVAILABLE, reason: "internal", code: "type_error" };
+  }
   return { error: UNAVAILABLE, reason: "internal", code: "exception" };
 }
 
@@ -195,7 +247,7 @@ export function failureOf(platform: string, r: { error: string; reason?: string 
  *                  |                                                          | session when X alone was picked
  *
  * Viewer-facing notices only for what the viewer can act on or should know is
- * passing (ticket #184); infrastructure is logged for the owner instead
+ * passing; infrastructure is logged for the operator instead
  * (copyFailureLog.ts).
  */
 export function deliveryFailureKind(f: DeliveryFailure): "persistent" | "transient" | "infrastructure" {

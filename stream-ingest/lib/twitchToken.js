@@ -23,6 +23,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { payloadShape } from './logShape.js';
 
 const refreshUrl = (rt) =>
   `https://twitchtokengenerator.com/api/refresh/${encodeURIComponent(rt)}`;
@@ -90,7 +91,8 @@ export async function refreshAccessToken() {
         }
         console.log('[twitch] access token refreshed');
       } else {
-        console.warn('[twitch] token refresh returned no token:', JSON.stringify(data).slice(0, 200));
+        // Status and keys only: an error body can carry a token or the account's login.
+        console.warn(`[twitch] token refresh returned no token: HTTP ${res.status} ${payloadShape(data)}`);
       }
     } catch (err) {
       console.warn('[twitch] token refresh failed:', err.message);
@@ -100,11 +102,40 @@ export async function refreshAccessToken() {
   return inflightRefresh;
 }
 
-// tokenProvider for createTwitchChatClient. First call returns the seed token;
-// subsequent calls (reconnects) refresh first.
+// How long a seed token must still have to be used for the first login as it is.
+const SEED_MARGIN_S = 300;
+
+/**
+ * Is the seed (.env) access token still good for a login? Twitch's validate endpoint answers its
+ * remaining life. A refused token (401) or one about to expire is stale; a network failure cannot
+ * tell, and is answered "use it".
+ * @returns {Promise<boolean>} true = log in with the seed as it is
+ */
+export async function seedStillValid(token, { fetchImpl = (...a) => fetch(...a) } = {}) {
+  try {
+    const res = await fetchImpl('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: `OAuth ${token}` }, signal: AbortSignal.timeout(8000) });
+    if (res.status === 401) return false;
+    if (!res.ok) return true;
+    const j = await res.json();
+    // expires_in 0 = a token that does not expire.
+    const left = Number(j?.expires_in);
+    return !(left > 0 && left < SEED_MARGIN_S);
+  } catch {
+    return true;
+  }
+}
+
+// tokenProvider for createTwitchChatClient. The first call returns the seed token — refreshed
+// FIRST when it has already expired (the .env token outlives its few hours; logging in with it
+// fails as "stale token" until a reconnect refreshes it). Subsequent calls (reconnects) refresh
+// first.
 export async function twitchTokenProvider() {
   if (seeded) {
     seeded = false;
+    if (refreshToken && accessToken && !(await seedStillValid(accessToken))) {
+      console.log('[twitch] the seed access token has expired — refreshing before the first login');
+      await refreshAccessToken();
+    }
   } else {
     await refreshAccessToken();
   }

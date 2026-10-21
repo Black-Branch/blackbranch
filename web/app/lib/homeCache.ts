@@ -13,7 +13,10 @@ import { getStreamStatus, streamStatusFresh } from "@/app/lib/streamStatus";
 import { kickRefresh, listItems } from "@/app/lib/rssServer";
 import { getVods } from "@/app/lib/vods";
 import { getLastStream } from "@/app/lib/lastStream";
-import { buildHomePayload, statusFromStream, newsFromRss, type HomePayload } from "@/app/lib/homePayload";
+import { buildHomePayload, statusFromStream, newsFromRss, homePlatforms, type HomePayload } from "@/app/lib/homePayload";
+import { chatPlatformsSetUp } from "@/app/lib/streamPlatformsServer";
+import { instanceString } from "@/app/lib/instanceConfigServer";
+import { modulesOff, servingSnapshot } from "@/app/lib/moduleRunningServer";
 import { forumReader } from "@/app/lib/forumReader";
 import { topThreads } from "@/app/lib/forumModel";
 import { getBoards } from "@/app/lib/boards";
@@ -32,6 +35,17 @@ const cache = createTtlCache<HomePayload>({ ttlMs: 60_000, load: async () => {
     // so a slow all-time board never holds this body — settle() blanks the
     // widget alone if it fails.
     boards: () => getBoards(),
+    // The sign-in logos: what this install is set up with. Patreon's webhook secret is
+    // stream-api's (never sent to web), so its "set" is read from stream-api's /config snapshot.
+    platforms: async () => {
+      const [off, snap] = await Promise.all([modulesOff(), servingSnapshot()]);
+      return homePlatforms({
+        chat: chatPlatformsSetUp(),
+        youtube: !off.includes("youtube") && !!instanceString("platform.youtube.channelId"),
+        discord: !!instanceString("discordBridge.usernameTemplate"),
+        patreon: snap?.self?.["patreon.webhookSecret"]?.display != null,
+      });
+    },
     // The forums' most active threads, through the same reader (and the same
     // 60s per-room cache) the Forums tab reads; votes are not shown here.
     threads: () => forumReader.rooms()

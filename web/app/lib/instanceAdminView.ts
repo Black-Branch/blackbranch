@@ -52,11 +52,11 @@ export type InstanceView = {
    *  the Modules card then offers a Restart button. */
   canRestart?: boolean;
   /** A bundle install: its host renders the homeserver (the request folder exists — the same fact
-   *  as canRestart). Not one: the homeserver's settings are managed outside Blackbranch. */
+   *  as canRestart). Not one: the homeserver's settings are managed outside Black Branch. */
   bundle?: boolean;
   /** The host's last answer to a render (a bundle only; null = none yet). */
   render?: HostResult | null;
-  /** This build carries the owner plugin: cards marked ownerOnly (adminLayout.ts) are shown. */
+  /** This build carries a site plugin: cards marked ownerOnly (adminLayout.ts) are shown. */
   ownerPlugin?: boolean;
 };
 

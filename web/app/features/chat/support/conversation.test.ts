@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openState, pickOption, userText, deskSays } from "./conversation.ts";
-import { SUPPORT_ROOT, linkNudgeOptions, NUDGE_LATER_KEY } from "../../../lib/support/flows.ts";
+import { SUPPORT_ROOT, linkNudgeOptions, NUDGE_LATER_KEY, setSupportFacts } from "../../../lib/support/flows.ts";
+
+// An install that runs everything, AI help desk included — the reducer's own behaviour is the
+// subject here; what each install offers is flows.test.ts's.
+setSupportFacts({ off: [], purchasable: true, subscriptions: true, tts: true, freeText: true });
 
 // The pure conversation reducer — the hook is a thin fetch wrapper around
 // these. Everything here is synchronous and side-effect free on purpose: the

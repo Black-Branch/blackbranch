@@ -1,5 +1,5 @@
 // webhooks.js + money.js /alert: WHEN each provider is acknowledged and WHEN its replay guard
-// remembers an event, relative to the ledger's answer (review round 4, L1 criterion 2).
+// remembers an event, relative to the ledger's answer.
 // alert.dispatch holds until the ledger answers, so "dispatch resolved" is "the ledger answered".
 //   • Ko-fi / Patreon: the 200 goes out only after dispatch resolved; a throw answers 500 (they
 //     redeliver a non-2xx) and the id is NOT remembered, so the redelivery runs again.
@@ -168,7 +168,7 @@ test('/alert: a dispatch that throws is not remembered — the producer\'s retry
   assert.equal(calls, 2);
 });
 
-// ── Ko-fi purchases (owner decision): celebrated, never credited ──────────────
+// ── Ko-fi purchases: celebrated, never credited ───────────────────────────────
 
 test('Ko-fi Shop Order and Commission are dispatched as purchases with a take-home of 0', async () => {
   const seen = [];

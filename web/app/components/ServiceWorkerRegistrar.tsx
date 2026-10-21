@@ -4,8 +4,8 @@ import { useEffect } from "react";
 
 // Registers `public/sw.js` on EVERY route.
 //
-// This used to live inside `usePwaInstall()`, which meant the worker only
-// registered where that hook mounted — the handful of route-scoped nudges in
+// It does not live inside `usePwaInstall()`: there the worker would only
+// register where that hook mounted — the handful of route-scoped nudges in
 // `app/(main)/layout.tsx`. So `/chat`, `/popout`, `/about`, `/legal`
 // and `/billing` ran with no service worker at all: no emote cache, and no
 // `navigate` fetch handler, which is what Chromium requires before it will fire

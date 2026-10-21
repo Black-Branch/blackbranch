@@ -1,0 +1,88 @@
+<!doctype html>
+<!-- Support meter overlay — OBS browser source, 1920×1080 (add http://<stream-api host>:3001/overlay/meter).
+     For an install running the support meter module: one track at the bottom that says how support
+     compares with what streaming costs. Its frame, on the public WS:
+       meterState { pace, tonight, staleSec } — pace and tonight are RATIOS on a 0..2 scale, where 1 is
+       break-even (support covers the cost); null = not known yet. The triangle is the pace (recent
+       days), the dot is tonight. staleSec is how old the numbers are: past two hours the meter dims.
+     The meter sends nothing while its module is off, and this page then shows an empty track. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Support meter</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; }
+  * { box-sizing: border-box; }
+  #meter {
+    position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%);
+    width: 640px; max-width: calc(100vw - 32px); height: 44px;
+    font-family: "Segoe UI", system-ui, sans-serif; color: #fff;
+    transition: opacity 600ms ease, filter 600ms ease;
+  }
+  #meter.stale { opacity: 0.55; filter: saturate(0.15); }
+  #track {
+    position: absolute; left: 0; right: 0; top: 18px; height: 8px; border-radius: 4px;
+    background: linear-gradient(90deg, rgba(232, 112, 104, 0.85), rgba(222, 186, 96, 0.85) 50%, rgba(110, 196, 150, 0.85));
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  #even { position: absolute; left: 50%; top: 10px; width: 2px; height: 24px; margin-left: -1px; background: rgba(255, 255, 255, 0.7); }
+  .marker { position: absolute; top: 0; left: 0; transition: transform 700ms cubic-bezier(.3, 1.4, .6, 1), opacity 400ms ease; }
+  #pace { top: 2px; width: 0; height: 0; margin-left: -8px; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 12px solid #fff; }
+  #tonight { top: 15px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: #fff; box-shadow: 0 0 10px rgba(255, 255, 255, 0.7); }
+  .hidden { opacity: 0; }
+</style>
+</head>
+<body>
+<div id="meter">
+  <div id="track"></div>
+  <div id="even"></div>
+  <div id="pace" class="marker hidden"></div>
+  <div id="tonight" class="marker hidden"></div>
+</div>
+<script>
+(function () {
+  var meter = document.getElementById('meter');
+  var pace = document.getElementById('pace');
+  var tonight = document.getElementById('tonight');
+
+  var STALE_SEC = 7200;
+
+  // A ratio (0..2, 1 = break-even) as a share of the track; null stays null.
+  function share(v) {
+    if (v == null) return null;
+    var n = Number(v);
+    if (!isFinite(n)) return null;
+    return Math.min(Math.max(n, 0), 2) / 2;
+  }
+
+  function place(el, s) {
+    if (s == null) { el.className = 'marker hidden'; return; }
+    el.className = 'marker';
+    el.style.transform = 'translateX(' + Math.round(s * meter.offsetWidth) + 'px)';
+  }
+
+  function onMeterState(f) {
+    var p = share(f.pace);
+    var t = share(f.tonight);
+    place(pace, p);
+    // Tonight means nothing without a pace to compare it with (an unconfigured meter).
+    place(tonight, p == null ? null : t);
+    var stale = Number(f.staleSec);
+    meter.className = isFinite(stale) && stale > STALE_SEC ? 'stale' : '';
+  }
+
+  function connect() {
+    var ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+    ws.onmessage = function (ev) {
+      var f; try { f = JSON.parse(ev.data); } catch (e) { return; }
+      if (f && f.type === 'meterState') onMeterState(f);
+    };
+    ws.onclose = function () { setTimeout(connect, 3000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) { /* noop */ } };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

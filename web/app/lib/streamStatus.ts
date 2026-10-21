@@ -10,10 +10,12 @@ import { createTtlCache } from "./ttlCache";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { instanceString } from "./instanceConfigServer.ts";
 import { decodeHtmlEntities } from "@/app/lib/htmlEntities";
+import { twitchLiveLogins } from "./twitchLive.ts";
 
 export type CommunityStatus = {
   display_name: string;
-  youtube_channel_id: string;
+  /** null for an entry featured from Twitch alone. */
+  youtube_channel_id: string | null;
   /** The live video id when the scrape found one. Not embedded by the client
       directly: it is the `id` of the YouTube entry in `sources`, and that is
       what the player embeds — a video id, never the live_stream?channel= form,
@@ -30,7 +32,8 @@ export type CommunityStatus = {
   /** Video sources the viewer can switch between (like the main-stream
       sp/yt/tw dots), built from the platforms this streamer carries with their
       per-platform flag on. `id` is the platform handle / video id the embed
-      needs. Always includes at least the live YouTube source. */
+      needs. Always includes at least the live source (YouTube's, or Twitch's
+      for an entry live on Twitch only). */
   sources: { platform: "youtube" | "twitch"; id: string }[];
 };
 
@@ -56,7 +59,7 @@ export type StreamStatus = {
 // 45s: not remembering it at all meant one hung channel page was re-fetched on
 // every 5s status miss — and, the loader being single-flight, every caller
 // waited on it. Each entry carries its own TTL so one lookup serves both.
-const ytCache = new Map<string, { live: boolean; title: string; videoId: string | null; ts: number; ttlMs: number }>();
+const ytCache = new Map<string, { live: boolean; title: string; videoId: string | null; avatar: string | null; ts: number; ttlMs: number }>();
 const YT_CACHE_MS = 5 * 60 * 1000;
 const YT_FAIL_CACHE_MS = 45 * 1000;
 // Deadline on the scrape and the avatar lookup. This loader sits under
@@ -70,6 +73,22 @@ const YT_FETCH_TIMEOUT_MS = 7_000;
 const avatarCache = new Map<string, { url: string | null; ts: number; ttlMs: number }>();
 const AVATAR_CACHE_MS = 24 * 60 * 60 * 1000;
 const AVATAR_FAIL_CACHE_MS = 5 * 60 * 1000;
+
+/** The channel's avatar from a live watch page's own data (`videoOwnerRenderer`'s thumbnail) —
+ *  quota-free, so a featured streamer shows a face on an install with no YouTube API key.
+ *  Only a YouTube image host over https; anything else is null. Pure.
+ *  @test-only exported for communityAvatar.test.ts; checkYouTubeLive in this file is its runtime caller. */
+export function avatarFromLivePage(html: string): string | null {
+  const m = /"videoOwnerRenderer":\{"thumbnail":\{"thumbnails":\[\{"url":"([^"]+)"/.exec(html);
+  if (!m?.[1]) return null;
+  try {
+    const u = new URL(m[1].replace(/\\u0026/g, "&"));
+    if (u.protocol !== "https:" || !/(^|\.)(ggpht\.com|googleusercontent\.com)$/.test(u.hostname)) return null;
+    return u.href;
+  } catch {
+    return null;
+  }
+}
 
 // Live check via the channel's public /live page — zero API quota. The old
 // search.list call cost 100 units each against a 100-queries/DAY limit, so
@@ -97,7 +116,9 @@ async function checkYouTubeLive(channelId: string) {
     const live = html.includes('"isLive":true');
     let title = "";
     let videoId: string | null = null;
+    let avatar: string | null = null;
     if (live) {
+      avatar = avatarFromLivePage(html);
       const m =
         /<meta name="title" content="([^"]*)"/.exec(html) ??
         /<title>([^<]*)<\/title>/.exec(html);
@@ -109,12 +130,12 @@ async function checkYouTubeLive(channelId: string) {
         null;
     }
 
-    const r = { live, title, videoId, ts: Date.now(), ttlMs: YT_CACHE_MS };
+    const r = { live, title, videoId, avatar, ts: Date.now(), ttlMs: YT_CACHE_MS };
     ytCache.set(channelId, r);
     return r;
   } catch {
     // Remembered briefly (see YT_FAIL_CACHE_MS) — the next scan after that retries.
-    const r = { live: false, title: "", videoId: null, ts: Date.now(), ttlMs: YT_FAIL_CACHE_MS };
+    const r = { live: false, title: "", videoId: null, avatar: null, ts: Date.now(), ttlMs: YT_FAIL_CACHE_MS };
     ytCache.set(channelId, r);
     return r;
   }
@@ -184,7 +205,7 @@ async function loadStreamStatus(): Promise<{ data: StreamStatus; cacheable: bool
 
     const { rows } = await pool.query<{
       display_name: string;
-      youtube_channel_id: string;
+      youtube_channel_id: string | null;
       twitch_login: string | null;
       ingest_enabled: boolean;
       ingest_twitch: boolean;
@@ -193,21 +214,41 @@ async function loadStreamStatus(): Promise<{ data: StreamStatus; cacheable: bool
       `SELECT display_name, youtube_channel_id, twitch_login,
               ingest_enabled, ingest_twitch, ingest_youtube
        FROM site.community_embeds
-       WHERE youtube_channel_id IS NOT NULL
+       WHERE youtube_channel_id IS NOT NULL OR twitch_login IS NOT NULL
        ORDER BY priority ASC`
     );
 
     // Every channel is checked at once: the scan's latency is the slowest
     // scrape, not the sum of them all. Priority order still decides — the first
     // LIVE row in the list wins.
-    const checks = await Promise.all(rows.map((row) => checkYouTubeLive(row.youtube_channel_id)));
+    // Each entry's Twitch login is asked too, in one Helix call for all of them: it features an
+    // entry with no YouTube channel, or one live on Twitch while its YouTube is not.
+    const [checks, onTwitch] = await Promise.all([
+      Promise.all(rows.map((row) => (row.youtube_channel_id ? checkYouTubeLive(row.youtube_channel_id) : null))),
+      twitchLiveLogins(rows.flatMap((r) => (r.twitch_login ? [r.twitch_login] : []))),
+    ]);
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
-      const check = checks[i]!;
-      if (check.live) {
-        const avatar_url = apiKey
-          ? await getChannelAvatar(row.youtube_channel_id, apiKey)
-          : null;
+      const check = checks[i];
+      const twitch = row.twitch_login ? onTwitch.get(row.twitch_login.toLowerCase()) : undefined;
+      if (!check?.live && twitch && row.twitch_login) {
+        return { cacheable: true, data: {
+          live: false,
+          community: {
+            display_name:       row.display_name,
+            youtube_channel_id: row.youtube_channel_id,
+            video_id:           null,
+            stream_title:       twitch.title,
+            avatar_url:         twitch.avatar,
+            twitch_login:       row.twitch_login,
+            sources: [{ platform: "twitch", id: row.twitch_login }],
+          },
+        } };
+      }
+      if (check?.live && row.youtube_channel_id) {
+        // The API's avatar when there is a key and it answers; else the one on the live page
+        // (with no key a featured streamer would show no face at all).
+        const avatar_url = (apiKey ? await getChannelAvatar(row.youtube_channel_id, apiKey) : null) ?? check.avatar;
         // Video sources: per-platform flag + handle.
         // The handles below are ungated now: they exist so an outbound cross-post
         // can reach the featured streamer's channel, which has nothing to do with

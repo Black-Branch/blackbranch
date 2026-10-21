@@ -1,0 +1,73 @@
+<!doctype html>
+<!-- Support reminder overlay — OBS browser source, 1920×1080 (add http://<stream-api host>:3001/overlay/bubble).
+     While the stream is live, stream-api sends a showSupportBubble frame on the public WS every
+     SUPPORT_REMINDER_MIN minutes (25 by default; lifecycle.js). Each one shows a short "support the
+     stream" bubble for a few seconds, a different line each time. Nothing else drives it. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Support reminder</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; }
+  * { box-sizing: border-box; }
+  #bubble {
+    position: absolute; right: 40px; bottom: 120px;
+    max-width: 440px; padding: 14px 18px;
+    border-radius: 16px 16px 4px 16px;
+    background: rgba(12, 12, 16, 0.88); border: 1px solid rgba(165, 200, 247, 0.45);
+    font-family: "Segoe UI", system-ui, sans-serif; color: #fff;
+    font-size: 19px; font-weight: 600; line-height: 1.3;
+    display: none;
+  }
+  #bubble.show { display: block; animation: rise 320ms cubic-bezier(.2, 1.3, .4, 1); }
+  #bubble.hide { display: block; animation: sink 300ms ease-in forwards; }
+  @keyframes rise { from { opacity: 0; transform: translateY(16px) scale(.95); } to { opacity: 1; transform: none; } }
+  @keyframes sink { to { opacity: 0; transform: translateY(10px); } }
+</style>
+</head>
+<body>
+<div id="bubble"></div>
+<script>
+(function () {
+  var bubble = document.getElementById('bubble');
+
+  var HOLD_MS = 12000;
+  var FADE_MS = 300;
+  var LINES = [
+    'Enjoying the stream? Supporting it keeps it going.',
+    'Every bit of support helps the stream run longer.',
+    'This stream runs on community support. Thank you!',
+    'Want more of this? Support the stream.',
+  ];
+
+  var next = 0;
+  var hideTimer = null;
+
+  function show() {
+    if (hideTimer) clearTimeout(hideTimer);
+    bubble.textContent = LINES[next % LINES.length];
+    next++;
+    bubble.className = '';
+    void bubble.offsetWidth; // restart the animation for a frame that lands while one is showing
+    bubble.className = 'show';
+    hideTimer = setTimeout(function () {
+      bubble.className = 'hide';
+      hideTimer = setTimeout(function () { bubble.className = ''; hideTimer = null; }, FADE_MS);
+    }, HOLD_MS);
+  }
+
+  function connect() {
+    var ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+    ws.onmessage = function (ev) {
+      var f; try { f = JSON.parse(ev.data); } catch (e) { return; }
+      if (f && f.type === 'showSupportBubble') show();
+    };
+    ws.onclose = function () { setTimeout(connect, 3000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) { /* noop */ } };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

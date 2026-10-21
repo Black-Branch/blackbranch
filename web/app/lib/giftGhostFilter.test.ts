@@ -21,6 +21,7 @@ import { Client } from "pg";
 import { stripComments } from "./testSource.ts";
 import { isDiscordGhost, discordGhostPattern } from "./discordSender.ts";
 import { staffMatrixIds } from "./staff.ts";
+import { columnEntitledSql } from "./subscriptions/entitlement.ts";
 
 // The staff accounts are CONFIGURED (instance keys streamer.matrixId + bot.matrixId) — the
 // test says which two they are.
@@ -67,7 +68,9 @@ function sqlStartingWith(head: string): string {
   const at = src.indexOf("`" + head);
   assert.ok(at > 0, `no query starting "${head}" in giftServer.ts — the extractor is blind`);
   const end = src.indexOf("`", at + 1);
-  const body = src.slice(at + 1, end);
+  // The one interpolation these use: the records' entitlement fragment (community recipients skip
+  // anyone already a Supporter), expanded exactly as the runtime builds it.
+  const body = src.slice(at + 1, end).replace('${columnEntitledSql("u.matrix_id", "$5")}', () => columnEntitledSql("u.matrix_id", "$5"));
   assert.ok(!body.includes("${"), "this query interpolates — the extractor would mis-read it");
   // Template-literal cooking for the only escapes these use: `\\` → `\`.
   assert.ok(!/\\[nrtux0-9]/.test(body), "an escape this cooker does not handle");
@@ -103,7 +106,7 @@ test("against real Postgres: both recipient queries drop ghosts and staff, keep 
     assert.ok(sugIds.includes(PERSON), "a person must be suggested");
     assert.ok(!sugIds.includes(GHOST), "a ghost must not be suggested");
 
-    const com = await db.query<{ matrix_id: string }>(communitySql, [null, 50, [...STAFF_MATRIX_IDS], PATTERN]);
+    const com = await db.query<{ matrix_id: string }>(communitySql, [null, 50, [...STAFF_MATRIX_IDS], PATTERN, ["stripe", "paypal"]]);
     const comIds = com.rows.map((r) => r.matrix_id);
     assert.ok(comIds.includes(PERSON), "a person must be eligible");
     assert.ok(!comIds.includes(GHOST), "a ghost must never be picked");
@@ -111,7 +114,7 @@ test("against real Postgres: both recipient queries drop ghosts and staff, keep 
 
     // Module OFF binds NULL — and `matrix_id !~ NULL` is NULL, which would drop EVERY row
     // (the NOT-IN trap). The IS NULL arm must keep people eligible.
-    const off = await db.query<{ matrix_id: string }>(communitySql, [null, 50, [...STAFF_MATRIX_IDS], null]);
+    const off = await db.query<{ matrix_id: string }>(communitySql, [null, 50, [...STAFF_MATRIX_IDS], null, ["stripe", "paypal"]]);
     assert.ok(off.rows.map((r) => r.matrix_id).includes(PERSON), "module off must not exclude everyone");
     const offSug = await db.query<{ matrix_id: string }>(suggestSql, [like, null, null]);
     assert.ok(offSug.rows.map((r) => r.matrix_id).includes(PERSON), "module off must not exclude everyone (suggest)");

@@ -6,10 +6,13 @@
 // message that mentions its name (`bot.name`, "Bot" unset), and never itself: lines from
 // `bot.matrixId`, from `chat.botUsernames`, or from the Twitch account it speaks as.
 //
-// SPEAKING follows the linked bot accounts: a site message is answered on the site
-// when `bot.matrixId` is set; a Twitch message on Twitch when the home Twitch connection is
-// signed in as the bot account. Anything else is skipped silently and counted. Every reply first
-// passes the word filter and link gate a person's message meets (stream-api /chat/screen).
+// SPEAKING follows the linked bot accounts: a Twitch message is answered on Twitch when the home
+// Twitch connection is signed in as the bot account; every other mention — the site's own, and
+// Kick, YouTube and stream.place, where this process has no account to speak as — is answered in
+// SITE chat, as the bot's own site account (`bot.matrixId`), @-addressed to the person and quoting
+// their line, so the setting "the bot answers mentions" holds on every platform. Only with no
+// `bot.matrixId` is a mention skipped and counted. Every reply first passes the word filter and link gate a person's message meets
+// (stream-api /chat/screen).
 //
 // THINKING: the behavior file + recent chat (+ remembered lines when memory is on), on the
 // `bot.reply` task. One reply in flight, 20 s per person, 6 a minute overall.
@@ -99,7 +102,7 @@ export function createBot({
     }
   }
 
-  async function reply(f) {
+  async function reply(f, where) {
     const parsed = parseBotBehavior(cfg.content('bot.behavior'));
     if (!parsed.ok) log.warn(`[bot] the stored behavior file does not parse (${parsed.error}) — using the default`);
     const behavior = parsed.ok ? parsed.value : parseBotBehavior(null).value;
@@ -111,10 +114,13 @@ export function createBot({
       trigger: { username: f.username, platform: f.platform, message: f.message },
     });
     const out = await wrapper.chat(SLOT, { system, messages: [{ role: 'user', content: user }] });
-    const platform = f.platform === 'twitch' ? 'twitch' : 'site';
+    const platform = where;
     let text = fitReply(out.text, REPLY_LIMIT[platform]);
     if (!text) return 'empty';
     if (platform === 'twitch') text = fitReply(`@${f.username} ${text}`, REPLY_LIMIT.twitch + 30);
+    // A platform viewer answered on the site is addressed by name: they may be reading the site's
+    // chat beside their own, and the reply must say whom it is for.
+    else if (!isNativePlatform(f.platform)) text = fitReply(`@${f.username} ${text}`, REPLY_LIMIT.site + 30);
     const verdict = await api.screenText(text);
     if (!verdict || verdict.ok !== true) {
       counts.screened++;
@@ -125,8 +131,14 @@ export function createBot({
       await twitch().sendMessage(text);
     } else {
       const payload = { matrixId: cfg.get('bot.matrixId'), username: name(), message: text };
-      if (typeof f.id === 'number' || /^\d+$/.test(String(f.id))) {
+      if (isNativePlatform(f.platform) && (typeof f.id === 'number' || /^\d+$/.test(String(f.id)))) {
         payload.reply_to_id = Number(f.id);
+        payload.reply_to_username = f.username;
+        payload.reply_to_text = String(f.message).slice(0, 100);
+      } else if (!isNativePlatform(f.platform)) {
+        // A platform line's frame id is its chat_log row, not a site message: a reply_to_id would
+        // point a site reply at whichever site message happens to share the number. The quote is
+        // carried by name and text alone, as a platform reply whose parent is not found is.
         payload.reply_to_username = f.username;
         payload.reply_to_text = String(f.message).slice(0, 100);
       }
@@ -139,7 +151,8 @@ export function createBot({
   /** A message frame that may be for the bot. Resolves what happened (tests read it). */
   async function consider(f) {
     if (!replying || isOwn(f) || !ringWorthy(f) || !mentions(f.message, name())) return 'ignored';
-    const where = isNativePlatform(f.platform) ? (speakOn().site ? 'site' : null) : f.platform === 'twitch' ? speakOn().twitch : null;
+    const can = speakOn();
+    const where = f.platform === 'twitch' && can.twitch ? 'twitch' : can.site ? 'site' : null;
     if (!where) { counts.skippedUnlinked++; return 'skipped_unlinked'; }
     const t = now();
     const person = `${f.platform}:${String(f.username).toLowerCase()}`;
@@ -149,7 +162,7 @@ export function createBot({
     lastByPerson.set(person, t);
     recentReplies.push(t);
     try {
-      return await reply(f);
+      return await reply(f, where);
     } catch (e) {
       counts.failed++;
       log.warn(`[bot] reply failed: ${e.code || e.message}`);

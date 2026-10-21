@@ -7,7 +7,7 @@ import { legacyNativePlatform } from "./nativePlatform.ts";
 // app/layout.tsx runs carryLegacyStorageScript() before anything reads storage, so no reader needs
 // to know an old name, and a fresh install (no old id) runs nothing at all.
 //
-// Only the names below move. Anything else under the old prefix (an owner plugin's own keys) is
+// Only the names below move. Anything else under the old prefix (a site plugin's own keys) is
 // left exactly where it is.
 
 /** The product's storage names that had an old-id form, without the `bb_` prefix. A stem ending in

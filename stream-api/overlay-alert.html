@@ -1,0 +1,152 @@
+<!doctype html>
+<!-- Alert overlay — OBS browser source, 1920×1080 (add http://<stream-api host>:3001/overlay/alert).
+     Transparent; idle until a showAlert frame arrives on the public WS (alert.js buildShowAlert:
+     a donation, a subscription, a gift, a follow — from any platform or payment service). Alerts
+     queue and show one at a time: the person, what they did, the amount, their message. The hold
+     grows with the message, so a long message stays up long enough to read.
+     Every value from the socket is written as text; a picture is loaded only from an https: address. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Alert</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; }
+  * { box-sizing: border-box; }
+  #stage { position: absolute; left: 0; right: 0; top: 64px; display: flex; justify-content: center; }
+  #card {
+    display: none;
+    width: 560px; max-width: calc(100vw - 32px);
+    padding: 16px 18px;
+    border-radius: 16px;
+    background: rgba(12, 12, 16, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: #fff;
+  }
+  #card.show { display: block; animation: pop-in 300ms cubic-bezier(.2, 1.3, .4, 1); }
+  #card.hide { animation: pop-out 380ms ease-in forwards; }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(-14px) scale(.96); } to { opacity: 1; transform: none; } }
+  @keyframes pop-out { to { opacity: 0; transform: translateY(-10px); } }
+  .main { display: flex; align-items: center; gap: 12px; }
+  #pfp {
+    flex: none; width: 46px; height: 46px; border-radius: 50%; overflow: hidden;
+    background: rgba(165, 200, 247, 0.22); color: #a5c8f7;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 20px;
+  }
+  #pfp img { width: 100%; height: 100%; object-fit: cover; }
+  .text { flex: 1; min-width: 0; line-height: 1.25; }
+  #who { font-size: 20px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #what { font-size: 15px; color: #c7cbd3; }
+  #amount { flex: none; font-size: 22px; font-weight: 800; color: #a5c8f7; font-variant-numeric: tabular-nums; }
+  #recipient { margin-top: 6px; font-size: 14px; color: #c7cbd3; }
+  #message {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 17px; line-height: 1.35; overflow-wrap: anywhere;
+  }
+  .empty { display: none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="card">
+    <div class="main">
+      <div id="pfp"></div>
+      <div class="text">
+        <div id="who"></div>
+        <div id="what"></div>
+      </div>
+      <div id="amount"></div>
+    </div>
+    <div id="recipient"></div>
+    <div id="message"></div>
+  </div>
+</div>
+<script>
+(function () {
+  var card = document.getElementById('card');
+  var pfp = document.getElementById('pfp');
+  var who = document.getElementById('who');
+  var what = document.getElementById('what');
+  var amount = document.getElementById('amount');
+  var recipient = document.getElementById('recipient');
+  var message = document.getElementById('message');
+
+  var BASE_HOLD_MS = 7000;   // with no message
+  var CHAR_HOLD_MS = 70;     // more per message character
+  var MAX_HOLD_MS = 16000;
+  var FADE_MS = 380;
+  var MAX_QUEUE = 30;        // a burst of gifts queues; an endless backlog does not
+
+  var queue = [];
+  var busy = false;
+
+  function text(v) { return v == null ? '' : String(v); }
+
+  // The picture comes off the public socket, so only an https: address is loaded.
+  function httpsUrl(raw) {
+    try {
+      var u = new URL(String(raw));
+      return u.protocol === 'https:' ? u.href : null;
+    } catch (e) { return null; }
+  }
+
+  function setLine(el, value) {
+    el.textContent = value;
+    el.className = value ? '' : 'empty';
+  }
+
+  function render(a) {
+    var name = text(a.username).replace(/^@/, '') || 'Someone';
+    who.textContent = name;
+    what.textContent = text(a.label);
+    setLine(amount, text(a.amount));
+    setLine(recipient, a.recipient ? 'to ' + text(a.recipient) : '');
+    setLine(message, text(a.message));
+    pfp.textContent = '';
+    var src = a.userImage && httpsUrl(a.userImage);
+    if (src) {
+      var img = document.createElement('img');
+      img.alt = '';
+      img.addEventListener('error', function () { pfp.textContent = name.charAt(0).toUpperCase(); });
+      img.src = src;
+      pfp.appendChild(img);
+    } else {
+      pfp.textContent = name.charAt(0).toUpperCase();
+    }
+  }
+
+  function playNext() {
+    var a = queue.shift();
+    if (!a) { busy = false; return; }
+    busy = true;
+    render(a);
+    card.className = 'show';
+    var hold = Math.min(BASE_HOLD_MS + text(a.message).length * CHAR_HOLD_MS, MAX_HOLD_MS);
+    setTimeout(function () {
+      card.className = 'show hide';
+      setTimeout(function () { card.className = ''; playNext(); }, FADE_MS);
+    }, hold);
+  }
+
+  function enqueue(f) {
+    if (queue.length >= MAX_QUEUE) return;
+    queue.push(f);
+    if (!busy) playNext();
+  }
+
+  function connect() {
+    var ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+    ws.onmessage = function (ev) {
+      var f; try { f = JSON.parse(ev.data); } catch (e) { return; }
+      if (f && f.type === 'showAlert') enqueue(f);
+    };
+    ws.onclose = function () { setTimeout(connect, 3000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) { /* noop */ } };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

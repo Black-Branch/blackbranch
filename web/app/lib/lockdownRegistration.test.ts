@@ -97,7 +97,7 @@ test("an admin's change during the lockdown is theirs: lifting it never undoes i
   assert.deepEqual(i.calls, []);
 });
 
-test("not a bundle install: managed outside Blackbranch — no request, nothing read", async () => {
+test("not a bundle install: managed outside Black Branch — no request, nothing read", async () => {
   const i = install({ locked: true, registration: "open", by: null, before: null }, false);
   let read = false;
   const deps = { ...i.deps, read: async () => { read = true; return i.f; } };

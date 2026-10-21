@@ -175,10 +175,9 @@ function _resetNotifyState() {
 
 // ── The relay for the OTHER process ──────────────────────────────────────────
 //
-// stream-ingest has no notifier of its own, so until now it had
-// no way to reach a human at all — which is why the impressions outage ran for
-// 12 days behind a console.warn in that process. It could have been given its own
-// token and its own copy of this module. It deliberately was not:
+// stream-ingest has no notifier of its own; without this relay it has no way to
+// reach a human at all, and an outage there sits behind a console.warn. It is
+// deliberately not given its own token and its own copy of this module:
 //
 //   • ONE rate limiter. Two independent cooldowns cannot batch each other's
 //     bursts, and the cooldown here is load-bearing rather than polite. Two

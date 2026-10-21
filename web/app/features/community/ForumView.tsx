@@ -88,7 +88,7 @@ export function ForumView({
   const didInitLoad = useRef(false);
   // The header collapses to icons based on the forum pane's OWN width, not the
   // global panel mode — in 2/3-panel layouts the pane can be narrow while the
-  // panel is wide, which used to overflow the New Post button into the thread.
+  // panel is wide, which would overflow the New Post button into the thread.
   const [paneRef, paneWidth] = useContainerWidth();
   const tight = compact || (paneWidth > 0 && paneWidth < 560);
 

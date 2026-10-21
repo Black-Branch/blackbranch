@@ -3,6 +3,7 @@ import { requireUser } from "@/app/lib/authGuard";
 import { supportBranding, SAVED_PM_OPTIONS, CUSTOMER_UPDATE } from "@/app/lib/billingServer";
 import { ensureStripeCustomerOrBusy } from "@/app/lib/stripeCustomer";
 import { PAY_MIN_CENTS, PAY_MAX_CENTS } from "@/app/lib/coins";
+import { SITE_CURRENCY } from "@/app/lib/moneyFormat";
 import { currencyLabel, currencyName } from "@/app/lib/currency";
 import { instanceBool } from "@/app/lib/instanceConfigServer";
 import { siteName } from "@/app/lib/siteName";
@@ -65,7 +66,7 @@ export async function POST(req: NextRequest) {
       {
         quantity: 1,
         price_data: {
-          currency: "usd",
+          currency: SITE_CURRENCY,
           unit_amount: cents,
           product_data: { name: `${currencyLabel(cents)} — ${siteName()}` },
         },

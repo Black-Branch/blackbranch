@@ -19,7 +19,7 @@ import { type CardPage } from "@/app/lib/cardStack";
 import { currentAvatarVersion, bumpAvatarVersion, patchProfileCardMe } from "@/app/lib/profileCardPrefetch";
 
 // THE account card: one card with internal navigation. The profile card, chat
-// appearance, support and the Qorm store are pages in one shell, with one
+// appearance, support and the points store are pages in one shell, with one
 // persisted geometry and a `‹` in the header — move the card once and
 // everything is there. (The mod panel is its own tool Window, not a page — see
 // ModWindow.)

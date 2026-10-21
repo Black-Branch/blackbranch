@@ -22,6 +22,8 @@ test("every widget's loader is wired through the shared readers, never a second 
   assert.match(src, /vods: \(\) => getVods\(\)\.then\(\(v\) => v\.slice\(0, 3\)\)/);
   assert.match(src, /threads: \(\) => forumReader\.rooms\(\)/);
   assert.match(src, /, 4\)\),\s*\}\);/, "threads capped at 4");
+  // The sign-in logos (the Home tab): the set-up platforms, Patreon's secret read from stream-api's snapshot.
+  assert.match(src, /platforms: async \(\) => \{[\s\S]{0,400}homePlatforms\(\{[\s\S]{0,300}patreon: snap\?\.self\?\.\["patreon\.webhookSecret"\]\?\.display != null/);
 });
 
 test("the Leaderboard's part comes from boards.ts's own caches, awaited only inside its settled loader", () => {

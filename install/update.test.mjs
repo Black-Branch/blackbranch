@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { compareVersions, decide, manifestProblems, openFeed, pinProblems, pinWebImage, publicKeyString, signFeed, IMAGE_NAMES } from "./update/release.mjs";
+import { DOCTOR } from "../config/doctor.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
@@ -400,6 +401,10 @@ case "$*" in
   *"SHOW server_version_num"*) echo "\${FAKE_PG:-180006}" ;;
   "compose exec -T postgres psql"*) cat >/dev/null; for a in "$@"; do case "$a" in k=*) key="\${a#k=}" ;; esac; done; cat "$FAKE/cfg/$key" 2>/dev/null; exit 0 ;;
   "compose exec -T stream-api node"*) cat "$FAKE/live" 2>/dev/null || printf offline ;;
+  # stream-ingest's readers (GET /health, as blackbranch's snippet prints them): fake/readers holds one
+  # answer per line, each ask takes the next and the last one stays. No file: it does not answer.
+  "compose exec -T stream-ingest node"*) f="$FAKE/readers"; [ -s "$f" ] || exit 0; echo x >> "$FAKE/readers-asked"; head -n 1 "$f"
+    if [ "$(wc -l < "$f")" -gt 1 ]; then tail -n +2 "$f" > "$f.n" && mv "$f.n" "$f"; fi ;;
   "compose run --rm --no-deps -T -e BK_TARGET"*)
     # A backup that never ends (the update is stopped meanwhile): it says it started, then waits.
     if [ -f "$FAKE/backup-hang" ]; then echo $$ > "$FAKE/hang.pid"; exec sleep 60 </dev/null >/dev/null 2>&1; fi
@@ -416,7 +421,7 @@ echo "systemctl $*" >> "$FAKE/calls"
 `;
 
 // A box on release `from`, its feed served from `feedDir` over HTTP; returns helpers.
-async function box({ from = "1.1.0", envExtra = "" } = {}) {
+async function box({ from = "1.1.0", envExtra = "", tls = null } = {}) {
   const home = mkdtempSync(path.join(tmpdir(), "bb-upd-"));
   const fake = path.join(home, "fake"), feedDir = path.join(home, "feed");
   for (const d of ["fake/bin", "fake/cfg", "feed", "results", "state", "releases", "bin", "systemd", "matrix"]) mkdirSync(path.join(home, d), { recursive: true });
@@ -442,6 +447,7 @@ async function box({ from = "1.1.0", envExtra = "" } = {}) {
     .replace(/^BB_HOME=.*$/m, `BB_HOME=${home}`).replace(/^COMPOSE_FILE=.*$/m, `COMPOSE_FILE=${home}/compose.yaml`)
     .replace(/^BB_RELEASE=.*$/m, `BB_RELEASE=${from}`).replace(/^BB_RELEASE_KEY=.*$/m, `BB_RELEASE_KEY=${KEY.pub}`)
     .replace(/^BB_UPDATE_FEED=.*$/m, `BB_UPDATE_FEED=http://127.0.0.1:${port}`);
+  if (tls) env = env.replace(/^BB_TLS_MODE=.*$/m, `BB_TLS_MODE=${tls}`).replace(/^COMPOSE_PROFILES=.*$/m, "COMPOSE_PROFILES=");
   env += envExtra;
   writeFileSync(path.join(home, ".env"), env, { mode: 0o600 });
   writeFileSync(path.join(home, "matrix/mas-keys.yaml"), "  keys: []\n", { mode: 0o600 });
@@ -994,12 +1000,18 @@ test("a dashboard tunnel's token never rides on the command line: read from a fi
     // No token given: kept.
     r = await install();
     assert.equal(r.status, 0, r.stderr); assert.equal(envOf(), before);
-    // A box whose tunnel was made by signing in (no token in .env): a token is not swapped in.
+    // A box whose tunnel was made by signing in (no token in .env) — R1.6: after a move whose old
+    // tunnel was deleted this was a dead end, refused. Now the dashboard tunnel takes over: the token
+    // is written, and the signed-in tunnel's config is set aside so the token's is written instead.
     writeFileSync(path.join(fresh, ".env"), before.replace(/^CLOUDFLARE_TUNNEL_TOKEN=.*$/m, "CLOUDFLARE_TUNNEL_TOKEN="), { mode: 0o600 });
+    mkdirSync(path.join(fresh, "cloudflared"), { recursive: true });
+    writeFileSync(path.join(fresh, "cloudflared/config.yml"), "tunnel: 11111111-2222-3333-4444-555555555555\ncredentials-file: /etc/cloudflared/11111111-2222-3333-4444-555555555555.json\n");
     r = await install("--tunnel-token-file", file);
-    assert.notEqual(r.status, 0);
-    assert.match(r.stderr, /this box's tunnel was made by signing in to Cloudflare, not from a token/);
-    assert.match(envOf(), /^CLOUDFLARE_TUNNEL_TOKEN=$/m);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(envOf(), new RegExp(`^CLOUDFLARE_TUNNEL_TOKEN=${token2}$`, "m"));
+    assert.match(r.stdout, /the tunnel made by signing in is replaced by the dashboard tunnel whose token you gave/);
+    assert.ok(!existsSync(path.join(fresh, "cloudflared/config.yml")), "the signed-in tunnel's config is set aside");
+    assert.equal(readdirSync(path.join(fresh, "cloudflared")).filter((f) => f.startsWith("config.yml.signed-in-")).length, 1, "kept beside it, not deleted");
   } finally { rmSync(fresh, { recursive: true, force: true }); b.close(); }
   for (const doc of [read("README.md"), readFileSync(path.join(root, "docs/public/install.md"), "utf8")]) {
     assert.doesNotMatch(doc, /--tunnel-token <token>/, "the docs never show the token as an argument");
@@ -1186,9 +1198,25 @@ test("tunnel mode: a route that fails stops the installer before config.yml; the
     // A tunnel of that name whose credentials are not on this box: said, never a second tunnel.
     rmSync(config); rmSync(path.join(cfdir, `${uuid}.json`));
     r = await install();
-    assert.notEqual(r.status, 0); assert.match(r.stderr, /the tunnel blackbranch-site\.test exists in Cloudflare, but its credentials are not on this box/);
+    assert.notEqual(r.status, 0); assert.match(r.stderr, /the tunnel blackbranch-site\.test exists in Cloudflare, but its credentials are not on this server/);
+    // R1.6: that is exactly what a move looks like. The refusal names the way through, and --moving
+    // takes it: no sign-in, no tunnel made, nothing written for one — the restore brings the site's own.
+    assert.match(r.stderr, /Moving the site here from another server\? Run this again with --moving: the restore brings the tunnel back/);
+    const before = readFileSync(path.join(cf, "calls"), "utf8");
+    r = await runInstaller(b, path.join(tree, "install/install.sh"), ["--domain", "site.test", "--mode", "tunnel", "--moving"],
+      { BB_HOME: fresh, BB_INSTALL_TEST_STOP: "front-door", FAKE: b.fake });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /moving: no tunnel is made here — the restore brings back the site's own tunnel/);
+    assert.equal(readFileSync(path.join(cf, "calls"), "utf8"), before, "no Cloudflare call at all");
+    assert.ok(!existsSync(config), "no tunnel config: the snapshot's goes here");
     assert.equal(tunnels().length, 1);
   } finally { rmSync(fresh, { recursive: true, force: true }); b.close(); }
+  // A move starts nothing and prints no setup link: the restore does the rest (and starts the site).
+  const inst = read("install.sh");
+  const moving = inst.indexOf('if [ "$MOVING" = 1 ]; then\n  exec 9>&-'), up = inst.indexOf("/usr/local/bin/blackbranch up");
+  assert.ok(moving > 0 && moving < up, "the move's stop comes before `up`");
+  assert.match(inst.slice(moving, up), /sudo blackbranch restore latest --with-env/);
+  assert.match(inst.slice(moving, up), /\n {2}exit 0\nfi\n/);
 });
 
 // Every path's type, mode, size and mtime, then every file's content hash: equal means the tree is
@@ -1698,7 +1726,7 @@ async function probeServer(mode = {}) {
     }, (err, stdout) => resolve({ status: err ? err.code : 0, out: JSON.parse(stdout) }));
     c.stdin.end(stdin);
   });
-  return { probe, seen, close: () => server.close() };
+  return { probe, seen, base, close: () => server.close() };
 }
 
 test("the probes: a WebSocket frame, the site's sign-in start accepted by the account server, a token it issued working — each failing on its own", async () => {
@@ -1736,8 +1764,247 @@ test("blackbranch health: the release's own doctor verdict and probes, one BBHEA
     assert.ok(line, r.stdout);
     const h = JSON.parse(line.slice(9));
     assert.equal(h.ok, false); assert.ok(h.failed.includes("door.answers"), "this box's router does not answer here");
-    assert.match(r.stdout, /\[FAIL\] The site, api\. and matrix\. answer through their public names/);
+    assert.match(r.stdout, /\[FAIL\] The site, api\. and matrix\. answer by name/);
   } finally { s.close(); b.close(); }
+});
+
+// R1.1 — a direct-mode box behind a home router with no NAT hairpin: its public names do not reach
+// it from inside. A stand-in curl answers 200 only when it is pointed at this box's own port 443
+// (--resolve <name>:443:127.0.0.1) and verifies the real certificate (no -k, no lab CA); asked by
+// the public name it gets nothing, as such a box does.
+const NO_HAIRPIN_CURL = `#!/usr/bin/env bash
+case "$*" in *example.test*) ;; *) exec /usr/bin/curl "$@" ;; esac   # the update feed: the real curl
+echo "curl $*" >> "$FAKE/curl-calls"
+box=0; for a in "$@"; do case "$a" in *:443:127.0.0.1) box=1 ;; -k|--insecure|--cacert) box=0; break ;; esac; done
+if [ "$box" = 1 ]; then printf 200; exit 0; fi
+printf 000; exit 7
+`;
+const healthySite = (b) => {
+  const site = path.join(b.fake, "site.json");
+  writeFileSync(site, JSON.stringify({ v: 1, at: "2026-10-11T00:00:00Z", db: { reachable: true, version: DOCTOR.SCHEMA_VERSION, baseline: true, vector: "0.8.0" },
+    matrix: { versions: 200, mas: 200, issuer: true, wellKnownClient: true, wellKnownServer: true, federation: { switch: false, reachable: false } },
+    secrets: { missing: [], token: "none", stored: { total: 0, unreadable: 0 } }, modules: [], skipped: [], heldOn: [] }));
+  return site;
+};
+// A direct-mode box whose config renders (MAS's key is 32 bytes of hex), rendered once — so the
+// doctor's "rendered files match" row is judged on real files, as on a box.
+const renderedDirect = async (b) => {
+  writeFileSync(path.join(b.home, ".env"), b.env().replace(/^MAS_ENCRYPTION_SECRET=.*$/m, `MAS_ENCRYPTION_SECRET=${"e".repeat(64)}`), { mode: 0o600 });
+  writeFileSync(path.join(b.home, "matrix/mas-keys.yaml"), "  keys:\n  - key: |\n      -----BEGIN EC PRIVATE KEY-----\n      test-only\n      -----END EC PRIVATE KEY-----\n", { mode: 0o600 });
+  const r = await b.run(["render"]);
+  assert.equal(r.status, 0, r.stderr);
+  // No certificate to read here (the certificates row is the doctor's, not the update's): say so at once.
+  writeFileSync(path.join(b.fake, "bin/openssl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  // The public names do not resolve here at all — the brief's case: they do not lead to this box.
+  writeFileSync(path.join(b.fake, "bin/getent"), "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+};
+const probeEnv = (s) => ({ BB_PROBE_NODE: process.execPath, BB_PROBE_WAIT_MS: "1500", BB_PROBE_WS: `${s.base.replace("http", "ws")}/`, BB_PROBE_SITE: s.base,
+  MATRIX_OAUTH_ISSUER: `${s.base}/auth/`, MATRIX_HOMESERVER_URL: s.base });
+
+test("direct mode without a NAT hairpin: blackbranch health asks caddy on this box by name and passes; the public names are not asked", async () => {
+  const b = await box({ tls: "direct" });
+  const s = await probeServer();
+  try {
+    writeFileSync(path.join(b.fake, "bin/curl"), NO_HAIRPIN_CURL, { mode: 0o755 });
+    await renderedDirect(b);
+    const r = await b.run(["health"], { BB_DOCTOR_NODE: process.execPath, BB_DOCTOR_SITE_FACTS: healthySite(b), ...probeEnv(s) });
+    const line = r.stdout.split("\n").find((l) => l.startsWith("BBHEALTH "));
+    assert.ok(line, r.stdout + r.stderr);
+    const h = JSON.parse(line.slice(9));
+    assert.deepEqual(h.failed, [], r.stdout);
+    assert.equal(h.ok, true, r.stdout);
+    assert.equal(r.status, 0);
+    const curls = b.file("fake/curl-calls").trim().split("\n");
+    assert.equal(curls.length, 3, "one request per name, all to the box itself");
+    for (const c of curls) {
+      assert.match(c, /--resolve (api\.|matrix\.)?example\.test:443:127\.0\.0\.1 /, c);
+      assert.doesNotMatch(c, / -k | --cacert /, "the real certificate is verified");
+    }
+    // The doctor (not the update) also asks by the public names, and says so as a warning.
+    const d = await b.run(["doctor"], { BB_DOCTOR_NODE: process.execPath, BB_DOCTOR_SITE_FACTS: healthySite(b) });
+    assert.match(d.stdout, /\[ok {2}\] The site, api\. and matrix\. answer by name — all three answer \(asked at this box's own router\)/, d.stdout);
+    assert.match(d.stdout, /\[warn\] Reachable from outside by the public names — the site, api\. and matrix\. did not answer this box by their public names/);
+    assert.equal(b.file("fake/curl-calls").trim().split("\n").filter((c) => !c.includes(":443:127.0.0.1")).length, 3, "the doctor asked each public name once");
+  } finally { s.close(); b.close(); }
+});
+
+test("an update on a direct-mode box whose public names do not reach it completes: the next release's real health check passes", async () => {
+  const b = await box({ tls: "direct" });
+  const s = await probeServer();
+  try {
+    writeFileSync(path.join(b.fake, "bin/curl"), NO_HAIRPIN_CURL, { mode: 0o755 });
+    await renderedDirect(b);
+    // The next release's command: the stub for everything but its health check, which is this repo's own.
+    b.publish("1.2.0", { stub: STUB("1.2.0").replace('case "$1" in\n  health)', `case "$1" in\n  health) exec bash ${JSON.stringify(path.join(here, "blackbranch"))} health ;;\n  health-stub)`) });
+    const r = await b.run(["update", "--apply", "1.2.0"], { BB_DOCTOR_NODE: process.execPath, BB_DOCTOR_SITE_FACTS: healthySite(b), ...probeEnv(s) });
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.equal(b.release(), "releases/1.2.0");
+    const last = b.json("results/update-last.json");
+    assert.equal(last.result, "updated", JSON.stringify(last));
+    assert.equal(last.health.ok, true);
+    assert.deepEqual(last.health.failed, []);
+    assert.ok(b.file("fake/curl-calls").trim().split("\n").every((c) => c.includes(":443:127.0.0.1")), "the update never asked by the public names");
+  } finally { s.close(); b.close(); }
+});
+
+// The owner's security review: a chat reader that RAN before an update and has FAILED after it fails
+// the update's health check (a browser missing from the new image, say), and the box goes back. A
+// reader already failed before never blocks; one still starting is waited for; no answer before the
+// update means nothing to compare.
+const readers = (r) => JSON.stringify({ answered: true, ok: Object.values(r).every((x) => x.state === "running"),
+  readers: Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { state: v.state, since: null, error: v.error ?? "" }])) });
+const updateWithReaders = async (lines, extra = {}) => {
+  const b = await box();
+  b.publish("1.2.0");
+  if (lines) writeFileSync(path.join(b.fake, "readers"), `${lines.join("\n")}\n`);
+  const r = await b.run(["update", "--apply", "1.2.0"], { BB_READERS_POLL: "0", BB_READERS_WAIT: "30", ...extra });
+  return { b, r, last: b.json("results/update-last.json"), asked: b.file("fake/readers-asked").split("\n").filter(Boolean).length };
+};
+
+test("chat readers: a reader running before the update and failed after it rolls the update back, and the reason names the reader", async () => {
+  const { b, r, last } = await updateWithReaders([
+    readers({ twitch: { state: "running" }, youtube: { state: "running" } }),
+    readers({ twitch: { state: "running" }, youtube: { state: "failed", error: "browserType.launch: Executable doesn't exist" } }),
+  ]);
+  try {
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.equal(last.result, "rolled-back", JSON.stringify(last));
+    assert.match(last.message, /failed its health check: a chat reader that ran before the update failed after it — YouTube: browserType\.launch: Executable doesn't exist/);
+    assert.doesNotMatch(last.message, /Twitch/, "the reader that still runs is not blamed");
+    assert.equal(last.health.ok, false); assert.match(last.health.failed[0], /YouTube: browserType\.launch/);
+    assert.equal(b.release(), "releases/1.1.0", "back on the release before");
+  } finally { b.close(); }
+});
+
+test("chat readers: a reader failed before the update and after it does not block — the update completes", async () => {
+  const { b, r, last } = await updateWithReaders([
+    readers({ twitch: { state: "running" }, kick: { state: "failed", error: "Forbidden" } }),
+    readers({ twitch: { state: "running" }, kick: { state: "failed", error: "Forbidden" } }),
+  ]);
+  try {
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.equal(last.result, "updated"); assert.equal(b.release(), "releases/1.2.0");
+    assert.match(r.stderr, /chat readers: every one that ran before the update runs \(twitch\)/);
+  } finally { b.close(); }
+  // Nor does one the settings no longer switch on (off after the update).
+  const off = await updateWithReaders([readers({ youtube: { state: "running" } }), readers({ youtube: { state: "off" } })]);
+  try { assert.equal(off.last.result, "updated", JSON.stringify(off.last)); } finally { off.b.close(); }
+});
+
+test("chat readers: a reader still starting after the update is waited for within its start period, then judged", async () => {
+  // Starting twice, then running: waited for, and the update completes.
+  const ok = await updateWithReaders([
+    readers({ youtube: { state: "running" } }),
+    readers({ youtube: { state: "starting" } }), readers({ youtube: { state: "starting" } }), readers({ youtube: { state: "running" } }),
+  ]);
+  try {
+    assert.equal(ok.last.result, "updated", JSON.stringify(ok.last));
+    assert.equal(ok.asked, 4, "asked before, then until the reader left `starting`");
+  } finally { ok.b.close(); }
+  // Starting, then failed: the wait ends on the verdict, which rolls back.
+  const bad = await updateWithReaders([
+    readers({ youtube: { state: "running" } }), readers({ youtube: { state: "starting" } }), readers({ youtube: { state: "failed", error: "the chat page did not load" } }),
+  ]);
+  try {
+    assert.equal(bad.last.result, "rolled-back");
+    assert.match(bad.last.message, /YouTube: the chat page did not load/);
+  } finally { bad.b.close(); }
+});
+
+test("chat readers: stream-ingest not answering before the update skips the comparison, says so, and the update completes", async () => {
+  const { b, r, last } = await updateWithReaders(null);
+  try {
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.equal(last.result, "updated");
+    assert.match(r.stderr, /chat readers: stream-ingest did not answer before the update — nothing to compare, not checked/);
+  } finally { b.close(); }
+  // `blackbranch health` alone has no before: it never compares readers (its host facts do not ask them).
+  assert.match(read("blackbranch"), /\n {2}if \[ "\$\{1:-\}" = health \]; then printf '"ingest":null,"tts":null,"setup":null,'\n/);
+  assert.doesNotMatch(read("blackbranch").slice(read("blackbranch").indexOf("cmd_health() {"), read("blackbranch").indexOf("cmd=\"${1:-}\"")), /readers_check/);
+});
+
+// The owner's reviewer: a reader regression is judged once, and the nightly timer never retried a
+// rolled-back version — so one platform blip during the nightly update skipped that release for
+// good. Now the reason is recorded, and a release whose ONLY failure was a reader is tried again,
+// three nights in all; a real health failure keeps the old rule.
+const RUNNING = readers({ youtube: { state: "running" } });
+const FAILED = readers({ youtube: { state: "failed", error: "the chat page did not load" } });
+const night = (b, lines) => {
+  if (lines) writeFileSync(path.join(b.fake, "readers"), `${lines.join("\n")}\n`);
+  return b.run(["update", "--auto"], { BB_READERS_POLL: "0", BB_READERS_WAIT: "5" });
+};
+
+test("reader retry: a reader blip during the nightly update rolls back as reader-regression; the next night's --auto retries it and succeeds", async () => {
+  const b = await box();
+  try {
+    b.publish("1.2.0", { security: true });
+    let r = await night(b, [RUNNING, FAILED]);
+    let last = b.json("results/update-last.json");
+    assert.equal(last.result, "rolled-back", `${r.stdout}\n${r.stderr}`);
+    assert.equal(last.reason, "reader-regression"); assert.equal(last.attempts, 1);
+    assert.match(last.message, /YouTube: the chat page did not load/, "the reader is named");
+    assert.equal(b.release(), "releases/1.1.0");
+    // The platform is back the next night.
+    r = await night(b, [RUNNING, RUNNING]);
+    assert.match(r.stdout, /1\.2\.0 went back last time only because a chat reader failed: trying it again \(attempt 2 of 3\)/);
+    last = b.json("results/update-last.json");
+    assert.equal(last.result, "updated", `${r.stdout}\n${r.stderr}`); assert.equal(b.release(), "releases/1.2.0");
+  } finally { b.close(); }
+});
+
+test("reader retry: a reader that fails every night is rolled back each night, then parked after 3 attempts with the reason in blackbranch status", async () => {
+  const b = await box();
+  try {
+    b.publish("1.2.0", { security: true });
+    for (const n of [1, 2, 3]) {
+      await night(b, [RUNNING, FAILED]);
+      const last = b.json("results/update-last.json");
+      assert.equal(last.result, "rolled-back"); assert.equal(last.reason, "reader-regression"); assert.equal(last.attempts, n, `night ${n}`);
+    }
+    const stops = (b.calls().match(/^compose stop web stream-ingest stream-api mas synapse$/gm) ?? []).length;
+    const r = await night(b, [RUNNING, FAILED]);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /1\.2\.0 is parked: 3 nights in a row a chat reader that ran before it failed after it — the timer does not try it again/);
+    assert.equal((b.calls().match(/^compose stop web stream-ingest stream-api mas synapse$/gm) ?? []).length, stops, "the fourth night changes nothing");
+    assert.equal(b.json("results/update-last.json").attempts, 3);
+    const st = await b.run(["status"]);
+    assert.match(st.stdout, /1\.2\.0 FAILED .*YouTube: the chat page did not load.* — PARKED after 3 attempts, each failed only by a chat reader: the timer does not try it again/);
+  } finally { b.close(); }
+});
+
+test("reader retry: a health failure that is not a reader is not retried by the timer, as before", async () => {
+  const b = await box();
+  try {
+    b.publish("1.2.0", { security: true });
+    writeFileSync(path.join(b.fake, "health-1.2.0"), "1");
+    await night(b, [RUNNING, RUNNING]);
+    const last = b.json("results/update-last.json");
+    assert.equal(last.result, "rolled-back"); assert.equal(last.reason, "health"); assert.equal(last.attempts, 1);
+    const stops = (b.calls().match(/^compose stop web stream-ingest stream-api mas synapse$/gm) ?? []).length;
+    rmSync(path.join(b.fake, "health-1.2.0"));
+    const r = await night(b, [RUNNING, RUNNING]);
+    assert.match(r.stdout, /1\.2\.0 failed its health check here before: the timer does not try it again/);
+    assert.equal((b.calls().match(/^compose stop web stream-ingest stream-api mas synapse$/gm) ?? []).length, stops, "not tried again");
+  } finally { b.close(); }
+});
+
+test("reader retry: the attempt count survives a host restart — it lives in results/update-last.json", async () => {
+  const b = await box();
+  try {
+    b.publish("1.2.0", { security: true });
+    await night(b, [RUNNING, FAILED]);
+    await night(b, [RUNNING, FAILED]);
+    assert.equal(b.json("results/update-last.json").attempts, 2);
+    // A reboot: the boot unit's reconcile runs, and nothing of the update's own working state is left.
+    const rc = await b.run(["update", "--reconcile"]);
+    assert.equal(rc.status, 0, rc.stderr);
+    rmSync(path.join(b.home, "state/update"), { recursive: true, force: true });
+    assert.equal(b.json("results/update-last.json").attempts, 2, "the reconcile kept the count");
+    await night(b, [RUNNING, FAILED]);
+    assert.equal(b.json("results/update-last.json").attempts, 3, "counted on from the results file");
+    const r = await night(b, [RUNNING, FAILED]);
+    assert.match(r.stdout, /is parked: 3 nights in a row/);
+  } finally { b.close(); }
 });
 
 test("vacuity anchors: the updater's files end where they should", () => {

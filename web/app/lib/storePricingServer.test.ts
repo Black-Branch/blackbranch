@@ -65,7 +65,7 @@ test("getE throws when the singleton is missing", async () => {
 test("recompute writes dampen(previous, renderPrice(base, e)) per row", async () => {
   const { pool, seen } = fakePool([
     [/FROM site\.store_prices[\s\S]*FOR UPDATE/, () => ({
-      // 0.55 streams at E=90 renders to 50. At 25 Qorm one ladder step IS the
+      // 0.55 streams at E=90 renders to 50. At 25 points one ladder step IS the
       // whole move — there is nothing finer than 25 on the ladder.
       rows: [priceRow("sticker", "0.550", "25"), priceRow("tts", "3.300", "150")],
       rowCount: 2,

@@ -1,7 +1,7 @@
 // Server side of coinProvenance.ts: read a wallet's ledger and fold it.
 //
 // READ-ONLY, and deliberately so. This module exists to MEASURE how much of the
-// Qorm in circulation is backed by real money; it writes nothing, holds no
+// currency in circulation is backed by real money; it writes nothing, holds no
 // state, and adds no column to the currency tables. That is the whole reason it
 // is safe to add to a live economy — coinsServer.ts is the one file where a bug
 // mints currency, and this does not touch it.
@@ -38,7 +38,7 @@ export type WalletAttribution = Attribution & { matrixId: string; balance: numbe
  *  every restoring credit depend on it.
  *
  *  This is the OPPOSITE of `coin_ledger_matrix_idx` (matrix_id, id DESC), the
- *  index the Qorm history tab reads through — so an "obvious" reuse of that
+ *  index the currency history tab reads through — so an "obvious" reuse of that
  *  query silently produces a plausible, wrong answer. */
 const ONE_WALLET_SQL =
   `SELECT kind, delta FROM site.coin_ledger WHERE matrix_id = $1 ORDER BY id ASC`;
@@ -83,7 +83,7 @@ export async function attributeAllWallets(policy: DrainPolicyFor): Promise<Walle
   // `id ASC` IS THE CONTRACT, not a preference. `attribute` folds
   // oldest-first: the ordered policies and every restoring credit depend on it.
   // Note this is the OPPOSITE of `coin_ledger_matrix_idx` (matrix_id, id DESC),
-  // the index the Qorm history tab reads through — so an "obvious" reuse of
+  // the index the currency history tab reads through — so an "obvious" reuse of
   // that query silently produces a plausible, wrong answer.
   const { rows } = await pool.query<{ matrix_id: string; kind: string; delta: string | number }>(
     `SELECT matrix_id, kind, delta FROM site.coin_ledger ORDER BY matrix_id, id ASC`

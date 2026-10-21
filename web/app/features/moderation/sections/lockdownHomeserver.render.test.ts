@@ -1,5 +1,5 @@
 // The Lockdown screen says plainly that homeserver sign-up is a separate door: on a bundle the
-// signups lever closes it too (and says so), elsewhere it is managed outside Blackbranch.
+// signups lever closes it too (and says so), elsewhere it is managed outside Black Branch.
 // Run: systemd-run --user --scope -p MemoryMax=8G node --test app/features/moderation/sections/lockdownHomeserver.render.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -37,10 +37,10 @@ test("lever on: closed by this lockdown, and it opens again when the lockdown li
   assert.equal(r.text, "Homeserver sign-up: closed by this lockdown; it opens again when the lockdown lifts.");
 });
 
-test("not a bundle: managed outside Blackbranch, and where to close it", async () => {
+test("not a bundle: managed outside Black Branch, and where to close it", async () => {
   const r = await lineFor({ homeserver: { managed: "outside" } });
   assert.equal(r.managed, "outside");
-  assert.match(r.text, /^Homeserver sign-up is separate and managed outside Blackbranch: close it in your homeserver's sign-in service/);
+  assert.match(r.text, /^Homeserver sign-up is separate and managed outside Black Branch: close it in your homeserver's sign-in service/);
   assert.match(r.text, /an account made there can still join the community's rooms/);
 });
 

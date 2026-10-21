@@ -102,7 +102,7 @@ export type ChatMsg = {
   senderMatrixId?: string | null;  // sticker / tts_msg / sound
   emoteName?: string;              // system: "sticker"
   emoteUrl?: string;
-  // system: "sticker" — the CUMULATIVE Qorm boosted onto this sticker send
+  // system: "sticker" — the CUMULATIVE points boosted onto this sticker send
   // (migrate-v70). One row for the sticker's whole life — a boost updates
   // THIS SAME row in place (bumped boostCoins + created_at) rather than
   // posting a new one, so there's never a duplicate. Drives this row's render

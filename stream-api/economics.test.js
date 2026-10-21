@@ -31,8 +31,8 @@ test('toUSD: unknown currency credits 0, never passthrough', () => {
   assert.equal(E.toUSD(100000, 'XYZ'), 0);
 });
 
-// Regression net: the currencies that previously hit the passthrough bug.
-// Each must now resolve to a real rate rather than being mistaken for USD.
+// Regression net: less common currencies a missing rate would pass through as USD.
+// Each must resolve to a real rate rather than being mistaken for USD.
 test('toUSD: the less common currencies resolve, not passthrough', () => {
   for (const code of ['VND', 'IDR', 'COP', 'HUF', 'CZK', 'PHP', 'ZAR', 'CNY', 'TWD', 'ILS']) {
     const oneUnit = E.toUSD(1, code);
@@ -127,7 +127,7 @@ test('takeHome dispatcher', () => {
   assert.equal(E.takeHome('unknown', 'x', {}), 0);
 });
 
-// R2-1: an event whose native amount cannot be priced must be recognisable, so
+// An event whose native amount cannot be priced must be recognisable, so
 // the alert path can keep it (stream.unpriced_support) instead of dropping it.
 // takeHome() alone cannot say why it returned 0 — a milestone, a tiny
 // Streamlabs tip under the fee, and a currency with no rate all read 0.
@@ -185,7 +185,7 @@ test('youtubeMembershipUsd: a known level prices from the map; unknown or missin
     assert.equal(youtubeMembershipUsd('Mystery Club', tiers), 4.99);
     assert.equal(warned.length, 1);
     assert.equal(youtubeMembershipUsd(undefined, tiers), 4.99);
-    // Said once per level per process (F4): "no level" may already have been said by an earlier test.
+    // Said once per level per process: "no level" may already have been said by an earlier test.
     assert.ok(warned.length === 1 || warned.length === 2);
   } finally { console.warn = quiet; }
 });
@@ -208,8 +208,8 @@ test('YOUTUBE_MEMBERSHIP_TIERS from the environment prices a new member and a gi
   assert.deepEqual(JSON.parse(out.trim()), [7, 14]);
 });
 
-// F4 (review round 5): a gift of N memberships at an unmapped level ran the level map N times and
-// warned every time. The warning is said once per level name per process.
+// A gift of N memberships at an unmapped level runs the level map N times; the warning is said
+// once per level name per process, not N times.
 test('an unmapped membership level is warned about once per level name, not per membership', () => {
   const warned = [];
   const orig = console.warn;

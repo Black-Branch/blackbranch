@@ -26,9 +26,9 @@ const VALID_PLATFORMS = new Set([
 ]);
 
 // 40 votes per 60 seconds per user — prevents score farming while allowing
-// normal use during active stream sessions. (Was 10/60s, which an engaged viewer
-// up/down-voting during a lively stream — or anyone toggling a vote a few times —
-// hit easily; the client silently reverts on 429, so it read as "voting broke.")
+// normal use during active stream sessions. (A 10/60s limit is hit easily by an
+// engaged viewer up/down-voting during a lively stream — or anyone toggling a vote
+// a few times; the client silently reverts on 429, so it reads as "voting broke.")
 const isVoteRateLimited = createSlidingWindowLimiter(VOTE_GLOBAL_WINDOW_MS, VOTE_GLOBAL_MAX);
 
 // PER-TARGET CLAMP — 2 votes per 30s against the SAME author, against an
@@ -149,7 +149,7 @@ export async function POST(req: NextRequest) {
     votedFresh = up.rows[0]?.inserted === true;
   }
 
-  // EARNING, AND WHY IT IS NOT A QORM PRINTER.
+  // EARNING, AND WHY IT IS NOT A CURRENCY PRINTER.
   //
   // This flag alone would NOT be enough. Clearing a vote deletes the row, so
   // the next vote on the same message is a genuinely fresh INSERT and this

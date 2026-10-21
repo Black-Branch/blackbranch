@@ -35,9 +35,37 @@ function flagsFromBadges(badges) {
   };
 }
 
+// Liveness. The socket sends the channel's `place.stream.livestream#livestreamView` on
+// connect and about every 30 s while the channel streams; its record carries `lastSeenAt` (renewed
+// while video arrives), `idleTimeoutSeconds` (stream.place's own "gone" window, 300 observed) and,
+// once the stream is over, `endedAt`. A channel that has never streamed sends no such frame at all,
+// only viewerCount frames (count 0). Observed against stream.place 2026-10-21: one live channel,
+// one ended, one that never streamed.
+const DEFAULT_IDLE_S = 300;
+// The socket has to have been up this long with no livestream frame before "no frame" means "no
+// stream" — the frame arrives within a second of connecting.
+const NO_RECORD_AFTER_MS = 20_000;
+// A socket that has sent nothing for this long is not evidence of anything.
+const QUIET_MS = 90_000;
+
+/**
+ * Pure: live / offline / unknown from what the socket has shown.
+ * @param {{ connected: boolean, connectedAt: number, lastFrameAt: number, record: object|null, now: number }} s
+ * @returns {'live'|'offline'|'unknown'}
+ */
+export function streamplaceLiveness({ connected, connectedAt, lastFrameAt, record, now }) {
+  if (!connected || now - lastFrameAt > QUIET_MS) return 'unknown';
+  if (!record) return now - connectedAt >= NO_RECORD_AFTER_MS ? 'offline' : 'unknown';
+  if (record.endedAt) return 'offline';
+  const seen = Date.parse(record.lastSeenAt || '');
+  if (!Number.isFinite(seen)) return 'unknown';
+  const idleS = Number(record.idleTimeoutSeconds) > 0 ? Number(record.idleTimeoutSeconds) : DEFAULT_IDLE_S;
+  return now - seen <= idleS * 1000 ? 'live' : 'offline';
+}
+
 export async function startStreamplace() {
   const did = instanceConfig.get('platform.streamplace.did');
-  if (!did) { console.warn('[streamplace] platform.streamplace.did is not set (STREAMPLACE_STREAMER_DID) — not connecting'); return { stop() {}, getViewers: () => null }; }
+  if (!did) { console.warn('[streamplace] platform.streamplace.did is not set (STREAMPLACE_STREAMER_DID) — not connecting'); return { stop() {}, getViewers: () => null, getLiveState: () => null }; }
   const url = `wss://stream.place/api/websocket/${did}`;
   let ws = null;
   let stopped = false;
@@ -50,7 +78,11 @@ export async function startStreamplace() {
   // reads as "unknown" (null), never a frozen number.
   let lastViewers = null; // { count, at }
   let loggedViewerFrame = false;
-  let loggedLivestreamViewFrame = false;
+  // The latest livestream record this socket has shown, and when any frame last arrived.
+  let liveRecord = null;
+  let lastFrameAt = 0;
+  let connected = false;
+  let loggedLiveness = null;
   const VIEWER_STALE_MS = 5 * 60 * 1000;
 
   // Half-open-socket watchdog: reconnect-on-close alone cannot notice a socket
@@ -75,6 +107,8 @@ export async function startStreamplace() {
 
     ws.on('open', () => {
       connectedAt = Date.now();
+      connected = true;
+      liveRecord = null; // a reconnect re-sends it; an old one must not outlive the socket
       lastActiveAt = Date.now();
       console.log(`[streamplace] connected (${did})`);
       backoff = 1000;
@@ -94,6 +128,7 @@ export async function startStreamplace() {
 
     ws.on('message', (buf) => {
       lastActiveAt = Date.now();
+      lastFrameAt = lastActiveAt;
       let e;
       try {
         e = JSON.parse(buf.toString());
@@ -104,8 +139,7 @@ export async function startStreamplace() {
       // count — capture it for the snapshot poller. Exact field name unconfirmed
       // until seen live: probe, and log one frame's SHAPE (id + keys, never values —
       // lib/logShape.js) for mapping if none matches.
-      // (#livestreamView is a stream-status record with NO count — ignore it and
-      // every other non-chat frame silently.)
+      // (#livestreamView is the stream-status record — read for liveness below.)
       if (typeof e.$type === 'string' && e.$type.endsWith('#viewerCount')) {
         const raw = e.viewerCount ?? e.count ?? e.viewers ?? e.record?.viewerCount ?? e.record?.count;
         const n = Number(raw);
@@ -117,9 +151,16 @@ export async function startStreamplace() {
         }
         return;
       }
-      if (typeof e.$type === 'string' && e.$type.endsWith('#livestreamView') && !loggedLivestreamViewFrame) {
-        loggedLivestreamViewFrame = true;
-        console.log(`[streamplace] livestreamView frame (map liveness field): ${payloadShape(e)} record=${payloadShape(e.record)}`);
+      if (typeof e.$type === 'string' && e.$type.endsWith('#livestreamView')) {
+        // Only this channel's own record counts (the socket is per channel; checked anyway).
+        if (!e.author?.did || e.author.did === did) liveRecord = e.record && typeof e.record === 'object' ? e.record : null;
+        // One line per change, so the journal shows what the live vote saw (the poller votes on it).
+        const seen = streamplaceLiveness({ connected, connectedAt, lastFrameAt, record: liveRecord, now: Date.now() });
+        if (seen !== loggedLiveness) {
+          loggedLiveness = seen;
+          console.log(`[streamplace] livestream record says ${seen}${liveRecord?.endedAt ? ' (ended)' : ''}`);
+        }
+        return;
       }
       if (e.$type !== CHAT_MSG) return; // ignore livestreamView / segment / other non-chat frames
 
@@ -155,6 +196,7 @@ export async function startStreamplace() {
     });
 
     ws.on('close', () => {
+      connected = false;
       stopWatchdog(); // no socket to watch until the next 'open'
       if (stopped) return;
       console.warn(`[streamplace] disconnected; reconnecting in ${backoff}ms`);
@@ -176,5 +218,7 @@ export async function startStreamplace() {
     // Latest viewer count, or null if none seen within the staleness window.
     getViewers: () =>
       lastViewers && Date.now() - lastViewers.at < VIEWER_STALE_MS ? lastViewers.count : null,
+    // The live vote for lib/poller.js (see streamplaceLiveness).
+    getLiveState: () => streamplaceLiveness({ connected, connectedAt, lastFrameAt, record: liveRecord, now: Date.now() }),
   };
 }

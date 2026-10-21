@@ -147,7 +147,7 @@ export default function ProfileEditor({
   const [bioSaving, setBioSaving] = useState(false);
   // What the server last confirmed: a blur with nothing changed saves nothing
   // (the field seeded empty from a cleared cache once ERASED a saved bio on
-  // blur — final review, Important 4).
+  // blur).
   const savedBio = useRef(bio);
   const saveBio = useCallback(async () => {
     if (bio === savedBio.current) return;
@@ -157,7 +157,7 @@ export default function ProfileEditor({
     if (typeof d?.bio === "string") { setBio(d.bio); savedBio.current = d.bio; }
     setBioSaving(false);
   }, [bio]);
-  // Qorm-store name styles: equipped set + owned ids (see usernameStyles.ts).
+  // Points-store name styles: equipped set + owned ids (see usernameStyles.ts).
   const [styleSet, setStyleSet] = useState<{ style: EquippedStyle | null; unlocked: string[] } | null>(null);
 
   useEffect(() => {
@@ -503,7 +503,7 @@ export default function ProfileEditor({
         </div>
       </div>
 
-      {/* Name style — equip Qorm-store fonts/effects/gradients (they derive
+      {/* Name style — equip points-store fonts/effects/gradients (they derive
           from the color above, so the preview follows the picker live). */}
       <div>
         <label className="text-3xs text-muted uppercase tracking-wide mb-1.5 block">Name style</label>
@@ -629,8 +629,8 @@ export default function ProfileEditor({
       </div>
 
       <div className="flex gap-2">
-        {/* Cancel only. The plain "← Back" this used to fall back to is gone:
-            the editor is a PAGE of the account card now and the shell's header
+        {/* Cancel only. There is no plain "← Back":
+            the editor is a PAGE of the account card and the shell's header
             arrow is the way back, on every page, in one place. What survives is
             the rename confirm's escape hatch, which is a different action. */}
         {confirmPending && (

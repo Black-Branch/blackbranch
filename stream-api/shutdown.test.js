@@ -112,26 +112,27 @@ test('the parked long-poll is released, or every restart hits the backstop', () 
     'full 10s forced exit even with release() wired in');
 
   const relay = readFileSync(join(__dirname, 'helpdesk-relay.js'), 'utf8');
-  assert.match(relay, /return \{ ask, next, reply, stats, release \}/,
+  assert.match(relay, /return \{ ask, next, reply, stats, status, release \}/,
     'createSupportRelay stopped exporting release() — index.js\'s drain depends on it');
   assert.match(relay, /draining = true/,
     'release() no longer latches the relay, so the brain can re-park a fresh 25s poll ' +
     'mid-drain and the close never settles');
 });
 
-test('the relay hold is longer than the shutdown grace — which is why release() exists', () => {
-  // If someone drops pollTimeoutMs below the grace the bug would appear fixed by
-  // accident, and raising the grace instead of releasing the socket would "fix" a
-  // 10s hang into a 25s one. Pin the relationship so the reasoning stays legible.
+test('the grace is 30 s (inside the bundle\'s 40 s stop) and the relay hold would eat most of it — release() keeps restarts quick', () => {
+  // The grace is 30 s so that, under Docker's stop_grace_period of 40 s, an overrunning drain
+  // prints its diagnostic before the kill. That puts the grace PAST the relay's 25 s hold, so
+  // release() does not prevent an exit 1 — it prevents every restart from waiting out a parked poll. A 25 s restart is a 25 s dark site;
+  // shutdown-run.db.test.js times the real drain to hold that.
   const relay = readFileSync(join(__dirname, 'helpdesk-relay.js'), 'utf8');
   const poll = Number(/pollTimeoutMs = (\d+)/.exec(relay)?.[1]);
   const grace = Number(/SHUTDOWN_GRACE_MS \|\| ([\d_]+)/.exec(src)?.[1]?.replace(/_/g, ''));
   assert.ok(Number.isFinite(poll) && poll > 0, 'could not read pollTimeoutMs — this guard went vacuous');
   assert.ok(Number.isFinite(grace) && grace > 0, 'could not read SHUTDOWN_GRACE_MS — this guard went vacuous');
-  assert.ok(poll > grace,
-    `pollTimeoutMs (${poll}ms) is no longer longer than the grace (${grace}ms). If that was ` +
-    'deliberate, fine — but release() is now load-bearing for a reason that no longer holds, ' +
-    'and the comments in index.js and helpdesk-relay.js explaining it are stale.');
+  assert.equal(grace, 30_000, 'SHUTDOWN_GRACE_MS defaults to 30 s (compose gives the container 40 s)');
+  assert.ok(poll * 2 > grace,
+    `pollTimeoutMs (${poll}ms) is now a small part of the grace (${grace}ms) — release() is no longer ` +
+    'what keeps a restart short, and the comments in index.js and helpdesk-relay.js explaining it are stale.');
 });
 
 test('the pool is drained after the server closes, not before', () => {
@@ -141,6 +142,20 @@ test('the pool is drained after the server closes, not before', () => {
   assert.ok(iAwaitClosed < iPoolEnd,
     'pool.end() runs BEFORE in-flight HTTP finishes, so identity.js\'s merge transaction ' +
     'loses its connection mid-flight — the exact failure this shutdown exists to prevent');
+});
+
+test('the aggregate rebuild is stopped and awaited before the pool ends', () => {
+  const iStop = src.indexOf('await stopAggregates()');
+  const iPoolEnd = src.indexOf('await pool.end()');
+  assert.ok(iStop > 0, 'the drain never stops the aggregate rebuild — "Cannot use a pool after calling end" on every stop');
+  assert.ok(iStop < iPoolEnd, 'the rebuild is stopped AFTER the pool ended');
+  assert.match(src, /stop: stopAggregates \} = createAggregates\(/, 'stopAggregates is not the aggregates handle\'s stop()');
+  // The boot's first reads too: a stop in the first second ended the pool under sponsors.init().
+  const iBoot = src.indexOf('await Promise.allSettled(bootLoads)');
+  assert.ok(iBoot > 0 && iBoot < iPoolEnd, 'the boot reads are not awaited before the pool ends');
+  for (const load of ['content.load()', 'sponsors.init()', 'supportBar.init()', 'pollEngine.init()']) {
+    assert.ok(new RegExp(`bootLoads\\.push\\([^;]*${load.replace(/[.()]/g, '\\$&')}`, 's').test(src), `${load} is not held in bootLoads`);
+  }
 });
 
 test('the Streamlabs socket is closed so no donation lands after the pool is gone', () => {

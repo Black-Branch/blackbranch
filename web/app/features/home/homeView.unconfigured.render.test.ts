@@ -22,6 +22,7 @@ const data = {
   vods: [{ id: "abcdefghijk", title: "Somebody else's broadcast", duration: "8:55:00", when: "1d ago" }],
   threads: [],
   boards: null,
+  platforms: [],
   generatedAt: "2026-10-09T12:00:00.000Z",
 };
 const render = (variant: "grid" | "compact", signedIn: boolean) =>
@@ -34,8 +35,8 @@ test("no playlist: no VODs card on Home — not 'Latest VODs', not the phone's '
   for (const variant of ["grid", "compact"] as const) {
     for (const signedIn of [false, true]) {
       const out = render(variant, signedIn);
-      // Not vacuous: the rest of the grid rendered (status, threads, boards, news).
-      assert.equal((out.match(/data-widget="/g) ?? []).length, 4, `${variant}/${signedIn}: four widgets`);
+      // Not vacuous: the rest of the grid rendered (status, threads, boards — no feed, so no news).
+      assert.equal((out.match(/data-widget="/g) ?? []).length, 3, `${variant}/${signedIn}: three widgets`);
       assert.match(out, /data-widget="status"/);
       assert.doesNotMatch(out, /data-widget="vods"/);
       assert.doesNotMatch(out, /Latest VODs|>Last stream<|i\.ytimg\.com|Somebody else/);

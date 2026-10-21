@@ -10,7 +10,7 @@ import { ERASED_CANONICAL } from "@/app/lib/erasedPerson";
 //
 // The total summed across EVERY identity linked to the person would be the same number on their
 // Twitch card and their YouTube card — the cross-platform link, published as surely as an id
-// (owner decision 2026-10-17). So the merged total is for the person, a moderator, or once the
+// So the merged total is for the person, a moderator, or once the
 // person shows their links (linkFactsServer.ts — the same facts the profile card decides on).
 // Anyone else gets the credit of the ONE identity asked about: a platform identity's votes on that
 // platform's lines, or a site account's own (site chat + forum).

@@ -70,8 +70,8 @@ function parseMembershipTiers(raw) {
  * The gross USD price of one YouTube membership at `level`, from the owner's map, else the base
  * price. `tiers` is injectable for tests; production reads the env map above.
  */
-// Said once per level name per process (F4, review round 5): a gift runs this once per event and
-// every gift at an unmapped level used to repeat the same line. Bounded: past the cap, nothing new
+// Said once per level name per process: a gift runs this once per event, and every gift at an
+// unmapped level would otherwise repeat the same line. Bounded: past the cap, nothing new
 // is remembered and the line is simply said again.
 const warnedLevels = new Set();
 const WARNED_LEVELS_MAX = 200;

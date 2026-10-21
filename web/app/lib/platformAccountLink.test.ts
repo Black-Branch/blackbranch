@@ -1,10 +1,10 @@
 // One platform account belongs to one site account (platformAccountLink.ts).
 //
-// The link callback used to upsert site.accounts — moving the account and its
-// tokens to whoever completed the OAuth — BEFORE checking ownership, and checked
-// only site.platform_links, which has no row for a platform account that has
-// never chatted. So a second site user silently took the account (and the first
-// user's stored tokens) and was told it worked.
+// Upserting site.accounts — moving the account and its tokens to whoever
+// completed the OAuth — BEFORE checking ownership, or checking only
+// site.platform_links (no row for a platform account that has never chatted),
+// lets a second site user silently take the account (and the first user's
+// stored tokens) and be told it worked.
 //
 // The first half drives a mock pool (statement order); the second runs against a
 // replayed Postgres, because only a real one can show two transactions racing.

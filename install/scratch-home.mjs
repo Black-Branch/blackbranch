@@ -44,6 +44,17 @@ export function fakeHome(extra = "") {
 # this stand-in is not what it tests, so its own log is never cut short.
 ulimit -S -f unlimited 2>/dev/null || true
 echo "$*" >> "$FAKE/calls"
+# fake/fail-<n>: line 1 is a call's start ("compose up -d postgres"; ending in $, the whole call);
+# that call fails, printing the rest of the file as Docker's own error text.
+for f in "$FAKE"/fail-*; do
+  [ -f "$f" ] || continue
+  pat=$(head -n 1 "$f")
+  case "$pat" in
+    *'$') [ "$*" = "\${pat%'$'}" ] || continue ;;
+    *) case "$*" in "$pat"*) ;; *) continue ;; esac ;;
+  esac
+  tail -n +2 "$f" >&2; exit 1
+done
 case "$*" in
   "inspect -f {{.State.Status}}"*) echo "\${FAKE_STATE:-running}" ;;
   "inspect -f {{if .State.Health}}"*) id="\${@: -1}"; case " \${FAKE_UNHEALTHY:-} " in *" \${id#id-} "*) echo unhealthy ;; *) echo healthy ;; esac ;;
@@ -52,9 +63,12 @@ case "$*" in
     if [ -f "$f" ]; then n=$(cat "$f"); echo "$n"; echo $(( n + 1 )) > "$f"; else echo 0; fi ;;
   "logs "*) id="\${@: -1}"; cat "$FAKE/logs-\${id#id-}" 2>/dev/null ;;
   "compose ps -a -q "*) echo "id-\${@: -1}" ;;
+  "compose exec -T mas mas-cli manage issue-compatibility-token"*) cat "$FAKE/mas-token" 2>/dev/null; exit 0 ;;
   "compose exec -T postgres psql"*)
     sql=$(cat)
     case "$sql" in *jsonb_each_text*) cat "$FAKE/install.tsv" 2>/dev/null; exit 0 ;; esac
+    # The sign-in service's account count (the bootstrap's "does this account exist"): fake/mas-users.
+    case "$sql" in *"FROM users WHERE username"*) cat "$FAKE/mas-users" 2>/dev/null; exit 0 ;; esac
     for a in "$@"; do case "$a" in k=*) key="\${a#k=}" ;; esac; done
     cat "$FAKE/cfg/$key" 2>/dev/null; exit 0 ;;
   "compose run "*)

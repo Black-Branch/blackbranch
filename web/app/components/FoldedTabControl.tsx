@@ -132,9 +132,9 @@ export function FoldedTabControl({
       )}
       {/* The floating twin of ChatTabBar's own toggle — same fullKind/isFull
           pair, so it must say the same thing (fullToggleLabel is the one
-          place that decides). This used to hardcode "Community mode" even on
-          a phone, where the pair is rebound to the player fold — wrong verb,
-          and with only a `title` not announced to assistive tech at all. */}
+          place that decides). A hardcoded "Community mode" would be wrong on
+          a phone, where the pair is rebound to the player fold, and a `title`
+          alone is not announced to assistive tech at all. */}
       {onToggleFull && (() => {
         const { label, Icon } = fullToggleLabel(fullKind, isFull);
         return (

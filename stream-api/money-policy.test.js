@@ -1,9 +1,9 @@
 // MONEY-POLICY GUARD for /chat/event (money.js) — the accounting model:
 //
-//   • Buying Qorm is ONLY a wallet top-up (site.coin_ledger, written
+//   • Buying currency is ONLY a wallet top-up (site.coin_ledger, written
 //     web-side). It must NEVER touch the bar, the timer, or support_events,
 //     and never fires a public event.
-//   • SPENDING Qorm — cheer, sticker, sticker_boost, tts_msg, sound — is
+//   • SPENDING currency — cheer, sticker, sticker_boost, tts_msg, sound — is
 //     spectacle: it must move NOTHING. The night is funded by money GIVEN to
 //     it, not by points earned and spent back at it (a spend that lit the
 //     clock could be earned faster, then spent to earn faster again).
@@ -47,7 +47,7 @@ test('every accepted kind has an explicit accounting decision — and nothing el
   }
 });
 
-test('the decisions themselves: NONE for Qorm spends, net for real money, none for sinks', () => {
+test('the decisions themselves: NONE for currency spends, net for real money, none for sinks', () => {
   for (const k of ['cheer', 'sticker', 'sticker_boost'])
     assert.equal(KIND_POLICY[k].credit, 'none', `${k} is spectacle, not support — it must move NOTHING`);
   for (const k of ['donation', 'gift', 'sub'])
@@ -90,7 +90,7 @@ function harness({ poolQuery, ttsEnabled = true, supportBar, broadcast, fireStre
     maskBlacklist: (t) => t,
     broadcast: broadcast || ((f) => log('broadcast', { type: f.type, frame: f })),
     bufferPush: () => {}, bufferReplace: () => {},
-    ALERT_TTS_ENABLED: ttsEnabled,
+    ttsEnabled: () => ttsEnabled,
   });
   const routes = {};
   money.registerMoneyRoutes(
@@ -126,7 +126,7 @@ test('gift and sub credit the Stripe NET too', async () => {
   assert.equal(s.calls.find((c) => c.fn === 'fireStreamEffects').args.takeHomeUSD, 5 * NET);
 });
 
-// ── Qorm is channel points: a spend is spectacle, never support ──
+// ── the currency is channel points: a spend is spectacle, never support ──
 
 test('a sticker broadcasts its overlay frame and credits NOTHING', async () => {
   const h = harness();
@@ -261,7 +261,7 @@ test('highlight is a coin kind with an explicit no-credit policy', () => {
 // THE RE-ADMISSION GUARD. index.js derives SPEND_EVENT_TYPES from
 // COIN_KINDS and injects it as excludeEventTypes into supportbar/sponsors/
 // aggregates. Those predicates exclude HISTORICAL support_events rows written
-// when Qorm spends still credited — face-value cheers. Nothing can buy a cheer,
+// back when currency spends credited — face-value cheers. Nothing can buy a cheer,
 // which is exactly why someone will eventually try to delete this entry as
 // dead. It is not dead; it is load-bearing for five folds.
 test('cheer stays in COIN_KINDS even though nothing can buy one', () => {

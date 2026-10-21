@@ -34,7 +34,7 @@
 
 export const DOCTOR = (() => {
   /** The release's database version: the newest migration it ships (install/doctor.test.mjs). */
-  const SCHEMA_VERSION = 159;
+  const SCHEMA_VERSION = 164;
   const MIN_MEMORY_MIB = 3600; // a "4 GB" server reports a little less than 4096 MiB
   const MIN_DISK_FREE_PCT = 15;
   const MIN_CERT_DAYS = 14;
@@ -49,6 +49,7 @@ export const DOCTOR = (() => {
   const TARGET_LABEL = { local: 'this server\'s backup folder', s3: 'the bucket', sftp: 'the SFTP server' };
   const AREAS = ['Box', 'Front door', 'Services', 'Database', 'Matrix', 'Secrets', 'Modules', 'Media', 'Payments', 'Platforms', 'Alerts', 'Backups', 'Updates'];
   const NAME_LABEL = { site: 'the site', api: 'api.', matrix: 'matrix.' };
+  const PLATFORM_LABEL = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube', streamplace: 'Streamplace' };
 
   const ok = (detail = '') => ({ status: 'ok', detail });
   const fail = (detail, fix) => ({ status: 'fail', detail, ...(fix ? { fix } : {}) });
@@ -121,13 +122,35 @@ export const DOCTOR = (() => {
         }
         return grey('unknown front door mode');
       } },
-    { id: 'door.answers', area: 'Front door', side: 'host', title: 'The site, api. and matrix. answer through their public names',
+    // Direct and lab mode ask the router at this box's own port 443, by each name (answersVia 'box'):
+    // an update must not depend on the home router sending the box's own public address back in.
+    // Tunnel mode asks by the public names, out to Cloudflare and back through the tunnel.
+    { id: 'door.answers', area: 'Front door', side: 'host', title: 'The site, api. and matrix. answer by name',
       fix: 'blackbranch status shows which service is down; blackbranch logs caddy shows the router\'s errors.',
       judge: (h) => {
         const a = Array.isArray(h.answers) ? h.answers : [];
         if (!a.length) return grey('not checked');
+        const how = h.answersVia === 'box' ? ' (asked at this box\'s own router)' : h.answersVia === 'public' ? ' (asked by the public names, through the tunnel)' : '';
         const bad = a.filter((x) => !(x.status >= 200 && x.status < 300));
-        return bad.length ? fail(bad.map((x) => `${NAME_LABEL[x.name] || x.name} ${x.status ? `answered ${x.status}` : 'did not answer'}`).join('; ')) : ok('all three answer');
+        return bad.length ? fail(`${bad.map((x) => `${NAME_LABEL[x.name] || x.name} ${x.status ? `answered ${x.status}` : 'did not answer'}`).join('; ')}${how}`) : ok(`all three answer${how}`);
+      } },
+    // From outside: a warning at worst and never part of an update's verdict. A box behind a home
+    // router often cannot reach its own public address from inside ("NAT loopback" / hairpin), so a
+    // miss here is not proof the site is down — only a reason to look from outside.
+    { id: 'door.outside', area: 'Front door', side: 'host', title: 'Reachable from outside by the public names',
+      fix: 'Open the site on a phone with Wi-Fi off. If it opens, nothing is wrong: many home routers cannot reach their own public address from inside (no "NAT loopback"). If it does not: the A (or AAAA) records must point at this network\'s public address, and the router must forward ports 80 and 443 to this server.',
+      judge: (h) => {
+        if (h.mode === 'internal') return grey('lab mode: the names are not public');
+        if (h.mode === 'tunnel') {
+          const a = Array.isArray(h.answers) ? h.answers : [];
+          if (!a.length) return grey('not checked');
+          return a.every((x) => x.status >= 200 && x.status < 300) ? ok('the row above asked through the tunnel, from outside') : warn('the row above, asked through the tunnel, did not get every answer');
+        }
+        const o = Array.isArray(h.outside) ? h.outside : [];
+        if (!o.length) return grey('not checked');
+        const bad = o.filter((x) => !(x.status >= 200 && x.status < 300));
+        if (!bad.length) return ok('all three answer by their public names');
+        return warn(`${names(bad.map((x) => x.name))} did not answer this box by their public names — normal behind a home router without NAT loopback; check from outside`);
       } },
 
     // Services: whether the two background services run, and whether chat comes in. No message is
@@ -172,6 +195,24 @@ export const DOCTOR = (() => {
         const conn = (p) => p.connected === true ? 'connected' : 'read by the running ingest service';
         return ok(`${set.map((p) => `${p.label}: ${conn(p)}; ${last(p)}`).join(' · ')} — no messages is normal while offline or quiet`);
       } },
+    // stream-ingest's own report (GET :3010/health, asked by the host inside its container): a reader
+    // that failed to start — YouTube's browser, Kick's lookup — is named with its one-line reason.
+    // Not an update check: the readers depend on platforms outside the box.
+    { id: 'ingest.readers', area: 'Services', side: 'host', title: 'Chat readers started',
+      fix: 'Admin Panel → Stream shows the reason; blackbranch logs stream-ingest.',
+      judge: (h) => {
+        const g = h.ingest;
+        if (!g || typeof g !== 'object') return grey('not checked');
+        if (g.answered !== true) return grey('stream-ingest did not answer on its health port (not running, or older than this check)');
+        const r = Object.entries(g.readers && typeof g.readers === 'object' ? g.readers : {}).filter(([, v]) => v && v.state !== 'off');
+        if (!r.length) return ok('no platform is switched on');
+        const label = (id) => PLATFORM_LABEL[id] || id;
+        const failed = r.filter(([, v]) => v.state === 'failed' || v.state === 'unknown');
+        if (failed.length) return fail(failed.map(([id, v]) => `${label(id)}: ${v.error || 'failed to start'}`).join('; '));
+        const starting = r.filter(([, v]) => v.state === 'starting');
+        if (starting.length && g.ok !== true) return warn(`${list(starting.map(([id]) => label(id)))} still starting after two minutes`);
+        return ok(r.map(([id, v]) => `${label(id)}: ${v.state}`).join(' · '));
+      } },
 
     { id: 'db.reachable', area: 'Database', side: 'site', title: 'Postgres answers',
       fix: 'blackbranch status; if postgres is not healthy, blackbranch logs postgres.',
@@ -215,15 +256,15 @@ export const DOCTOR = (() => {
 
     { id: 'matrix.synapse', area: 'Matrix', side: 'site', title: 'Synapse answers (/versions)',
       fix: 'blackbranch status; blackbranch restart synapse; if it stays down, blackbranch logs synapse.',
-      fixOutside: 'The homeserver is managed outside Blackbranch: restart it where it runs and read its log.',
+      fixOutside: 'The homeserver is managed outside Black Branch: restart it where it runs and read its log.',
       judge: (h, s) => s.matrix && s.matrix.versions === 200 ? ok() : fail(s.matrix && s.matrix.versions ? `answered ${s.matrix.versions}` : 'did not answer') },
     { id: 'matrix.mas', area: 'Matrix', side: 'site', title: 'MAS, the sign-in service, answers (/health)',
       fix: 'blackbranch restart mas; if it stays down, blackbranch logs mas.',
-      fixOutside: 'The sign-in service is managed outside Blackbranch: restart it where it runs and read its log.',
+      fixOutside: 'The sign-in service is managed outside Black Branch: restart it where it runs and read its log.',
       judge: (h, s) => s.matrix && s.matrix.mas === 200 ? ok() : fail(s.matrix && s.matrix.mas ? `answered ${s.matrix.mas}` : 'did not answer') },
     { id: 'matrix.issuer', area: 'Matrix', side: 'site', title: 'The homeserver names this site\'s sign-in service',
       fix: 'blackbranch render (Synapse\'s config is made from .env), then check again.',
-      fixOutside: 'The homeserver is managed outside Blackbranch: in its own config, name the sign-in service this site uses (the site\'s MATRIX_OAUTH_ISSUER), restart it, then check again.',
+      fixOutside: 'The homeserver is managed outside Black Branch: in its own config, name the sign-in service this site uses (the site\'s MATRIX_OAUTH_ISSUER), restart it, then check again.',
       judge: (h, s) => s.matrix && s.matrix.issuer === true ? ok('auth_metadata names the configured issuer')
         : s.matrix && s.matrix.issuer === false ? fail('auth_metadata names a different issuer') : grey('the homeserver did not answer') },
     { id: 'matrix.wellknown', area: 'Matrix', side: 'site', title: 'Both well-known files match the config',
@@ -245,12 +286,12 @@ export const DOCTOR = (() => {
       } },
     { id: 'matrix.federation', area: 'Matrix', side: 'site', title: 'Federation matches its switch',
       fix: 'blackbranch render applies the switch (blackbranch federation shows it; the Admin Panel sets it).',
-      fixOutside: 'The homeserver is managed outside Blackbranch: federation is set in its own config, not by the switch here.',
+      fixOutside: 'The homeserver is managed outside Black Branch: federation is set in its own config, not by the switch here.',
       judge: (h, s, input) => {
         const f = (s.matrix && s.matrix.federation) || {};
         if (!isBool(f.reachable)) return grey('could not ask the federation address');
         // Not a bundle: the host never renders the switch, so there is nothing for it to match.
-        if (input.hostState === 'none') return grey(`managed outside Blackbranch — other servers ${f.reachable ? 'can' : 'cannot'} reach it`);
+        if (input.hostState === 'none') return grey(`managed outside Black Branch — other servers ${f.reachable ? 'can' : 'cannot'} reach it`);
         const want = f.switch === true;
         return f.reachable === want ? ok(want ? 'on, and reachable' : 'off, and closed')
           : fail(want ? 'switched on, but other servers cannot reach it' : 'switched off, but other servers can reach it');
@@ -262,7 +303,7 @@ export const DOCTOR = (() => {
       fix: 'blackbranch render applies it now, and says what stops it (blackbranch logs mas). Until then the homeserver\'s sign-up is not what the Lockdown screen chose; the site keeps asking for the render.',
       judge: (h, s, input) => {
         const l = s.matrix && s.matrix.lockdown;
-        if (input.hostState === 'none' || (l && l.managed === 'outside')) return grey('managed outside Blackbranch — the lockdown cannot reach that homeserver\'s sign-up');
+        if (input.hostState === 'none' || (l && l.managed === 'outside')) return grey('managed outside Black Branch — the lockdown cannot reach that homeserver\'s sign-up');
         if (!l || typeof l !== 'object') return grey('not checked');
         const state = `sign-up ${l.registration === 'open' ? 'open' : 'closed'}${l.closedByLockdown ? ' by the lockdown' : ''}`;
         if (!l.lastWrite) return ok(`the lockdown has not changed it (${state})`);
@@ -319,9 +360,21 @@ export const DOCTOR = (() => {
         const tests = mods.flatMap((m) => (Array.isArray(m.tests) ? m.tests.map((t) => ({ ...t, module: m.id })) : []));
         if (!mods.length) return ok('no module is switched on');
         if (!tests.length) return ok(`${list(mods.map((m) => m.id))} on; none has a Test`);
-        const bad = tests.filter((t) => t.ok === false);
-        const unrun = tests.filter((t) => t.ok !== true && t.ok !== false);
-        if (bad.length) return fail(bad.map((t) => `${t.module}: ${t.detail || 'failed'}`).join('; '));
+        // A module switched on whose setup page was never opened is "not set up yet", not broken
+        // (W18b): amber, until its page has been visited — from then on its Test counts. "Visited" is
+        // the setup flow's stamp, setup.state.visited ("module:<id>"), read by the host (h.setup);
+        // the site may also say so itself (`untouched`). An install from before the stamp that
+        // finished setup has no list: every page counts as visited, as before.
+        const st = h && h.setup && typeof h.setup === 'object' ? h.setup : null;
+        const visited = st && Array.isArray(st.visited) ? new Set(st.visited) : st && st.visited === null && st.completed === false ? new Set() : null;
+        const fresh = new Set(mods.filter((m) => m.untouched === true || (visited && !visited.has(`module:${m.id}`))).map((m) => m.id));
+        const bad = tests.filter((t) => t.ok === false && !fresh.has(t.module));
+        const notYet = [...fresh].filter((id) => tests.some((t) => t.module === id && t.ok !== true));
+        const unrun = tests.filter((t) => t.ok !== true && t.ok !== false && !fresh.has(t.module));
+        if (bad.length) return fail(bad.map((t) => `${t.module}: ${t.detail || 'failed'}`).join('; ')
+          + (notYet.length ? `; not set up yet: ${list(notYet)}` : ''));
+        if (notYet.length) return { ...warn(`not set up yet: ${list(notYet)} — switched on, but its page has not been opened`),
+          fix: 'Admin Panel → the module\'s own page: set it up, or switch the module off if it is not wanted.' };
         if (unrun.length) return grey(unrun.map((t) => `${t.module}: ${t.detail || 'not run'}`).join('; '));
         return ok(`${tests.length} passed`);
       } },
@@ -330,6 +383,18 @@ export const DOCTOR = (() => {
       judge: (h, s) => {
         const k = Array.isArray(s.skipped) ? s.skipped : [];
         return k.length ? warn(`skipped: ${list(k)}`) : ok('none');
+      } },
+    // Read-aloud (round 1 contract 2): stream-api's GET /tts/status, asked by the host inside its
+    // container. Judged only while read-aloud is switched on.
+    { id: 'tts.ready', area: 'Modules', side: 'host', title: 'Read-aloud has its key and a voice',
+      fix: 'Admin Panel → Voice: set the ElevenLabs key and a voice id',
+      judge: (h) => {
+        const t = h.tts;
+        if (!t || typeof t !== 'object') return grey('not checked');
+        if (t.answered !== true) return grey('the chat service did not answer (not running, or older than this check)');
+        if (t.enabled !== true) return grey('skipped: read-aloud is switched off');
+        const missing = [t.keySet === true ? null : 'the ElevenLabs key', t.voiceSet === true ? null : 'a voice id'].filter(Boolean);
+        return missing.length ? fail(`switched on, but ${list(missing)} ${missing.length > 1 ? 'are' : 'is'} not set — nothing is read aloud`) : ok('switched on; key and voice set');
       } },
 
     // A "media library" is what a module flagged `servesMedia` serves — files the operator
@@ -475,7 +540,14 @@ export const DOCTOR = (() => {
         if (!l) return ok('no update has run on this box yet');
         const when = typeof l.at === 'string' ? l.at.slice(0, 10) : '';
         if (l.result === 'updated') return ok(`${l.from} → ${l.to} (${when})`);
-        if (l.result === 'rolled-back') return warn(`${l.to} ${l.message ? l.message.replace(/;.*$/, '') : 'failed'} (${when}); the box went back to ${l.from} and its data from just before, and passed its health check again`);
+        if (l.result === 'rolled-back') {
+          // Only a chat reader failed (blackbranch readers_check): the timer tries it again, 3 nights in all.
+          const n = typeof l.attempts === 'number' ? l.attempts : 1;
+          const again = l.reason !== 'reader-regression' ? ''
+            : n >= 3 ? ` — parked after ${n} attempts, each failed only by a chat reader: the timer does not try it again (apply it by hand to retry)`
+              : ` — only a chat reader failed: the timer tries it again tonight (attempt ${n} of 3 done)`;
+          return warn(`${l.to} ${l.message ? l.message.replace(/;.*$/, '') : 'failed'} (${when}); the box went back to ${l.from} and its data from just before, and passed its health check again${again}`);
+        }
         if (l.result === 'not-applied') return warn(`${l.to} was not applied (${when}): ${l.message}`);
         if (l.result === 'rollback-failed') return fail(`${l.to} failed, and going back did not finish cleanly (${when}): ${l.message}`,
           'Run blackbranch status and blackbranch doctor; the backup made before the update brings the data back: blackbranch restore <snapshot> --yes (blackbranch backup list).');
@@ -504,10 +576,27 @@ export const DOCTOR = (() => {
   }
 
   const MARK = { ok: 'ok  ', warn: 'warn', fail: 'FAIL', grey: ' -  ' };
+  /** The header's groups, in order, each with what it asks of the reader (W18b: four counts on one
+   *  line read as one number). The page shows the same words. */
+  const GROUPS = [
+    { status: 'fail', words: 'failing', meaning: 'something does not work — fix these first; each says how' },
+    { status: 'warn', words: 'to look at', meaning: 'works, but worth a look' },
+    { status: 'ok', words: 'ok', meaning: '' },
+    { status: 'grey', words: 'not checked', meaning: 'switched off, or a fact was missing — each row says which' },
+  ];
+  /** @param {DoctorRow[]} rows */
+  function summary(rows) {
+    return GROUPS.map((g) => ({ ...g, n: rows.filter((x) => x.status === g.status).length }));
+  }
 
-  /** The command's printout: every check, grouped by area; a failing or warning check's fix below it. */
+  /** The command's printout: the groups' counts, then every check by area; a failing or warning
+   *  check's fix below it. */
   function text(rows) {
     const out = [];
+    const groups = summary(rows);
+    const width = Math.max(...groups.map((g) => String(g.n).length));
+    for (const g of groups) out.push(`${String(g.n).padStart(width)} ${g.words.padEnd(11)}${g.n && g.meaning ? ` ${g.meaning}` : ''}`.trimEnd());
+    out.push('');
     for (const area of AREAS) {
       const r = rows.filter((x) => x.area === area);
       if (!r.length) continue;
@@ -545,5 +634,5 @@ export const DOCTOR = (() => {
     return { ok: bad.length === 0, failed: bad.map((r) => r.id), rows: bad };
   }
 
-  return Object.freeze({ SCHEMA_VERSION, AREAS, UPDATE_CHECKS, CHECKS: CHECKS.map(({ id, area, title, side, fix }) => ({ id, area, title, side, fix })), evaluate, health, text, report });
+  return Object.freeze({ SCHEMA_VERSION, AREAS, UPDATE_CHECKS, CHECKS: CHECKS.map(({ id, area, title, side, fix }) => ({ id, area, title, side, fix })), GROUPS, evaluate, summary, health, text, report });
 })();

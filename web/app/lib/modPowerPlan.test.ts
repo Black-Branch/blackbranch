@@ -110,7 +110,7 @@ test("a current mod is never stripped; neither is a hand-set level above 50, the
   assert.deepEqual(modDemotePlan([listedRoom("!a", { "@rosalind:site.test": 50 }, {}, false)], [], OWNER), []);
 });
 
-// ── Bridge bots and the install's own accounts keep their power (round 5) ────────────────────
+// ── Bridge bots and the install's own accounts keep their power ────────────────────────────
 // On another install a managed room holds a bridge bot (mautrix-discord) or the install's bot at
 // mod level: neither is a site mod, and stripping them broke the bridge. Exempt by what the install
 // and the room SAY — the staff accounts (streamer, bot, extras) and every bridge bot a bridged

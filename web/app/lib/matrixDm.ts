@@ -25,7 +25,7 @@ function directMap(client: MatrixClient): DirectMap {
 }
 
 /** The joined DM room with `userId`, or null. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function findDm(client: MatrixClient, userId: string): Room | null {
   return (directMap(client)[userId] ?? [])
     .map((id) => client.getRoom(id))
@@ -77,7 +77,7 @@ export async function rememberDm(client: MatrixClient, userId: string, roomId: s
 }
 
 /** Every joined DM room with the partner it is with. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function dmRooms(client: MatrixClient): { userId: string; room: Room }[] {
   const out: { userId: string; room: Room }[] = [];
   for (const [userId, ids] of Object.entries(directMap(client))) {
@@ -104,7 +104,7 @@ function dmLineOf(ev: MatrixEvent): DmLine | null {
 }
 
 /** The room's lines as the client holds them (the live timeline — the first page). */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function dmLines(room: Room): DmLine[] {
   const out: DmLine[] = [];
   for (const ev of room.getLiveTimeline().getEvents()) {
@@ -115,7 +115,7 @@ export function dmLines(room: Room): DmLine[] {
 }
 
 /** The read receipt the Community timeline sends: on the room's last event. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function markDmRead(client: MatrixClient, room: Room): void {
   const evs = room.getLiveTimeline().getEvents();
   const last = evs[evs.length - 1];
@@ -123,7 +123,7 @@ export function markDmRead(client: MatrixClient, room: Room): void {
 }
 
 /** New message events in DM rooms (any room when `roomId` is null), decrypted first when they need it. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function onDmMessage(client: MatrixClient, roomId: string | null, fn: (room: Room, line: DmLine) => void): () => void {
   const handler = (ev: MatrixEvent, room: Room | undefined, toStart: boolean | undefined, _removed: boolean, data: { liveEvent?: boolean }) => {
     if (!room || toStart || data?.liveEvent === false) return;

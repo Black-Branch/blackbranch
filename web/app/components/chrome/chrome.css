@@ -351,7 +351,7 @@
 
   /* ── Rail: vertical sections ────────────────────────────────────────── */
   .chrome-rail-layout { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: .75rem; }
-  /* Fill (round 2b, the Appearance window): the layout takes the rest of a
+  /* Fill (the Appearance window): the layout takes the rest of a
      fixed-frame window body and each column scrolls on its own, so the search
      and header above it stay put. */
   .chrome-rail-layout[data-fill] { flex: 1 1 auto; min-block-size: 0; grid-template-rows: minmax(0, 1fr); }
@@ -559,7 +559,7 @@
     overscroll-behavior: contain;
   }
   /* Content that scrolls INSIDE itself (marks its root data-scroll-inner —
-     the Appearance window, round 2b: search and the header stay put, the rail
+     the Appearance window: search and the header stay put, the rail
      and list scroll) turns the body into a fixed frame. Every other window
      keeps the body as its one scroller. */
   .chrome-window .chrome-window-body:has(> [data-scroll-inner]) { display: flex; flex-direction: column; overflow: hidden; }
@@ -576,8 +576,8 @@
      pan. No gesture-race code. The floating window's `none` stays: it has no
      pager to yield to. */
   .chrome-window-panel > .chrome-window-grab { touch-action: pan-x; }
-  /* The grabber pill — the visible affordance of the handle. Slim headers
-     (round 2a): the pill sits INSIDE the band along its top edge instead of on
+  /* The grabber pill — the visible affordance of the handle. Slim headers:
+     the pill sits INSIDE the band along its top edge instead of on
      a 12px row of its own. The grab wrapper is still the one drag surface, so
      the pill is decoration only (pointer-events: none) and z 20 keeps it above
      the bar's own paint (.chrome-bar is z 10); isolation keeps that 20 local. */
@@ -640,7 +640,7 @@
      20px gap makes the pitch 44px, so neighbours never overlap — with the
      plain 4px gap the ✕'s area (a later sibling, painted on top) took the
      popout's right edge. Band-tall, not 44px: a taller area spilled 7px into
-     the window body, where a tap under the ✕ closed the window (review). */
+     the window body, where a tap under the ✕ closed the window. */
   @media (pointer: coarse) {
     [data-bar="window"] .chrome-bar-lead, [data-bar="window"] .chrome-bar-trail { gap: 1.25rem; }
     [data-bar="window"] .chrome-bar-btn { position: relative; }
@@ -774,7 +774,7 @@
     z-index: 30;
   }
   .chrome-window-panel {
-    --chrome-window-h: 30px; /* slim window header on a phone (round 2a) */
+    --chrome-window-h: 30px; /* slim window header on a phone */
     position: absolute;
     left: 0; right: 0; bottom: 0;
     pointer-events: auto;

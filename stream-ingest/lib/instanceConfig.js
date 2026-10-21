@@ -152,6 +152,17 @@ export function createInstanceConfig({
     }
   }
 
+  /** A restart-applied key that this process has now applied WITHOUT a restart (a platform reader
+   *  restarted with its new channel — lib/platformStarter.js): from here on the Credentials page
+   *  shows the value it runs, not the boot one as pending. */
+  function markApplied(keys) {
+    if (applied === null) return;
+    for (const k of keys) {
+      const e = instanceEntry(k);
+      if (e && e.reload === 'restart' && e.packages.includes(SELF)) applied[k] = resolveEntry(e).value;
+    }
+  }
+
   /** This process's view of every key it consumes — sources and page-safe displays, never a
    *  secret value — sent to stream-api for the Credentials page. A `reload: 'restart'` key shows
    *  the value this process took at its first load (what it runs), so a saved change reads as
@@ -280,7 +291,7 @@ export function createInstanceConfig({
   const messageListeners = new Set();
   function onMessage(fn) { messageListeners.add(fn); return () => messageListeners.delete(fn); }
 
-  return { get, content: contentOf, contentLoaded, onLoad, resolve, load, start, stop, bootProblems, handleFrame, statusReport, state, setReportExtra, setProbeHandler, reportNow: () => report(), onMessage };
+  return { get, content: contentOf, contentLoaded, onLoad, resolve, load, start, stop, bootProblems, handleFrame, statusReport, state, setReportExtra, setProbeHandler, reportNow: () => report(), onMessage, markApplied };
 }
 
 /** The process singleton every stream-ingest module reads through. */

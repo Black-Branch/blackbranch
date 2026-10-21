@@ -1,4 +1,4 @@
-// The popped-out user card follows the room's deletions and purges (U8).
+// The popped-out user card follows the room's deletions and purges.
 //
 // The card read `.id` off a `delete` frame that carries `messageId`, and had no
 // purge handler, so a removed line stayed on the card. Frames below are built

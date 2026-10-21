@@ -7,7 +7,7 @@ import { installValue } from "./installValues.ts";
 //   stream-api  — served by stream-api itself, public, reachable on the same
 //                 host the radio and the chat socket use
 //   rig         — an HTML file OBS loads from disk on the streaming PC: an
-//                 install's own files, listed by its owner plugin (RigOverlays)
+//                 install's own files, listed by its site plugin (RigOverlays)
 // overlayDirectory.test.ts pins each entry to its home: a site page that
 // exists, a PUBLIC GET on the route surface.
 
@@ -25,7 +25,7 @@ export type OverlaySource = {
   status: "live" | "retiring";
 };
 
-/** Files OBS loads from disk on the streaming PC — an install's own, so they come from the owner
+/** Files OBS loads from disk on the streaming PC — an install's own, so they come from the site
  *  plugin (app/lib/plugins/site.ts): the folder (absolute — OBS's Local file field does not expand
  *  `~`) and the sources in it. A public install has none. */
 export type RigOverlays = { dir: string; sources: OverlaySource[] };
@@ -78,6 +78,44 @@ export const OVERLAY_SOURCES: OverlaySource[] = [
     shows: "Sticker sends and boosts, as they land.",
     served: "stream-api",
     path: "/overlay/sticker",
+    size: "Full canvas: 1920×1080.",
+    status: "live",
+  },
+  // The four generic money overlays — served by stream-api like the
+  // poll and the sticker, driven by the same socket frames.
+  {
+    id: "alert",
+    name: "Alerts",
+    shows: "Each tip, subscription, gift and follow as a pop-up alert on stream.",
+    served: "stream-api",
+    path: "/overlay/alert",
+    size: "Full canvas: 1920×1080.",
+    status: "live",
+  },
+  {
+    id: "support-bar",
+    name: "Support bar",
+    shows: "The stream's support bar and timer, filling as support comes in.",
+    served: "stream-api",
+    path: "/overlay/support-bar",
+    size: "Full canvas: 1920×1080.",
+    status: "live",
+  },
+  {
+    id: "meter",
+    name: "Meter",
+    shows: "The support meter rising with each contribution.",
+    served: "stream-api",
+    path: "/overlay/meter",
+    size: "Full canvas: 1920×1080.",
+    status: "live",
+  },
+  {
+    id: "bubble",
+    name: "Support bubble",
+    shows: "The reminder bubble that asks viewers to support the stream.",
+    served: "stream-api",
+    path: "/overlay/bubble",
     size: "Full canvas: 1920×1080.",
     status: "live",
   },

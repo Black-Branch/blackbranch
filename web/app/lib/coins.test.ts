@@ -6,9 +6,9 @@ import {
 import * as coins from "./coins.ts";
 
 // The point of this file: the ledger vocabulary is ONE list, and every member of
-// it has a label. StoreContent used to carry its own copy of the union with a
-// default-less switch, so a kind added to coinsServer rendered `undefined` in the
-// Qorm history tab with a green build. Enumerating the array is what stops that.
+// it has a label. A second copy of the union with a default-less switch would
+// render a kind added to coinsServer as `undefined` in the points history tab
+// with a green build. Enumerating the array is what stops that.
 test("every ledger kind has a non-empty label", () => {
   for (const kind of LEDGER_KINDS) {
     const label = ledgerKindLabel(kind, null);
@@ -83,8 +83,8 @@ test("the chip and the composer both read the LIVE price, not just the constant"
 // ── the wallet parenthetical ─────────────────────────────────────────────────
 
 test("the earned parenthetical is ALWAYS rendered, even when it equals the total", () => {
-  // The bug it fixes: omit-when-equal hid it from everyone who has never bought
-  // Qorm — almost everyone — so it appeared and vanished based on purchase
+  // Omit-when-equal would hide it from everyone who has never bought
+  // points — almost everyone — so it appeared and vanished based on purchase
   // history and could not be learned — people did not see it.
   // No build here, so the product's mark ("pts", spaced); an install's one-letter mark sits flush
   // (currencyBuilt.test.ts).
@@ -132,7 +132,9 @@ test("the store is ONE page: top up and spend are not exclusive tabs", async () 
   // Both must render under the SAME tab value, or they are still exclusive.
   assert.match(src, /tab === "store" && <StoreSpend \/>/, "the spend catalog is not on the store page");
   // (The buy box also waits on the buy switch — still the same tab value.)
-  assert.match(src, /tab === "store" && purchasable !== false && \(/, "the buy box is not on the store page");
+  // And on a provider being on (canBuy = configured && purchasable !== false).
+  assert.match(src, /const canBuy = configured && purchasable !== false;/);
+  assert.match(src, /tab === "store" && canBuy && \(/, "the buy box is not on the store page");
   // Old callers must keep working — the event contract is the compatibility surface.
   assert.match(src, /initialTab === "history"/, "an entry of \"history\" no longer opens history");
   assert.match(src, /initialTab !== "topup"/, "an entry of \"topup\" no longer surfaces the buy box");

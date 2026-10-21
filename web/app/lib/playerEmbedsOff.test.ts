@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripComments } from "./testSource.ts";
-import { availableSources, liveSourcesOn, liveSourceOn } from "./playerSource.ts";
+import { availableSources, liveSourcesOn, liveSourceOn, liveSourcesSetUp } from "./playerSource.ts";
 import { liveOptions, modeHasMenu } from "./playerMode.ts";
 import { instanceEntry, parseInstanceValue } from "./instanceSchema.generated.mjs";
 
@@ -72,4 +72,42 @@ test("the home page reads the setting per render and the player takes every sour
   assert.match(view, /const liveSource = liveSourceOn\(parseLiveSource\(storedLive\) \?\? liveSourceFromLegacy\(legacyEmbed, legacySpThin\), liveOn\);/);
   assert.match(view, /availableSources\(\{ live, hasCommunity, fallbacks: fallbackIds, liveOn \}\)/);
   assert.match(view, /liveOn=\{liveOn\}/);
+});
+
+// ── Only sources this install has a channel for ────────────────────────────────────────────────
+
+const SETUP = { streamplaceChannel: "", youtubeChannelId: "", youtubeShown: true, twitchChannel: "" };
+
+test("a source with no channel is not set up: an empty stream.place channel drops the site player and the embed", () => {
+  assert.deepEqual(liveSourcesSetUp({ ...SETUP, twitchChannel: "casey" }), ["twitch"]);
+  assert.deepEqual(liveSourcesSetUp({ ...SETUP, streamplaceChannel: "casey.example" }), ["native", "streamplace"]);
+  assert.deepEqual(liveSourcesSetUp({ ...SETUP, youtubeChannelId: "UCabc", youtubeShown: false }), [], "YouTube with its module off is not offered");
+  assert.deepEqual(liveSourcesSetUp({ streamplaceChannel: "a", youtubeChannelId: "UC", youtubeShown: true, twitchChannel: "b" }), ["native", "streamplace", "youtube", "twitch"]);
+});
+
+test("a first-time viewer on a Twitch-only install lands on Twitch, not an empty stream.place embed", () => {
+  const on = liveSourcesOn([], liveSourcesSetUp({ ...SETUP, twitchChannel: "casey" }));
+  assert.deepEqual(on, ["twitch"]);
+  // No stored choice reads as the legacy default, "streamplace" — which is not on here.
+  assert.equal(liveSourceOn("streamplace", on), "twitch");
+  assert.deepEqual(availableSources({ live: true, hasCommunity: false, fallbacks: [], liveOn: on }), ["twitch"]);
+});
+
+test("fail open stays inside the set-up sources; none set up = no live source at all (the player says so)", () => {
+  assert.deepEqual(liveSourcesOn(["twitch"], ["twitch"]), ["twitch"], "switching off the only one is ignored");
+  assert.deepEqual(liveSourcesOn([], []), []);
+  assert.deepEqual(availableSources({ live: true, hasCommunity: false, fallbacks: [], liveOn: [] }), []);
+});
+
+test("wiring: the page hands the set-up sources and the Kick channel; the player shows a Kick link instead of an empty embed", () => {
+  const page = read("app/(main)/page.tsx");
+  assert.match(page, /liveSetUp=\{liveSourcesSetUp\(\{/);
+  assert.match(page, /youtubeShown: !off\.includes\("youtube"\)/);
+  assert.match(page, /kickChannel=\{instanceString\("platform\.kick\.slug"\) \?\? ""\}/);
+  const view = read("app/components/StreamView.tsx");
+  assert.match(view, /livePlayable=\{liveOn\.length > 0\}/);
+  const area = read("app/features/player/StreamPlayerArea.tsx");
+  assert.match(area, /\{tab === "live" && live && !livePlayable && \(/);
+  assert.match(area, /Live on Kick — this site has no Kick player yet\./);
+  for (const a of ["sp", "yt", "tw"]) assert.match(area, new RegExp(`\\{tab === "live" && playLive && active === "${a}"`), `the ${a} embed mounts only with a playable source`);
 });

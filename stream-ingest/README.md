@@ -21,7 +21,7 @@ stream.place            ─┘     POST /chat  (stream-api, emotes + reply inlin
 
 | Path | Purpose |
 |------|---------|
-| `index.js` | entry: start enabled platforms, the poller, the bot; the one seam to an install's owner plugin (`owner/`) |
+| `index.js` | entry: start enabled platforms, the poller, the bot; the one seam to an install's site plugin (`owner/`) |
 | `lib/pipeline.js` | per-message orchestration |
 | `lib/emotes.js` | `stripEmotes` / `cleanWordCount` |
 | `lib/embeddings.js` | memory: embeds new messages through the `embeddings` AI slot, gated on `memory.state` being on. A wrong-length vector or a refused key PAUSES memory with one alarm (stream-api writes the state) |

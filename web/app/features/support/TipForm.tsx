@@ -8,6 +8,7 @@ import { donationTtsChars, donationTtsLine } from "@/app/lib/donationTts";
 import { CharCounter } from "@/app/components/CharCounter";
 import { pointsForCents, PAY_MIN_CENTS, PAY_MAX_CENTS } from "@/app/lib/coins";
 import { currencyName } from "@/app/lib/currency";
+import { formatPrice, currencySign } from "@/app/lib/moneyFormat";
 import { useStorePrices } from "@/app/lib/useStorePrices";
 import { useClientValue } from "@/app/lib/useClientState";
 import { Toggle } from "@/app/components/SettingsControls";
@@ -28,6 +29,8 @@ export type { TipDraft } from "./types";
 // outer <section>, its heading, and its panel chrome classes, so a page and an
 // embedded panel can frame the same controls differently.
 
+// Whole units of the site's currency (moneyFormat.ts SITE_CURRENCY — the one every checkout route
+// charges in), written by formatPrice, never with a literal "$".
 const PRESETS = [3, 5, 10, 25];
 
 export function TipForm(props: {
@@ -252,13 +255,13 @@ export function TipForm(props: {
                 selected ? (announce ? "bg-emerald-500 text-on-accent" : "bg-yellow-500 text-on-accent") : "bg-raised text-body hover:bg-control"
               }`}
             >
-              ${p}
+              {formatPrice(p * 100)}
             </button>
           );
         })}
         <div className="relative">
           <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted">
-            $
+            {currencySign()}
           </span>
           <input
             type="number"

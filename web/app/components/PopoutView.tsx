@@ -36,8 +36,8 @@ export default function PopoutView({
     <div
       ref={rootRef}
       className="h-full flex flex-col overflow-hidden"
-      // A page, not a pop-up (round 2a): the site's page background, like every
-      // other page. Card fill used to paint it.
+      // A page, not a pop-up: the site's page background, like every
+      // other page.
       style={{ background: "var(--bg-page)" }}
     >
       <ErrorBoundary>

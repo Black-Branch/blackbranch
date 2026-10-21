@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   openState, pickOption, userText, deskSays, type ConvoState, type SupportMsg,
 } from "./conversation";
-import { GREETINGS, FILE_LAST_BUG, type FlowNode } from "@/app/lib/support/flows";
+import { GREETINGS, FILE_LAST_BUG, NO_FREE_TEXT, supportFreeText, type FlowNode } from "@/app/lib/support/flows";
 
 // The hook is deliberately thin: all conversation logic lives in the pure
 // reducer (conversation.ts); this layer only owns React state and fires the
@@ -91,6 +91,10 @@ export function useSupportConversation(deps: SupportDeps) {
       } else if (prev.awaiting === "bug-desc") {
         await d.onTicket("bug", trimmed, advanced.msgs);
         commit(deskSays(advanced, FILED, { backToRoot: true }));
+      } else if ((prev.awaiting === "free" || prev.awaiting === "options") && !supportFreeText()) {
+        // Nothing here answers a typed question (no AI help desk on this install): say so
+        // at once and hand back the menu — never a 30 s hold ending in "can't reach my brain".
+        commit(deskSays(advanced, NO_FREE_TEXT, { backToRoot: true }));
       } else if (prev.awaiting === "free" || prev.awaiting === "options") {
         // Typed over the options row = a free-text question (conversation.ts).
         const reply = await d.onFreeText(trimmed, prev.msgs);

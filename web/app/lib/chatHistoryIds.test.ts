@@ -1,6 +1,6 @@
-// The public chat history (no sign-in) never carries a canonical id (owner decision 2026-10-17):
-// it returned canonical_id + matrix_id per row back to the start of chat, so a script could group
-// every person's Twitch, YouTube, Kick and site lines. Rows now carry a per-platform public id; a
+// The public chat history (no sign-in) never carries a canonical id: canonical_id + matrix_id per
+// row back to the start of chat would let a script group every person's Twitch, YouTube, Kick and
+// site lines. Rows carry a per-platform public id; a
 // moderator's page also carries the canonical; a platform row never carries a Matrix id.
 // Run: node --test app/lib/chatHistoryIds.test.ts
 import { test } from "node:test";

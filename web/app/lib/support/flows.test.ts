@@ -1,9 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  SUPPORT_ROOT, GREETINGS, FIRST_VISIT, CLOSE_HINT, findNode,
-  linkNudgeOptions, NUDGE_LATER_KEY, NUDGE_NEVER_KEY, type FlowNode,
+  SUPPORT_ROOT, GREETINGS, FIRST_VISIT, CLOSE_HINT, findNode, setSupportFacts, supportFreeText,
+  linkNudgeOptions, NUDGE_LATER_KEY, NUDGE_NEVER_KEY, type FlowNode, type SupportFacts,
 } from "./flows.ts";
+
+const ALL_ON: SupportFacts = { off: [], purchasable: true, subscriptions: true, tts: true, freeText: true };
+const BARE: SupportFacts = { off: ["radio", "stripe", "paypal"], purchasable: false, subscriptions: false, tts: false, freeText: false };
+
+/** Every key and every answer the panel offers right now. */
+function offered(): { keys: string[]; text: string } {
+  const keys: string[] = [];
+  const texts: string[] = [];
+  walk(SUPPORT_ROOT, (n) => { keys.push(n.key); texts.push(n.label); if (n.action?.kind === "answer") texts.push(n.action.text); });
+  return { keys, text: texts.join("\n") };
+}
+
+// Before the page says what the install runs: no free text, no paid part. Read FIRST, before any
+// test sets facts.
+const BEFORE = offered();
+const FREE_BEFORE = supportFreeText();
+
+// The structure tests below walk the fullest tree.
+setSupportFacts(ALL_ON);
 
 // The flow tree is data the panel walks blindly — these pin the invariants the
 // walker relies on, so a copy edit can't strand a user on a dead button.
@@ -81,4 +100,70 @@ test("the dismissal chips carry no action — ChatSidebar intercepts their keys"
     assert.equal(chip.action, undefined, `${key} grew an action — the reducer would swallow the pick`);
     assert.equal(chip.children, undefined, `${key} grew children`);
   }
+});
+
+// ── The answers follow what this install runs ─────────────────────────────────────────────────
+
+test("before the page says, nothing install-specific is offered — no free text, no Supporter, no buying", () => {
+  assert.ok(BEFORE.keys.includes("faq-linking"), "vacuity: the tree loaded");
+  for (const k of ["other", "faq-supporter", "faq-encrypted", "faq-radio"]) assert.ok(!BEFORE.keys.includes(k), k);
+  assert.equal(FREE_BEFORE, false);
+  assert.doesNotMatch(BEFORE.text, /\bbuy\b|read out|Supporter/);
+});
+
+test("AI off: no 'Something else' and typed questions do not go to the AI; on: both come back", () => {
+  setSupportFacts({ ...ALL_ON, freeText: false });
+  assert.ok(!offered().keys.includes("other"));
+  assert.equal(supportFreeText(), false);
+  setSupportFacts(ALL_ON);
+  assert.ok(offered().keys.includes("other"));
+  assert.equal(supportFreeText(), true);
+});
+
+test("buying points is mentioned only where points can be bought", () => {
+  setSupportFacts({ ...ALL_ON, purchasable: false });
+  const off = (findNode("faq-points")?.action as { text: string }).text;
+  assert.doesNotMatch(off, /\bbuy\b/);
+  assert.match(off, /earn/);
+  setSupportFacts(ALL_ON);
+  assert.match((findNode("faq-points")?.action as { text: string }).text, /\bbuy\b/);
+});
+
+test("no subscription here: no Supporter answer, no redacted-message answer, no Supporter perk in the name-style answer", () => {
+  setSupportFacts({ ...ALL_ON, subscriptions: false });
+  const o = offered();
+  assert.ok(!o.keys.includes("faq-supporter") && !o.keys.includes("faq-encrypted"));
+  assert.doesNotMatch(o.text, /Supporter|subscri/i);
+  setSupportFacts(ALL_ON);
+  assert.ok(offered().keys.includes("faq-supporter"));
+});
+
+test("read-aloud is promised only where the voice is on", () => {
+  setSupportFacts({ ...ALL_ON, tts: false });
+  assert.doesNotMatch((findNode("howto-cheer")?.action as { text: string }).text, /read out/);
+  setSupportFacts(ALL_ON);
+  assert.match((findNode("howto-cheer")?.action as { text: string }).text, /read out/);
+});
+
+test("the votes fact is there on every install (ticket #160: the desk denied votes exist)", () => {
+  for (const f of [ALL_ON, BARE]) {
+    setSupportFacts(f);
+    const votes = findNode("faq-votes");
+    assert.ok(votes?.action?.kind === "answer");
+    assert.match(votes.action.text, /Hover over a message/);
+  }
+  setSupportFacts(ALL_ON);
+});
+
+test("no owner-persona or owner-setup lines in any answer, on the fullest install", () => {
+  setSupportFacts(ALL_ON);
+  assert.doesNotMatch(offered().text, /grudging|that's the bit|stream timer|in-house|my support desk/i);
+});
+
+test("a bare install still offers a working menu: every leaf has an action, the reports stay", () => {
+  setSupportFacts(BARE);
+  const o = offered();
+  for (const k of ["faq-points", "faq-linking", "faq-votes", "report-user", "report-bug", "howto-cheer"]) assert.ok(o.keys.includes(k), k);
+  walk(SUPPORT_ROOT, (n) => assert.ok(n.children?.length || n.action, `dead button ${n.key}`));
+  setSupportFacts(ALL_ON);
 });

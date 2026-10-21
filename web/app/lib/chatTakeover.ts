@@ -10,7 +10,7 @@ let taken = false;
 const listeners = new Set<() => void>();
 
 /** The TUI has the window (true) or gave it back (false). */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function setChatTakeover(on: boolean): void {
   if (taken === on) return;
   taken = on;
@@ -39,7 +39,7 @@ let replaced = false;
 const replacedListeners = new Set<() => void>();
 
 /** The chat box is replaced by the TUI's window (true) or back (false). */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function setComposerReplaced(on: boolean): void {
   if (replaced === on) return;
   replaced = on;

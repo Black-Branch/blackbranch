@@ -8,6 +8,7 @@ import type Stripe from "stripe";
 import { NextRequest } from "next/server";
 import { sanitizeDisplayName, sanitizeChatMessage } from "@/app/lib/sanitize";
 import { donationTtsChars } from "@/app/lib/donationTts";
+import { SITE_CURRENCY } from "@/app/lib/moneyFormat";
 import { createSlidingWindowLimiter, ipKey } from "@/app/lib/rateLimit";
 import { statementSuffixFor, getStatementPrefixLength } from "@/app/lib/statementSuffix";
 import { PAY_MIN_CENTS, PAY_MAX_CENTS } from "@/app/lib/coins";
@@ -107,7 +108,7 @@ export async function POST(req: NextRequest) {
       {
         quantity: 1,
         price_data: {
-          currency: "usd",
+          currency: SITE_CURRENCY,
           unit_amount: cents,
           product_data: { name: `Tip to ${siteName()}` },
         },

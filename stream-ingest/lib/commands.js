@@ -1,7 +1,7 @@
 // Public platform-chat commands: !karma / !rank, the pronoun commands, !dono.
 //
 // !karma / !rank answer for ONE platform account — the handle asked about (or the sender's) on the
-// platform the command came from — never the merged person (review round 5, PB1): answering a
+// platform the command came from — never the merged person: answering a
 // Twitch handle with the person's site name, or with figures their other handles share, told the
 // whole chat about a link the person keeps private. stream-api's /user/lookup?platform= decides
 // (profiles.js): the identity's own answer, or the merged one when every account on the person
@@ -109,15 +109,30 @@ export async function handlePronounCommand(msg, { ask = pronounCommand } = {}) {
 }
 
 /**
- * The !dono reply: the instance key money.supportLine (env DONO_LINKS), read at call time so an
- * edit applies to the next !dono. Unset = a line pointing at this site's own tip page, so an
- * install never advertises links it did not configure.
+ * The !dono reply, read at call time so an edit applies to the next !dono:
+ *   1. money.supportLine (env DONO_LINKS) — the operator's own words, when written;
+ *   2. a payment provider on (the Stripe or PayPal module switch) → this site's own donate page;
+ *   3. else site.donateUrl (https only) — an outside page the operator named (Ko-fi, PayPal.me …);
+ *   4. else "donations aren't set up here" — never a link to a page that says billing is off.
+ * An install never advertises links it did not configure.
  */
 export function donoLine(get = (k) => instanceConfig.get(k)) {
   const own = String(get('money.supportLine') || '').trim();
   if (own) return own;
-  const origin = String(get('site.origin') || '').trim().replace(/\/$/, '');
-  return origin ? `support the stream → ${origin}/donate` : 'support the stream on the site — tap Donate under the player';
+  if (get('modules.stripe') === true || get('modules.paypal') === true) {
+    const origin = String(get('site.origin') || '').trim().replace(/\/$/, '');
+    return origin ? `support the stream → ${origin}/donate` : 'support the stream on the site — tap Donate under the player';
+  }
+  const outside = httpsUrl(get('site.donateUrl'));
+  if (outside) return `support the stream → ${outside}`;
+  return 'donations aren\'t set up here';
+}
+
+/** An https address, or '' (a plain-http or malformed link is never posted into chat). */
+function httpsUrl(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return '';
+  try { return new URL(s).protocol === 'https:' ? s : ''; } catch { return ''; }
 }
 /** !dono — post the support links. */
 export function handleDonoCommand(msg, line = donoLine) {

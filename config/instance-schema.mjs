@@ -141,13 +141,19 @@ export const INSTANCE_KEYS = [
 
   // ── Running the site (instance tier — written by the setup pages, edited on the Admin Panel) ──
   { key: 'site.timeZone', kind: 'string', maxLength: 64, default: null, scope: 'server', module: 'core', secret: false,
-    reload: 'live', tier: 'instance', env: ['SITE_TIME_ZONE'], packages: ['web'],
+    reload: 'live', tier: 'instance', env: ['SITE_TIME_ZONE'], packages: ['web', 'stream-api'],
     label: 'Time zone',
     description: 'The time zone the site runs on, as a name like Europe/Berlin — the quiet hour and daily jobs use it. Unset = UTC.' },
   { key: 'site.dataSince', kind: 'string', maxLength: 10, default: null, scope: 'server', module: 'core', secret: false,
     reload: 'live', tier: 'instance', env: ['SITE_DATA_SINCE'], packages: ['web'],
     label: 'Data since',
     description: 'The first day this site\'s history counts from (YYYY-MM-DD), e.g. the day it opened. Unset = no lower bound.' },
+  { key: 'site.donateUrl', kind: 'string', maxLength: 512, default: null, scope: 'public', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['DONATE_URL'], packages: ['web', 'stream-ingest'],
+    label: 'Donate link', description: 'Where the Donate button and the !dono command send people when no payment provider is set up here (a Ko-fi, PayPal.me or similar https address). Unset = the site\'s own donate page when a provider is on; otherwise the button is hidden and the command answers that donations are not set up here.' },
+  { key: 'legal.liabilityCapUsd', kind: 'number', integer: true, min: 0, max: 100000, default: 50, scope: 'public', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['LEGAL_LIABILITY_CAP_USD'], packages: ['web'],
+    label: 'Liability cap (USD)', description: 'The amount the legal page names as the most this site is liable for. Shown in US dollars until a currency setting exists.' },
   { key: 'updates.quietHour', kind: 'number', integer: true, min: 0, max: 23, default: null, scope: 'server', module: 'core', secret: false,
     reload: 'live', tier: 'instance', env: ['UPDATES_QUIET_HOUR'], packages: ['web'],
     label: 'Quiet hour',
@@ -291,7 +297,7 @@ export const INSTANCE_KEYS = [
 
   // ── Channels ─────────────────────────────────────────────────────────────────────────────
   { key: 'platform.twitch.channel', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'instance', env: ['TWITCH_CHANNEL'], packages: ['web', 'stream-ingest'],
+    reload: 'live', tier: 'instance', env: ['TWITCH_CHANNEL'], packages: ['web', 'stream-ingest'],
     label: 'Twitch channel',
     description: 'The Twitch channel login (lower case) — the embed, emotes and the chat connection.' },
   { key: 'platform.twitch.broadcasterId', kind: 'string', default: null, scope: 'server', module: 'core', secret: false,
@@ -299,7 +305,7 @@ export const INSTANCE_KEYS = [
     label: 'Twitch broadcaster id',
     description: 'The channel\'s numeric Twitch id. Moderation refuses to act without it; the viewer poller reads it.' },
   { key: 'platform.youtube.channelId', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'instance', env: ['YOUTUBE_CHANNEL_ID'], packages: ['web', 'stream-ingest'],
+    reload: 'live', tier: 'instance', env: ['YOUTUBE_CHANNEL_ID'], packages: ['web', 'stream-ingest'],
     label: 'YouTube channel id',
     description: 'The channel id (UC…) — the embed, live detection, chat and moderation.' },
   { key: 'platform.youtube.vodPlaylist', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
@@ -307,7 +313,7 @@ export const INSTANCE_KEYS = [
     label: 'VOD playlist',
     description: 'The YouTube playlist (PL…) whose public videos are listed as past broadcasts: Home\'s VODs card and the VODs tabs. Unset or "none" = no VODs anywhere.' },
   { key: 'platform.kick.slug', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'instance', env: ['KICK_CHANNEL_SLUG', 'KICK_CHANNEL'], packages: ['web', 'stream-ingest'],
+    reload: 'live', tier: 'instance', env: ['KICK_CHANNEL_SLUG', 'KICK_CHANNEL'], packages: ['web', 'stream-ingest'],
     label: 'Kick channel',
     description: 'The Kick channel slug — the chat connection and live detection.' },
   { key: 'platform.kick.userId', kind: 'string', default: null, scope: 'server', module: 'core', secret: false,
@@ -315,13 +321,13 @@ export const INSTANCE_KEYS = [
     label: 'Kick user id',
     description: 'The channel\'s numeric Kick id. Kick moderation refuses without it.' },
   { key: 'platform.streamplace.did', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'instance', env: ['STREAMPLACE_STREAMER_DID'], packages: ['web', 'stream-ingest'], test: 'streamplace',
-    label: 'stream.place account',
+    reload: 'live', tier: 'instance', env: ['STREAMPLACE_STREAMER_DID'], packages: ['web', 'stream-ingest'], test: 'streamplace',
+    label: 'Streamplace account',
     description: 'The streamer\'s stream.place DID (did:plc:…) — the player and its chat.' },
   { key: 'platform.streamplace.channel', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
     reload: 'live', tier: 'instance', env: ['SP_CHANNEL'], packages: ['web'],
-    label: 'stream.place handle',
-    description: 'The handle the stream.place player opens.' },
+    label: 'Streamplace handle',
+    description: 'The handle the Streamplace player opens.' },
   // The Stream tab's embed switches: which of the player's live
   // sources the watch page offers. The default (none off) is every source, so nothing changes until an
   // admin switches one off; a list that switches every source off is ignored (fail open: a player with
@@ -533,6 +539,15 @@ export const INSTANCE_KEYS = [
   { key: 'tts.clipsDir', kind: 'string', default: null, scope: 'server', module: 'tts', secret: false,
     reload: 'live', tier: 'instance', env: ['TTS_CLIPS_DIR'], packages: ['stream-api'],
     label: 'Voice clips folder', description: 'The folder of the bot\'s own short sounds (<id>.v0.mp3 …) played on its voice output; a relative path is inside the chat service\'s folder. Unset = no clips.' },
+  { key: 'tts.enabled', kind: 'bool', default: false, scope: 'server', module: 'tts', secret: false,
+    reload: 'restart', tier: 'instance', env: ['ALERT_TTS_ENABLED'], packages: ['stream-api'],
+    label: 'Speak alerts and paid messages', description: 'Off = nothing is ever spoken, whatever else is set (a safe default for a new install). On = alerts, paid read-aloud and the bot speak through ElevenLabs with the voices below.' },
+  { key: 'tts.voiceCasual', kind: 'string', maxLength: 64, default: null, scope: 'server', module: 'tts', secret: false,
+    reload: 'live', tier: 'instance', env: ['ELEVENLABS_VOICE_CASUAL'], packages: ['stream-api'],
+    label: 'Voice', description: 'The ElevenLabs voice id everything is spoken with (from the Voices page of your ElevenLabs account).' },
+  { key: 'tts.voiceLoud', kind: 'string', maxLength: 64, default: null, scope: 'server', module: 'tts', secret: false,
+    reload: 'live', tier: 'instance', env: ['ELEVENLABS_VOICE_LOUD'], packages: ['stream-api'],
+    label: 'Loud voice', description: 'The ElevenLabs voice id for shouted lines when "Loud voice for shouting" is on. Unset = the main voice.' },
   { key: 'homeassistant.url', kind: 'origin', default: null, scope: 'server', module: 'lights', secret: false,
     reload: 'restart', tier: 'install', env: ['HA_URL'], packages: ['stream-api'],
     label: 'Home Assistant address', description: 'Where Home Assistant answers (http://host:8123). Unset = the lights stay off.' },
@@ -562,12 +577,18 @@ export const INSTANCE_KEYS = [
   { key: 'stripe.webhookSecret', kind: 'secret', default: null, scope: 'server', module: 'stripe', secret: true,
     reload: 'live', tier: 'secret', env: ['STRIPE_WEBHOOK_SECRET'], packages: ['web'],
     test: 'stripe-webhook', label: 'Stripe webhook signing secret', description: 'Verifies that a payment event really came from Stripe.' },
+  { key: 'stripe.supporterPriceId', kind: 'string', maxLength: 64, default: null, scope: 'server', module: 'stripe', secret: false,
+    reload: 'live', tier: 'instance', env: ['STRIPE_PRICE_SUPPORTER'], packages: ['web'],
+    label: 'Supporter subscription price', description: 'The Stripe Price id (price_…) of the monthly Supporter subscription. Its amount and currency are read from Stripe and shown on the site; gifts charge the same. Unset = subscriptions are not offered.' },
   { key: 'paypal.clientId', kind: 'secret', default: null, scope: 'public', module: 'paypal', secret: true,
     reload: 'live', tier: 'secret', env: ['PAYPAL_CLIENT_ID'], packages: ['web'],
     test: 'paypal', label: 'PayPal client id', description: 'Public by design (the PayPal button needs it); stored with the secret it pairs with.' },
   { key: 'paypal.clientSecret', kind: 'secret', default: null, scope: 'server', module: 'paypal', secret: true,
     reload: 'live', tier: 'secret', env: ['PAYPAL_CLIENT_SECRET'], packages: ['web'],
     test: 'paypal', label: 'PayPal client secret', description: 'PayPal and Venmo payments.' },
+  { key: 'paypal.plans', kind: 'string', maxLength: 2000, default: null, scope: 'server', module: 'paypal', secret: false,
+    reload: 'live', tier: 'instance', env: ['PAYPAL_PLANS'], packages: ['web'],
+    label: 'Subscription plans', description: 'The PayPal billing plan (P-…) for each tier this site sells, as JSON: {"supporter":"P-…"}. Set = subscriptions can be paid through PayPal; the plan\'s price and currency are read from PayPal. The plan must bill monthly at a fixed price — any other plan is refused credit and flagged. Unset = PayPal subscriptions are not offered.' },
   { key: 'paypal.webhookId', kind: 'secret', default: null, scope: 'server', module: 'paypal', secret: true,
     reload: 'live', tier: 'secret', env: ['PAYPAL_WEBHOOK_ID'], packages: ['web'],
     test: 'paypal-webhook', label: 'PayPal webhook id', description: 'Verifies that a payment event really came from PayPal.' },
@@ -583,6 +604,12 @@ export const INSTANCE_KEYS = [
   { key: 'kick.clientSecret', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
     reload: 'live', tier: 'secret', env: ['KICK_CLIENT_SECRET'], packages: ['web', 'stream-ingest'],
     test: 'kick', label: 'Kick app client secret', description: 'Pairs with the Kick app client id.' },
+  { key: 'kick.chatroomId', kind: 'string', maxLength: 32, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['KICK_CHATROOM_ID'], packages: ['stream-ingest'],
+    label: 'Kick chatroom id', description: 'Only when the reader cannot look it up itself (Kick\'s bot protection): the numeric chatroom id of your Kick channel. Unset = looked up automatically.' },
+  { key: 'kick.channelId', kind: 'string', maxLength: 32, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['KICK_CHANNEL_ID'], packages: ['stream-ingest'],
+    label: 'Kick channel id', description: 'Pairs with the Kick chatroom id. Unset = looked up automatically.' },
   { key: 'youtube.apiKey', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
     reload: 'live', tier: 'secret', env: ['YOUTUBE_API_KEY'], packages: ['web', 'stream-api', 'stream-ingest'],
     test: 'youtube', label: 'YouTube Data API key', description: 'Live detection, VODs, the channel avatar and account-age checks.' },
@@ -719,7 +746,7 @@ export function parseInstanceValue(entry, raw) {
     let v = raw;
     if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return { ok: false, error: 'expected JSON' }; } }
     if (!v || typeof v !== 'object' || Array.isArray(v)) return { ok: false, error: 'expected {step, adminPending, install}' };
-    if (!Object.keys(v).every((k) => ['step', 'adminPending', 'install', 'skipped', 'backupAskedAt', 'core'].includes(k))) return { ok: false, error: 'expected {step, adminPending, install, skipped, backupAskedAt, core}' };
+    if (!Object.keys(v).every((k) => ['step', 'adminPending', 'install', 'skipped', 'backupAskedAt', 'core', 'visited'].includes(k))) return { ok: false, error: 'expected {step, adminPending, install, skipped, backupAskedAt, core, visited}' };
     const out = {};
     if (v.step !== undefined) {
       if (typeof v.step !== 'string' || !/^[a-z][a-z0-9:-]{0,63}$/.test(v.step)) return { ok: false, error: 'step: a step id' };
@@ -755,6 +782,14 @@ export function parseInstanceValue(entry, raw) {
         return { ok: false, error: 'skipped: a list of step ids' };
       }
       out.skipped = [...new Set(v.skipped)];
+    }
+    if (v.visited !== undefined) {
+      // Setup pages the operator has opened ("module:<id>", "core:<id>"), first visit first: the Doctor
+      // counts a never-visited module's unset keys as "not set up yet", not as failing.
+      if (!Array.isArray(v.visited) || v.visited.length > 50 || !v.visited.every((x) => typeof x === 'string' && /^[a-z][a-z0-9:-]{0,63}$/.test(x))) {
+        return { ok: false, error: 'visited: a list of page ids' };
+      }
+      out.visited = [...new Set(v.visited)];
     }
     if (v.core !== undefined) {
       // The product's setup lists chosen on the modules page (twitch, kick…): each gets its page.
@@ -1141,6 +1176,11 @@ export async function runProviderCheck(test, get, fetchImpl) {
       'customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted', 'invoice.paid', 'invoice.payment_failed',
       'payment_intent.payment_failed', 'refund.created', 'refund.updated', 'charge.dispute.created', 'charge.dispute.closed'];
     const PAYPAL_EVENTS = ['PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.REFUNDED', 'PAYMENT.CAPTURE.REVERSED', 'CUSTOMER.DISPUTE.RESOLVED'];
+    // Subscriptions (subscription sources S3): the subscription's life and each cycle's sale — required
+    // only on a site that sells them (paypal.plans set); a tips-only site's webhook is complete without them.
+    const PAYPAL_SUBSCRIPTION_EVENTS = ['BILLING.SUBSCRIPTION.CREATED', 'BILLING.SUBSCRIPTION.ACTIVATED', 'BILLING.SUBSCRIPTION.UPDATED', 'BILLING.SUBSCRIPTION.EXPIRED',
+      'BILLING.SUBSCRIPTION.CANCELLED', 'BILLING.SUBSCRIPTION.SUSPENDED', 'BILLING.SUBSCRIPTION.PAYMENT.FAILED',
+      'PAYMENT.SALE.COMPLETED', 'PAYMENT.SALE.REFUNDED', 'PAYMENT.SALE.REVERSED'];
     const json = async (res) => { try { return await res.json(); } catch { return null; } };
     // A provider's numeric id for a channel: digits only, or nothing (never text).
     const digits = (v) => (typeof v === 'number' || typeof v === 'string') && /^\d{1,20}$/.test(String(v)) ? String(v) : null;
@@ -1211,7 +1251,8 @@ export async function runProviderCheck(test, get, fetchImpl) {
         if (url !== `${origin()}/api/billing/paypal/webhook`) return { ok: false, code: 'wrong_target', mode };
       }
       const names = Array.isArray(hook?.event_types) ? hook.event_types.map((e) => e && e.name) : [];
-      const missing = names.includes('*') ? 0 : PAYPAL_EVENTS.filter((x) => !names.includes(x)).length;
+      const wanted = String(get('paypal.plans') || '').trim() ? [...PAYPAL_EVENTS, ...PAYPAL_SUBSCRIPTION_EVENTS] : PAYPAL_EVENTS;
+      const missing = names.includes('*') ? 0 : wanted.filter((x) => !names.includes(x)).length;
       return missing ? { ok: false, code: 'missing_events', count: missing, mode } : { ok: true, code: 'accepted', mode };
     }
     if (test === 'twitch') {

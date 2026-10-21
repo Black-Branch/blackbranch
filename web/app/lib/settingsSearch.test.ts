@@ -34,7 +34,7 @@ test("a title match keeps the whole section's visible items", () => {
 });
 
 test("a title match still applies the visibility filter — hidden items stay hidden", () => {
-  // The mutation that would survive otherwise (final review): dropping
+  // The mutation that would survive otherwise: dropping
   // `.filter(visible)` from the TITLE branch passes every other test here,
   // and would list showWhen-gated dead controls under a matched group —
   // e.g. searching "timestamps" with showTs off showing its four tuners.

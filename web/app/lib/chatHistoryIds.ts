@@ -1,7 +1,7 @@
 // Who a public chat-history row says wrote it. /api/chat/history needs no sign-in, so its rows are
 // public: they carry the sender's per-platform PUBLIC id (publicIdServer.ts), never the canonical
-// stream id that ties a person's Twitch, YouTube, Kick and site lines together (owner decision
-// 2026-10-17 — the link is shown only where the person shows it). A moderator's page carries the
+// stream id that ties a person's Twitch, YouTube, Kick and site lines together (the link
+// is shown only where the person shows it). A moderator's page carries the
 // canonical too, for the moderation tools. A site line keeps its Matrix id: that is the site
 // account's own handle (the community and DMs show it), tied to no other platform. A platform
 // line never carries one. Pure — the id maker is passed in — so node --test reads it.

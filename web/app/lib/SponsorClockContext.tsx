@@ -8,13 +8,12 @@ import type { Sponsor } from "./sponsorClock";
 // mirrors BadgesContext.tsx's shape exactly, mounted once in layout.tsx
 // alongside `BadgesProvider`.
 //
-// Round-1 review finding: `SponsorClockBadge` used to call `useSponsorState()`
-// directly, so every mounted chat row (up to MAX_SCROLLBACK concurrent rows)
-// opened its own `useChatSocket` subscriber to the shared socket's fan-out,
-// each receiving EVERY frame type. This repo has already paid down that exact
-// class of cost twice (the connection-sharing rewrite in useChatSocket.ts, and
-// BadgesContext.tsx's own poll-to-context hoist) — so the fix here is the
-// house's own established shape, not a new pattern: ONE subscription, held in
+// `SponsorClockBadge` calling `useSponsorState()` directly would make every
+// mounted chat row (up to MAX_SCROLLBACK concurrent rows) open its own
+// `useChatSocket` subscriber to the shared socket's fan-out, each receiving
+// EVERY frame type. The shape here is the codebase's established one (as in
+// useChatSocket.ts's connection sharing and BadgesContext.tsx's poll-to-context
+// hoist), not a new pattern: ONE subscription, held in
 // a Provider, read via `useContext` by as many leaf consumers as exist.
 const Ctx = createContext<Sponsor[]>([]);
 

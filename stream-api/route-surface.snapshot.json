@@ -1,6 +1,6 @@
 {
   "_comment": "Generated contract — see route-surface.test.js. Regenerate ONLY with a deliberate, reviewed route change: node -e \"require(./routeSurface.js)\" via the test instructions.",
-  "generated_for": "H7 decomposition safety net (2026-07-22)",
+  "generated_for": "stream-api's route and auth contract",
   "routes": [
     "DELETE /bot/memory/lore [requireInternal]",
     "DELETE /config/:key [requireSecret]",
@@ -15,6 +15,7 @@
     "GET /bot/mode [requireInternal]",
     "GET /bot/stream-state [requireInternal]",
     "GET /bot/support/next [requireInternal]",
+    "GET /bot/support/status [requireInternal]",
     "GET /bot/tools [requireInternal]",
     "GET /bot/top [requireInternal]",
     "GET /bot/tuning [requireInternal]",
@@ -22,8 +23,13 @@
     "GET /config [requireSecret]",
     "GET /config/secrets [requireSecret]",
     "GET /content [requireSecret]",
+    "GET /lockdown/checkable [requireInternal]",
+    "GET /overlay/alert [PUBLIC]",
+    "GET /overlay/bubble [PUBLIC]",
+    "GET /overlay/meter [PUBLIC]",
     "GET /overlay/poll [PUBLIC]",
     "GET /overlay/sticker [PUBLIC]",
+    "GET /overlay/support-bar [PUBLIC]",
     "GET /poll/creator [PUBLIC]",
     "GET /poll/current [PUBLIC]",
     "GET /radio/admin/schedule [requireInternal]",
@@ -69,6 +75,7 @@
     "POST /chat [requireInternal]",
     "POST /chat/announce [requireInternal]",
     "POST /chat/badges-changed [requireInternal]",
+    "POST /chat/ban [requireInternal]",
     "POST /chat/delete [requireInternal]",
     "POST /chat/echo-copies [requireInternal]",
     "POST /chat/event [requireInternal]",
@@ -124,7 +131,7 @@
     "PUT /memory/opt-out [requireInternal]"
   ],
   "shadowPairs": [],
-  "modules_comment": "Phase 4 (spec 2026-10-09-black-branch-phase-4-modules-design §6): routes per module. `routes` above is the everything-on surface (the owner's install, 120). A switched-off module's routes are not mounted: radio off = 113, obs off = 115; lights and meter own no routes. Phase 6 slice 9: obs owns the rig page's five routes (rig.js). Phase 5 (spec 2026-10-09-black-branch-phase-5-owner-split-design §4.2): `owner` lists the routes that come from stream-api/owner/ (the radio and the bot's /bot/* config + data surface, 35), which the public export drops with the folder. freshInstallRoutes is a fresh PUBLIC install: the product routes (120 - 35 = 85) minus the product modules off by default (obs: its 5 rig routes) = 80. DM window: +1 product route, /chat/announce (its /chat/dm-ping nudge route was removed with external review S5: nudges never reach the public socket). Slice D1: +1 product route, POST /sponsors/links-changed (the credit line follows a person's show-links switch at once). Review round 4: +3 product routes — POST /support/reconcile, POST /support/reverse, POST /identity/unlink.",
+  "modules_comment": "Routes per module. `routes` above is the everything-on surface of an install with the site plugin (127). A switched-off module's routes are not mounted: radio off = 120, obs off = 122; lights and meter own no routes. `owner` lists the 35 routes that come from stream-api/owner/ (the radio and the bot's /bot/* config and data surface); a tree without that folder has the other 92. freshInstallRoutes is a fresh install without the site plugin: the 92 product routes minus the obs module's 5 rig routes (obs is off by default) = 87.",
   "modules": {
     "radio": [
       "GET /radio/admin/schedule [requireInternal]",
@@ -180,5 +187,5 @@
     "POST /bot/tuning [requireInternal]",
     "POST /radio/admin/dj/generate [requireInternal]"
   ],
-  "freshInstallRoutes": 80
+  "freshInstallRoutes": 87
 }

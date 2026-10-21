@@ -21,7 +21,7 @@ const NOTHING = {
   ai: { bot: false, memory: false, automod: false, helpdesk: false, plugin: false, providers: [], memoryRetentionDays: null },
   youtube: { publicData: false, linking: false },
   payments: { stripe: false, paypal: false, kofi: false, patreon: false, streamlabs: false, subscriptions: false, points: false },
-  currencyName: "points",
+  currencyName: "points", twitch: false, liabilityCapUsd: 50, thirdPartyImages: { vods: false, news: false },
   cloudflare: false, homeserverRetention: null, errorLogDays: 30, plugin: null,
 };
 const manifest = (await import("../manifest.ts")).default;

@@ -4,6 +4,7 @@ import { appendModLog } from "@/app/lib/modlog";
 import { NextRequest } from "next/server";
 import { INGEST_PLATFORMS } from "@/app/lib/lockdownLevers";
 import { lockdownRegistrationState, syncLockdownRegistration } from "@/app/lib/lockdownRegistration";
+import { streamApiFetch } from "@/app/lib/streamApi";
 
 // The raid panic switch. See app/lib/lockdown.ts for the gate
 // this drives and why it never touches existing accounts.
@@ -33,6 +34,11 @@ export async function GET() {
   const r = rows[0];
   // Homeserver sign-up, which the signups lever also closes on a bundle (lockdownRegistration.ts).
   const homeserver = await lockdownRegistrationState().catch(() => null);
+  // Which platforms' account age stream-api can check (contract 3): the panel says per platform
+  // "age unknown on Kick — not held". null = stream-api did not answer.
+  const checkable = await streamApiFetch("/lockdown/checkable", undefined, 3000)
+    .then((res) => (res.ok ? res.json() : null))
+    .catch(() => null);
   return Response.json({
     signupsDisabled: r?.signups_disabled ?? false,
     crosspostDisabled: r?.crosspost_disabled ?? false,
@@ -48,6 +54,7 @@ export async function GET() {
     updatedBy: r?.updated_by ?? null,
     updatedAt: r?.updated_at ?? null,
     homeserver,
+    checkable,
   });
 }
 

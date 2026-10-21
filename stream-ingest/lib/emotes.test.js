@@ -22,7 +22,7 @@ test('the product list is global emotes only — no one channel\'s', () => {
     'FeelsBeanMan', 'KEKL', 'KEKW', 'LUL', 'LULW', 'NotLikeThis', 'OMEGALUL', 'PepeHands', 'Pog', 'PogChamp',
     'PowerUpL', 'PowerUpR', 'TheIlluminati', 'YEP', 'o7', 'peepoHappy',
   ].sort());
-  // …and the module itself names no channel prefix (it used to hard-code one).
+  // …and the module itself names no channel prefix.
   const src = readFileSync(new URL('./emotes.js', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /replace\(\/\\b[a-z]+\[A-Za-z0-9\]\+/, 'a literal channel-prefix rule');
   assert.match(src, /\nexport function cleanWordCount\(clean\) \{\n/, 'vacuity: read to the end');

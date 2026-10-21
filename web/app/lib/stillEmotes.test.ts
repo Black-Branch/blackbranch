@@ -28,7 +28,7 @@ test("the switch defaults on and is read once at the list level", () => {
     assert.match(read("app", "features", "chat", f), /useSetting\("chatStyle_animEmotes"\)/, `${f} does not read the switch`);
 });
 
-// Fix round 1 (controller ruling): a redacted/Supporter chat row is still a
+// A redacted/Supporter chat row is still a
 // chat row — RedactedText.tsx's own renderText calls (visible-run text,
 // misaligned-reveal plaintext, aligned per-word reveal) must not be the one
 // place in the app where the switch is silently ignored. Every renderText

@@ -13,8 +13,7 @@ import { federatedPolicyVersion } from "@/app/lib/federatedSignInSwitch";
 // homeserver could stack multiple unbounded waits per request.
 const UPSTREAM_TIMEOUT_MS = 8000;
 
-// The body is streamed through, never buffered (mediaRelay.ts, external review
-// S8). The cap sits above Synapse's default max_upload_size (50 MB); the
+// The body is streamed through, never buffered (mediaRelay.ts). The cap sits above Synapse's default max_upload_size (50 MB); the
 // deadline above also ends a transfer still running after 8 s. The gate bounds
 // open relays and keeps a short
 // queue — a chat screen asks for dozens of avatars at once, so a waiter is

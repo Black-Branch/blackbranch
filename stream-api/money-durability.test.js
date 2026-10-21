@@ -75,7 +75,7 @@ function harness({ poolQuery, ttsEnabled = true, sounds, cardBuilder } = {}) {
     maskBlacklist: (t) => t,
     broadcast: (f) => log('broadcast', { type: f.type }),
     bufferPush: () => {}, bufferReplace: () => {},
-    ALERT_TTS_ENABLED: ttsEnabled,
+    ttsEnabled: () => ttsEnabled,
   });
   const routes = {};
   money.registerMoneyRoutes(
@@ -132,7 +132,7 @@ test('recordSupport without an eventId stays fail-open (NULL, no dedup)', async 
   assert.ok(insert.params.includes(null), 'a missing eventId must insert NULL — the partial index then never dedups it');
 });
 
-// A coin spend never reaches recordSupport (Qorm spends credit nothing); the
+// A coin spend never reaches recordSupport (currency spends credit nothing); the
 // durable dedup is real money's path to the ledger, which the next test drives
 // through alert.fireStreamEffects directly.
 

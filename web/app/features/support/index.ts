@@ -13,3 +13,8 @@ export { TipForm } from "./TipForm";
 export type { TipDraft } from "./TipForm";
 export { TipPayButton } from "./TipPayButton";
 export { checkoutRequestFor } from "./tipCheckout";
+// The PayPal subscribe button (subscription sources S3) and the words for a viewer's
+// subscriptions, one line per service — SupportContent's Supporter section renders both.
+export { PayPalSubscribeButton } from "./PayPalSubscribeButton";
+export { recordLine, isLiveRecord, elsewhereWarning } from "./subscriptionLines";
+export type { SubscriptionRecordView } from "./subscriptionLines";

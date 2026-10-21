@@ -133,7 +133,7 @@ export async function platformRows(ytVideoId: string | null): Promise<PlatformRo
       ytChannel ? `https://studio.youtube.com/channel/${encodeURIComponent(ytChannel)}/livestreaming` : null, "youtube"),
     row("kick", "Kick", setUp.kick, null, titleCache.kick,
       instanceString("platform.kick.slug") ? "https://dashboard.kick.com/" : null, "kick"),
-    row("streamplace", "stream.place", spSetUp, embed("streamplace"), sp, null, "streamplace"),
-    row("native", "Site player", spSetUp, embed("native"), spSetUp ? none("Plays the stream.place stream") : NOT_SET, null, "streamplace"),
+    row("streamplace", "Streamplace", spSetUp, embed("streamplace"), sp, null, "streamplace"),
+    row("native", "Site player", spSetUp, embed("native"), spSetUp ? none("Plays the Streamplace stream") : NOT_SET, null, "streamplace"),
   ];
 }

@@ -11,6 +11,7 @@ import { getManifest } from "@/app/api/emotes/route";
 import { instanceString } from "@/app/lib/instanceConfigServer";
 import {
   twitchSendOutcome, kickSendOutcome, kickErrorOutcome, httpUnavailable, youtubeErrorOutcome, thrownFailure,
+  kickKnownRefusal, kickForbiddenOutcome, bodyShape,
   type Unavailable,
 } from "@/app/lib/sendDelivery";
 
@@ -143,6 +144,42 @@ async function resolveKickBroadcasterId(slug: string): Promise<number | null> {
   return id;
 }
 
+// Whether a Kick channel's chat is followers-only, as Kick's channel page says (chatroom
+// .followers_mode) — the per-channel fact a bare 403 is classified by (contract 10). Cached 10
+// minutes; an unreadable answer (bot protection, a timeout) is null for 2 minutes — never assumed.
+const kickModeCache = new Map<string, { at: number; ttl: number; value: boolean | null }>();
+async function kickFollowersOnly(slug: string | null | undefined): Promise<boolean | null> {
+  const key = (slug ?? "").trim().toLowerCase();
+  if (!key) return null;
+  const hit = kickModeCache.get(key);
+  if (hit && Date.now() - hit.at < hit.ttl) return hit.value;
+  const res = await fetch(`https://kick.com/api/v2/channels/${encodeURIComponent(key)}`, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    signal: AbortSignal.timeout(5_000),
+  }).catch(() => null);
+  const data = res?.ok ? await res.json().catch(() => null) as { chatroom?: { followers_mode?: unknown } } | null : null;
+  const mode = data?.chatroom?.followers_mode;
+  const value = typeof mode === "boolean" ? mode : null;
+  kickModeCache.set(key, { at: Date.now(), ttl: value === null ? 2 * 60_000 : 10 * 60_000, value });
+  return value;
+}
+
+// One line per status + body shape per 10 minutes: the SHAPE only, never Kick's text (contract 10,
+// the round-7 shape-only rule). 1,265 identical lines in 14 days said nothing the first did not.
+const kickShapeLogged = new Map<string, number>();
+function logKickShape(status: number, body: unknown): void {
+  const shape = bodyShape(body);
+  const key = `${status} ${shape}`;
+  const last = kickShapeLogged.get(key);
+  if (last !== undefined && Date.now() - last < 10 * 60_000) return;
+  kickShapeLogged.set(key, Date.now());
+  console.warn(`[platformChat:kick] ${status} ${shape} (shape only; repeats are not logged for 10 min)`);
+}
+
 async function sendKick(
   matrixId: string,
   message: string,
@@ -180,14 +217,25 @@ async function sendKick(
     return { ok: false, error: "not_live" };
   }
   if (!res.ok) {
-    // 429/5xx: Kick, not the viewer. Checked before the refusal sentence, which a 429 can carry too.
-    const down = httpUnavailable("kick", res.status);
-    if (down) return { ok: false, ...down };
     const text = await res.text().catch(() => "");
-    console.error("[platformChat:kick]", res.status, text);
-    // A 4xx with a sentence is the channel declining the message (followers-only…).
     let body: unknown = null;
     try { body = JSON.parse(text); } catch { /* not JSON — a failure to reach it */ }
+    // A KNOWN refusal sentence first — a 429 can say "slow mode", which is the channel's mode,
+    // not Kick failing.
+    const known = kickKnownRefusal(body);
+    if (known) return { ok: false, error: "refused", reason: known };
+    // 429/5xx with no such sentence: Kick, not the viewer.
+    const down = httpUnavailable("kick", res.status);
+    if (down) { logKickShape(res.status, body); return { ok: false, ...down }; }
+    // A bare 403 ("Forbidden"): followers-only on THIS channel, or not known (contract 10).
+    if (res.status === 403 && kickKnownRefusal(body) === null) {
+      const out = kickForbiddenOutcome(await kickFollowersOnly(slug ?? instanceString("platform.kick.slug")));
+      if ("refused" in out) return { ok: false, error: "refused", reason: out.reason };
+      logKickShape(res.status, body);
+      return { ok: false, ...out };
+    }
+    logKickShape(res.status, body);
+    // A 4xx with a sentence is the channel declining the message.
     const err = kickErrorOutcome(res.status, body);
     if (err.refused) return { ok: false, error: "refused", ...(err.reason ? { reason: err.reason } : {}) };
     return { ok: false, error: "send_failed" };
@@ -241,6 +289,13 @@ async function resolveYtLiveChat(channelId: string): Promise<string | null | Una
     const scraped = /<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})"/
       .exec(await pageRes.text())?.[1];
     if (scraped) videoId = scraped;
+  }
+  // The /live page could not be READ and there is no earlier video to re-check: YouTube was not
+  // reached — not "not live" (infrastructure failures stay silent unless YouTube alone was picked).
+  if (!videoId && !pageRes?.ok) {
+    return pageRes
+      ? (httpUnavailable("youtube", pageRes.status) ?? { error: "unavailable", reason: "upstream", code: `youtube.live_page_${pageRes.status}` })
+      : { error: "unavailable", reason: "upstream", code: "youtube.live_page" };
   }
   if (!videoId) return null;
 

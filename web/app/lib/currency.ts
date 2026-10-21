@@ -17,7 +17,7 @@ function built(key: "currency.name" | "currency.namePlural" | "currency.symbol" 
   return installValue(key) || fallback;
 }
 
-/** The name as written: singular for exactly 1, else the plural. "Qorm" / "point" / "points". */
+/** The name as written: singular for exactly 1, else the plural. "point" / "points". */
 export function currencyName(n?: number): string {
   return n === 1 ? built("currency.name", NEUTRAL.name) : built("currency.namePlural", NEUTRAL.namePlural);
 }
@@ -28,14 +28,14 @@ export function currencyTitle(n?: number): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** A count and its name: "150 Qorm", "150 points", "1 point". The number is grouped ("1,475"). */
+/** A count and its name: "150 points", "1 point". The number is grouped ("1,475"). */
 export function currencyLabel(n: number): string {
   return `${Math.round(n).toLocaleString()} ${currencyName(Math.round(n))}`;
 }
 
-/** True when the name has no plural of its own (singular = plural, like "Qorm"): such a word
- *  takes "is" / "it" ("Qorm is the site currency"), a counted plural takes "are" / "them". The one
- *  switch that lets a neutral sentence read right while an install's own reads exactly as before. */
+/** True when the name has no plural of its own (singular = plural, like "gold"): such a word
+ *  takes "is" / "it" ("gold is the site currency"), a counted plural takes "are" / "them". The one
+ *  switch that lets a neutral sentence read right for an install's own name too. */
 export function currencyIsMass(): boolean {
   return built("currency.name", NEUTRAL.name) === built("currency.namePlural", NEUTRAL.namePlural);
 }
@@ -62,7 +62,7 @@ export function scoreShortName(): string {
   return last.charAt(0).toUpperCase() + last.slice(1);
 }
 
-/** The thank-you line after a tip or a purchase: "500 Qorm is on its way to your wallet." /
+/** The thank-you line after a tip or a purchase: "500 gold is on its way to your wallet." /
  *  "500 points are on their way to your wallet." One sentence, one place, for both done views. */
 export function currencyOnItsWay(n: number): string {
   return `${currencyLabel(n)} ${currencyIsMass() ? "is on its way" : "are on their way"} to your wallet.`;

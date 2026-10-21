@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { siteName } from "@/app/lib/siteName";
 import { getJson, postJson } from "@/app/lib/http";
+import { slowModeHint, slowModeNote } from "@/app/lib/slowModeCopy";
 import { card, h2, btn } from "../shared";
 
 // ─── Slow mode ────────────────────────────────────────────────────────────────
@@ -15,10 +16,11 @@ const SLOW_PRESETS = [0, 5, 10, 30, 60, 120] as const;
 export default function SlowModeSection({ note }: { note: (m: string) => void }) {
   const [current, setCurrent] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mirrors, setMirrors] = useState<string[]>([]);
 
   useEffect(() => {
-    getJson<{ slowModeSeconds: number }>("/api/mod/slowmode")
-      .then((d) => setCurrent(d.slowModeSeconds))
+    getJson<{ slowModeSeconds: number; mirrorsTo?: string[] }>("/api/mod/slowmode")
+      .then((d) => { setCurrent(d.slowModeSeconds); setMirrors(d.mirrorsTo ?? []); })
       .catch(() => setCurrent(0));
   }, []);
 
@@ -28,7 +30,7 @@ export default function SlowModeSection({ note }: { note: (m: string) => void })
       const res = await postJson("/api/mod/slowmode", { seconds });
       if (res.ok) {
         setCurrent(seconds);
-        note(seconds > 0 ? `Slow mode set to ${seconds}s (mirrored to Twitch).` : "Slow mode off (mirrored to Twitch).");
+        note(slowModeNote(seconds, mirrors));
       } else {
         note("Couldn't update slow mode.");
       }
@@ -54,7 +56,7 @@ export default function SlowModeSection({ note }: { note: (m: string) => void })
           </button>
         ))}
         <span className="text-xs text-muted ml-1">
-          Applies to {siteName()} chat for non-mods and mirrors to Twitch (3–120s there).
+          {slowModeHint(siteName(), mirrors)}
         </span>
       </div>
     </section>

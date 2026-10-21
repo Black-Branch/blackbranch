@@ -16,11 +16,10 @@ const pollPath = join(here, "useStreamStatusPoll.ts");
 const streamViewPath = join(here, "..", "components", "StreamView.tsx");
 
 test("the status route resolves the live status before the census call, and never awaits the census", () => {
-  // Deleting the try/catch-await that used to wrap this call and replacing
-  // it with an unawaited fire-and-forget is the actual fix for a hung flush
-  // stranding this route's caller (a try/catch around an await cannot save
-  // you from a query that never settles) — so this scan pins the shape that
-  // matters now: status resolved first, census call present but NOT awaited.
+  // An unawaited fire-and-forget, not a try/catch-await, is what keeps a hung
+  // flush from stranding this route's caller (a try/catch around an await
+  // cannot save you from a query that never settles) — so this scan pins the
+  // shape that matters: status resolved first, census call present but NOT awaited.
   const src = stripComments(readFileSync(routePath, "utf8"));
   assert.match(src, /const status = await getStreamStatus\(\);[\s\S]{0,200}?recordAndMaybeFlush\(/,
     "the live status must be resolved before the census call runs");
@@ -33,11 +32,11 @@ test("the status route resolves the live status before the census call, and neve
 });
 
 test("the empty-census early return happens BEFORE the flush gate, so an empty minute never consumes its stamp", () => {
-  // F1, updated for hasFreshEntry: recordSample, then the freshness check,
+  // recordSample, then the freshness check,
   // THEN the gate. Reversing the last two would let a quiet arrival still
   // consume the gate's stamp and delay the first real row by up to a full
-  // interval. hasFreshEntry replaced a countSources call + all-zero check
-  // here specifically so this early return no longer pays for a full walk of
+  // interval. hasFreshEntry, not a countSources call + all-zero check, is
+  // used here so this early return does not pay for a full walk of
   // the map on every request — see sourceCensus.ts's hasFreshEntry docblock.
   const src = stripComments(readFileSync(storePath, "utf8"));
   assert.match(src, /if \(source && tab\) recordSample\(census, tab, source, now\);[\s\S]{0,300}?if \(!hasFreshEntry\(census, now\)\) return;[\s\S]{0,300}?if \(!flushGate\.beginIfDue\(now\)\) return;/,
@@ -103,9 +102,9 @@ test("the poll sends both parameters", () => {
 test("a poll with no known source fetches the bare status URL, and casts no vote — the ternary's truthy branch is bound to carrying both parameters, not asserted separately from its shape", () => {
   // The rule: the first poll of a page load runs before any effect has
   // written sourceRef, so it has nothing honest to report. It must fetch the
-  // bare endpoint rather than vote "none" on a guess — that vote is now
+  // bare endpoint rather than vote "none" on a guess — that vote is
   // load-bearing (sourceCensusStore's own comment says the same thing).
-  // F10: folded into ONE regex spanning the whole ternary, so the assertion
+  // Folded into ONE regex spanning the whole ternary, so the assertion
   // binds the truthy branch to its actual contents (both src= and tab=)
   // rather than checking the branch's shape and the parameters' presence as
   // two independent facts that could each pass while the other is wrong.
@@ -121,7 +120,7 @@ test("StreamView writes sourceRef from folded/currentSource in an effect, and pa
   // Deleting the one-line effect that writes sourceRef makes every poll take
   // the bare-URL branch above — the whole feature produces zero data for the
   // rest of its life, with every other test in this repo still green and no
-  // symptom anywhere, because nothing before this test ever opened
+  // symptom anywhere, because nothing else in the suite opens
   // StreamView.tsx.
   const src = stripComments(readFileSync(streamViewPath, "utf8"));
   assert.match(

@@ -24,14 +24,19 @@ const past = { streamId: "s-old", segments: 2, startedMs: now - 86_400_000, ende
 const platforms = { platforms: [
   { key: "twitch", label: "Twitch", setUp: true, embed: { source: "twitch", on: true }, title: "A stream title", category: "Just Chatting", titleNote: "From Twitch", manageUrl: "https://dashboard.twitch.tv/", setupHref: "/admin/platforms?sub=twitch" },
   { key: "youtube", label: "YouTube", setUp: true, embed: { source: "youtube", on: false }, title: null, category: null, titleNote: "Read while live on YouTube", manageUrl: null, setupHref: "/admin/platforms?sub=youtube" },
-  { key: "native", label: "Site player", setUp: true, embed: { source: "native", on: true }, title: null, category: null, titleNote: "Plays the stream.place stream", manageUrl: null, setupHref: "/admin/platforms?sub=streamplace" },
+  { key: "native", label: "Site player", setUp: true, embed: { source: "native", on: true }, title: null, category: null, titleNote: "Plays the Streamplace stream", manageUrl: null, setupHref: "/admin/platforms?sub=streamplace" },
   { key: "kick", label: "Kick", setUp: false, embed: null, title: null, category: null, titleNote: "Not set up", manageUrl: null, setupHref: "/admin/platforms?sub=kick" },
 ] };
 const doctor = { rows: [{ id: "a", title: "Database", status: "ok" }, { id: "b", title: "Backups", status: "fail" }] };
 
+const readers = { reachable: true, health: { ok: false, bot: "off", readers: {
+  twitch: { state: "running", since: new Date(now - 600_000).toISOString() },
+  youtube: { state: "failed", since: new Date(now - 60_000).toISOString(), error: "Chromium could not start: libnss3.so missing" },
+} } };
+
 let calls: string[] = [];
 let bodies: string[] = [];
-function serve(opts: { live?: boolean; empty?: boolean } = {}) {
+function serve(opts: { live?: boolean; empty?: boolean; readers?: unknown } = {}) {
   calls = [];
   bodies = [];
   globalThis.fetch = ((url: string, init?: RequestInit) => {
@@ -43,6 +48,7 @@ function serve(opts: { live?: boolean; empty?: boolean } = {}) {
     if (u.startsWith("/api/admin/stream/sessions/")) body = { summary: { ...past, earnedCents: income ? 999 : null }, curve, chat: [{ ms: now - 600_000, count: 5 }, { ms: now - 300_000, count: 9 }], income: income ? money : null };
     else if (u.startsWith("/api/admin/stream/sessions")) body = { sessions: opts.empty ? [] : [{ ...past, earnedCents: income ? 999 : null }], sort: "date" };
     else if (u.startsWith("/api/admin/stream/platforms")) body = platforms;
+    else if (u.startsWith("/api/admin/stream/readers")) body = opts.readers ?? readers;
     else if (u.startsWith("/api/admin/stream")) body = opts.live === false ? { live: { live: false }, dash: null, last: opts.empty ? null : { ...past, earnedCents: income ? 999 : null }, atMs: now } : liveReply(income);
     else if (u.startsWith("/api/admin/doctor")) body = doctor;
     return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
@@ -169,4 +175,36 @@ test("an embed switch writes the ONE setting through the Admin Panel's writer; t
   try {
     assert.equal((m2.el.querySelector('[aria-label="Twitch on the watch page"]') as HTMLButtonElement).disabled, true);
   } finally { await m2.done(); globalThis.fetch = realFetch; }
+});
+
+test("chat readers: each platform's reader state from the ingest, a failed one with its one-line reason", async () => {
+  serve();
+  const m = await mount();
+  try {
+    assert.ok(calls.includes("/api/admin/stream/readers"), calls.join(", "));
+    const tw = m.el.querySelector('[data-reader="twitch"]')!;
+    assert.equal(tw.getAttribute("data-state"), "running");
+    assert.match(tw.textContent ?? "", /Reading · 10m ago/);
+    const yt = m.el.querySelector('[data-reader="youtube"]')!;
+    assert.equal(yt.getAttribute("data-state"), "failed");
+    assert.match(yt.textContent ?? "", /Failed/);
+    assert.equal(yt.querySelector("[data-reader-error]")?.textContent, "Chromium could not start: libnss3.so missing");
+    assert.match(m.el.innerHTML, /Chat bot: off/);
+  } finally { await m.done(); }
+});
+
+test("chat readers: the ingest not answering says so plainly — never an empty list that reads as fine", async () => {
+  serve({ readers: { reachable: false } });
+  const m = await mount();
+  try {
+    const p = m.el.querySelector('[data-readers="unreachable"]');
+    assert.ok(p, m.el.innerHTML.slice(0, 200));
+    assert.match(p!.textContent ?? "", /did not answer — no platform chat is coming in through it/);
+    assert.equal(m.el.querySelector("[data-reader]"), null);
+  } finally { await m.done(); }
+  serve({ readers: { reachable: true, health: { ok: true, readers: {}, bot: "off" } } });
+  const none = await mount();
+  try {
+    assert.match(none.el.querySelector('[data-readers="none"]')?.textContent ?? "", /No platform is set up to read chat from/);
+  } finally { await none.done(); }
 });

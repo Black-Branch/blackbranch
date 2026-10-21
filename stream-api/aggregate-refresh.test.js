@@ -226,7 +226,7 @@ test('a failed rebuild does not advance the watermark — the next poll retries'
   assert.equal(rebuilds.length, 4, 'the failed pass was recorded as done — its data is lost until the next message');
 });
 
-test('the user_stats rebuild excludes the Qorm-spend event types from lifetime support', async () => {
+test('the user_stats rebuild excludes the currency-spend event types from lifetime support', async () => {
   const seen = [];
   const pool = {
     query: async (sql, params) => {
@@ -276,7 +276,7 @@ test('the user_stats rebuild must not silently drop a NULL event_type from lifet
 });
 
 test("the lifetime-support fold is platform-scoped: a platform='twitch' row sharing a coin-kind event_type is NOT excluded", async () => {
-  // Qorm spends only ever arrive under the site's own platform id (money.js). The
+  // Currency spends only ever arrive under the site's own platform id (money.js). The
   // predicate must say so explicitly — `platform IN (…) AND` — or an
   // external platform's real donation that happens to carry
   // event_type='cheer' (stream-ingest/lib/alerts.js already emits
@@ -329,14 +329,15 @@ test('[Threshold] Low karma prints once per user per change, not once per pass',
     await agg.requestAggregateRefresh();
     await agg.requestAggregateRefresh();
     assert.equal(lines.length, 2, 'one line per user on the first pass, none on two identical passes');
-    assert.match(lines[0], /kate karma=0\.300 scored=12/);
-    assert.match(lines[1], /ruddy karma=0\.100 scored=7/);
+    assert.match(lines[0], /u1 karma=0\.300 scored=12/);
+    assert.match(lines[1], /u2 karma=0\.100 scored=7/);
+    assert.ok(!lines.some((l) => /kate|ruddy/.test(l)), `a person's name reached the journal: ${lines.join(' | ')}`);
 
     // A moved value prints again — for that user only.
     state.rows = [{ ...kate, karma: '0.250' }, ruddy];
     await agg.requestAggregateRefresh();
     assert.equal(lines.length, 3);
-    assert.match(lines[2], /kate karma=0\.250/);
+    assert.match(lines[2], /u1 karma=0\.250/);
 
     // A move invisible at the printed precision is not a change.
     state.rows = [{ ...kate, karma: '0.2504' }, ruddy];
@@ -350,8 +351,80 @@ test('[Threshold] Low karma prints once per user per change, not once per pass',
     state.rows = [{ ...kate, karma: '0.250' }, ruddy];
     await agg.requestAggregateRefresh();
     assert.equal(lines.length, 4, 'a user who fell back under the threshold is news again');
-    assert.match(lines[3], /ruddy karma=0\.100/);
+    assert.match(lines[3], /u2 karma=0\.100/);
   } finally {
     console.log = realLog;
   }
+});
+
+// ── shutdown: stop() before pool.end() ───────────────────────────────────────
+// If the drain ends the pool while a pass (or the interval's next one) is still issuing statements,
+// every stop logs "[aggregates] refresh failed: Cannot use a pool after calling end on the pool".
+// index.js awaits stop() first.
+
+test('stop() waits for the running pass, then nothing more runs — not a queued follow-up, not a new request', async () => {
+  const g = gatedWork();
+  const request = makeRefresher(g.work);
+  request();
+  request(); // queued follow-up
+  let stopped = false;
+  const done = request.stop().then(() => { stopped = true; });
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(stopped, false, 'stop() resolved while a pass was still running — the pool would end under it');
+  await g.releaseAll();
+  await done;
+  assert.equal(stopped, true);
+  assert.equal(g.runs, 1, 'the queued follow-up ran after stop()');
+  await request();
+  assert.equal(g.runs, 1, 'a request after stop() started a pass');
+});
+
+test('stop() with nothing running resolves at once', async () => {
+  const g = gatedWork();
+  const request = makeRefresher(g.work);
+  await request.stop();
+  assert.equal(g.runs, 0);
+});
+
+test('stop() mid-pass waits for ONE statement, not the rest of the rebuild — and the cut pass logs nothing', async () => {
+  // On a big chat_log a pass is many slow statements; a drain that waited for all of them would
+  // run past the grace. The statement running finishes; the next is refused, quietly.
+  const issued = [];
+  let releaseCurrent = null;
+  const pool = { query: (sql) => { issued.push(String(sql)); return new Promise((r) => { releaseCurrent = () => r({ rows: [] }); }); } };
+  const warned = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => warned.push(a.join(' '));
+  try {
+    const agg = createAggregates({ pool, schedule: () => null, cancel: () => {} });
+    const pass = agg.requestAggregateRefresh();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(issued.length, 1, 'premise: the first statement (the watermark read) is running');
+    let stopped = false;
+    const done = agg.stop().then(() => { stopped = true; });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(stopped, false, 'stop() did not wait for the running statement');
+    releaseCurrent();
+    await done;
+    await pass;
+    assert.equal(issued.length, 1, `the rebuild went on after stop(): ${issued.length} statements`);
+    assert.deepEqual(warned, [], 'the cut pass was logged as a failure');
+  } finally {
+    console.warn = realWarn;
+  }
+});
+
+test('createAggregates().stop() cancels the interval it scheduled, and a later tick or forced refresh issues no query', async () => {
+  const queries = [];
+  const pool = { query: async (sql) => { queries.push(String(sql)); return { rows: [] }; } };
+  const cancelled = [];
+  const agg = createAggregates({ pool, schedule: () => 'handle-1', cancel: (h) => cancelled.push(h) });
+  agg.start();
+  await agg.stop();
+  assert.deepEqual(cancelled, ['handle-1'], 'the interval was not cancelled');
+  const before = queries.length;
+  assert.ok(before >= 1, 'premise: the startup pass ran before stop()');
+  await agg.pollAggregateRefresh();
+  await agg.requestAggregateRefresh();
+  assert.equal(queries.length, before, 'a pass ran after stop() — against a pool the drain is about to end');
 });

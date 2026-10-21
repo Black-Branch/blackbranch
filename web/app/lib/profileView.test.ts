@@ -1,6 +1,6 @@
 // The public profile card's one disclosure decision (profileView.ts) and the route that follows it.
-// The route used to return matrixId, siteName and linkedPlatforms for ANY canonical to anyone, and
-// called that deliberate; the owner reversed it on 2026-10-17.
+// The route returns matrixId, siteName and linkedPlatforms only as profileView.ts decides, never for
+// ANY canonical to anyone.
 // Run: node --test app/lib/profileView.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -58,9 +58,9 @@ test("handles stay mods-only and server-side", () => {
   assert.match(src, /\}\);\s*\}\s*$/, "vacuity anchor: END of route.ts");
 });
 
-// Security review: the "one identity" test counted the canonical's own platform rows only, so a
-// person whose site account is joined through site.platform_links (no native row on the canonical)
-// counted as one and the card showed what joins them. The SQL was run against a throwaway Postgres
+// The "one identity" test must not count the canonical's own platform rows only: a person whose
+// site account is joined through site.platform_links (no native row on the canonical) would count
+// as one and the card would show what joins them. The SQL was run against a throwaway Postgres
 // with the baseline schema: a Twitch canonical joined that way spans 2; a site-only account 1.
 test("a site account joined only through site.platform_links is in the identity", async () => {
   const { IDENTITY_SPAN_SQL } = await import("./identitySpan.ts");
@@ -68,8 +68,7 @@ test("a site account joined only through site.platform_links is in the identity"
   assert.match(IDENTITY_SPAN_SQL, /EXISTS \(SELECT 1 FROM site\.platform_links\s+WHERE canonical_id IN \(SELECT c FROM canon\) OR matrix_id IN \(SELECT matrix_id FROM mx\)\) AS via_links,/);
 });
 
-// Security review: one account's opt-in published the link for another account on the same
-// canonical. The cards read show_links as "every account in the identity agrees" (all_show). Run on
+// One account's opt-in must not publish the link for another account on the same canonical. The cards read show_links as "every account in the identity agrees" (all_show). Run on
 // the throwaway Postgres: a canonical carrying an opted-in and a not-opted account gives all_show f.
 test("the opt-in counts only when every site account in the identity agrees", async () => {
   const { IDENTITY_SPAN_SQL } = await import("./identitySpan.ts");

@@ -1,5 +1,5 @@
-// Discord-style grouping shared by the timeline and the thread panel (the
-// panel used to carry an inline copy), plus the day boundary both use for
+// Discord-style grouping shared by the timeline and the thread panel (one
+// copy, not an inline one in the panel), plus the day boundary both use for
 // the date divider. Run: node --test app/lib/messageGrouping.test.ts
 
 import { test } from "node:test";

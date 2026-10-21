@@ -41,7 +41,7 @@ test("the mod route checks the role FIRST, writes as mod, logs it, and refuses a
   assert.match(src, /appendModLog\(\{ action: "pronouns_set", target: canonicalId, by: mod, reason: r\.pronouns \?\? "cleared" \}\)/);
   assert.doesNotMatch(code("../api/mod/pronouns/route.ts"), /nameidx/, "the name index holds only a name's FIRST owner");
   // A name is resolved first WITHOUT a write (resolveOnly), the ceiling judges that person, then the
-  // write goes by canonicalId (round 5).
+  // write goes by canonicalId.
   assert.match(src, /askPronounCommand\(\{ text: `!pronouns \$\{value\}`, name, source: "mod", resolveOnly: true \}\)/);
   assert.match(src, /askPronounCommand\(\{ text: `!pronouns \$\{value\}`, canonicalId, source: "mod" \}\)/);
   assert.match(src, /if \(who\.ambiguous\) \{\s*return Response\.json\(\{ error: "More than one person[^"]*" \}, \{ status: 409 \}\);/);

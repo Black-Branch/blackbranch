@@ -4,8 +4,9 @@ The site itself: native + cross-platform chat, the embedded Matrix community cli
 PayPal billing and supporter perks, mod tools, the points economy, settings and themes, VODs, the
 setup pages, the Admin Panel and the doctor, and the installable app (PWA).
 
-Not a scaffold, and **not a Vercel app**: an install builds and serves it inside the bundle
-(`../install/`).
+Not a scaffold, and **not a Vercel app**: it runs inside the install bundle (`../install/`). A release
+install runs the project's prebuilt image of it — one image for every install, which reads the install's
+own values when it starts; an install from a clone builds that image on the server.
 
 ## Getting started
 

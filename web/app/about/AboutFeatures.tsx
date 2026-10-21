@@ -25,7 +25,7 @@ export function AboutFeatures({ siteName, facts }: { siteName: string; facts: Ab
     ...(facts.platforms.twitch ? ["Twitch"] : []),
     ...(facts.shown.youtube ? ["YouTube"] : []),
     ...(facts.platforms.kick ? ["Kick"] : []),
-    ...(facts.platforms.streamplace ? ["stream.place"] : []),
+    ...(facts.platforms.streamplace ? ["Streamplace"] : []),
   ];
   const processors = [...(facts.stripe ? ["Stripe"] : []), ...(facts.paypal ? ["PayPal"] : [])];
   const paid = facts.stripe

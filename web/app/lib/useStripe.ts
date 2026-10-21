@@ -28,7 +28,7 @@ export type StripeLoad = {
   stripe: Stripe | null;
   status: StripeStatus;
   /** Re-attempt the script load. This is only useful because getStripePromise()
-   *  no longer caches a rejection — @stripe/stripe-js re-injects its <script>
+   *  does not cache a rejection — @stripe/stripe-js re-injects its <script>
    *  tag on the next call after a load error, so a retry can genuinely succeed
    *  when a blocker is turned off or a flaky network recovers. */
   retry: () => void;
@@ -63,7 +63,23 @@ export function useStripe(): StripeLoad {
 /** Which payment providers this install takes money through. `stripe`: card payments (Stripe's
  *  embedded checkout, subscriptions, gifts). `paypalClientId`: PayPal and Venmo, null while off.
  *  A payment surface opens when EITHER is on. */
-export type BillingAvailability = { stripe: boolean; paypalClientId: string | null };
+export type BillingAvailability = {
+  stripe: boolean;
+  paypalClientId: string | null;
+  /** The monthly Supporter price as Stripe has it; null = no subscriptions or gifts here.
+   *  Only ever non-null while `stripe` is true. */
+  supporter: SupporterOffer | null;
+};
+/** A month of Supporter: minor units (cents) and the lower-case currency code. */
+export type SupporterOffer = { amount: number; currency: string };
+
+function readSupporter(v: unknown): SupporterOffer | null {
+  if (!v || typeof v !== "object") return null;
+  const { amount, currency } = v as { amount?: unknown; currency?: unknown };
+  return typeof amount === "number" && Number.isInteger(amount) && amount > 0 && typeof currency === "string" && /^[a-z]{3}$/i.test(currency)
+    ? { amount, currency: currency.toLowerCase() }
+    : null;
+}
 
 /** The ONE availability answer for the payment surfaces (/donate, the Support panel, the Store,
  *  the stream page's support buttons), read from /api/billing/stripe/config.
@@ -80,15 +96,18 @@ export function useBillingAvailability(initialPaypalClientId: string | null = nu
   if (initialPaypalClientId) setPaypalSandbox(initialPaypalSandbox);
   const [stripe, setStripe] = useState<boolean>(stripePublishableConfigured());
   const [paypalClientId, setPaypalClientId] = useState<string | null>(initialPaypalClientId);
+  // Unknown until the server answers: a subscription is never offered on a guess.
+  const [supporter, setSupporter] = useState<SupporterOffer | null>(null);
   useEffect(() => {
     let alive = true;
     const read = () => {
-      getJson<{ publishableKey: string | null; paypalClientId?: string | null; paypalSandbox?: boolean }>("/api/billing/stripe/config", { cache: "no-store" })
+      getJson<{ publishableKey: string | null; paypalClientId?: string | null; paypalSandbox?: boolean; supporter?: unknown }>("/api/billing/stripe/config", { cache: "no-store" })
         .then((d) => {
           if (!alive) return;
           const key = typeof d.publishableKey === "string" && /^pk_(live|test)_[A-Za-z0-9]+$/.test(d.publishableKey) ? d.publishableKey : null;
           if (key) setStripePublishableKey(key);
           setStripe(key !== null);
+          setSupporter(key !== null ? readSupporter(d.supporter) : null);
           setPaypalSandbox(d.paypalSandbox === true); // before the id: the button that mounts on it loads the SDK
           setPaypalClientId(typeof d.paypalClientId === "string" && d.paypalClientId ? d.paypalClientId : null);
         })
@@ -98,5 +117,5 @@ export function useBillingAvailability(initialPaypalClientId: string | null = nu
     window.addEventListener("focus", read);
     return () => { alive = false; window.removeEventListener("focus", read); };
   }, []);
-  return { stripe, paypalClientId };
+  return { stripe, paypalClientId, supporter };
 }

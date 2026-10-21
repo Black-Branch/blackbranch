@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import { stripComments } from "./testSource.ts";
 import { emitChatNotice, onChatNotice, noticeOnFailure } from "./chatNotice.ts";
 
-// A mod's delete or pin that the server refused used to look exactly like one
-// that worked: `postJson(...).catch(() => {})` — and postJson RESOLVES on a 403
-// or a 500, so not even the catch ran. These are the actions that now answer.
+// A mod's delete or pin that the server refused must not look like one that
+// worked: postJson RESOLVES on a 403 or a 500, so a `.catch(() => {})` never
+// even runs. These are the actions that answer.
 
 test("a subscriber hears a notice; an unsubscribed one does not", () => {
   const heard: string[] = [];

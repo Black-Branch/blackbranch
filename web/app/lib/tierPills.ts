@@ -1,9 +1,9 @@
 // Tier descriptors → colored pills on the user card.
 //
 // The card shows up to four stream-derived descriptors ("Constant | Dumb |
-// Chatter | Patron"), plus the install plugin's one pill. They used to render as
-// one grey run separated by pipes, so a warning read exactly as loud as praise —
-// the information was there but carried no weight.
+// Chatter | Patron"), plus the install plugin's one pill. Rendered as one grey
+// run separated by pipes, a warning would read exactly as loud as praise — the
+// information there but carrying no weight.
 //
 // Mapping tone here rather than inline in the component keeps it pure and
 // testable, and makes the editorial choices reviewable in one place. The
@@ -15,8 +15,8 @@
 //   support       Blessing | Patron | Contributor | Supporter
 //
 // The plugin's pill brings its own tone (ProfileExtras.descriptor.tone): its
-// values are the plugin's vocabulary, which the product does not know (review
-// round 4, step 2b — no scorer, no labels).
+// values are the plugin's vocabulary, which the product does not know (no
+// scorer, no labels).
 //
 // Deliberate editorial calls:
 //   • Nothing here is danger-red. "Dumb" is a percentile bucket, not an accusation
@@ -50,7 +50,7 @@ const ROLES: Record<string, PillRole> = {
 };
 
 /** Tone for a descriptor. Unknown strings are neutral, never an error. */
-// @test-only exported for userCard.test.ts (the product tones) and the owner plugin's test (that it colours none of its labels); the card reaches it through tierChips.
+// @test-only exported for userCard.test.ts (the product tones) and a site plugin's test (that it colours none of its labels); the card reaches it through tierChips.
 export function pillRole(label: string): PillRole {
   return ROLES[label] ?? "neutral";
 }

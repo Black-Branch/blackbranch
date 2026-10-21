@@ -3,7 +3,8 @@ import { requireUser } from "@/app/lib/authGuard";
 import { supportBranding, SAVED_PM_OPTIONS, CUSTOMER_UPDATE } from "@/app/lib/billingServer";
 import { ensureStripeCustomerOrBusy } from "@/app/lib/stripeCustomer";
 import { resolveRecipient, isGiftableRecipient } from "@/app/lib/giftServer";
-import { isGiftMonths, giftAmountCents, MAX_COMMUNITY } from "@/app/lib/giftPricing";
+import { isGiftMonths, giftAmountMinor, MAX_COMMUNITY } from "@/app/lib/giftPricing";
+import { supporterPrice } from "@/app/lib/supporterPrice";
 import type Stripe from "stripe";
 import { NextRequest } from "next/server";
 import { createSlidingWindowLimiter } from "@/app/lib/rateLimit";
@@ -26,6 +27,11 @@ export async function POST(req: NextRequest) {
   const matrixId = await requireUser();
   if (typeof matrixId !== "string") return matrixId;
   const gifter = matrixId;
+
+  // A gift month costs what a Supporter month costs, in its currency (R1.10). No usable
+  // subscription price = no subscriptions to give: the panel hides gifts, and this says so.
+  const price = await supporterPrice();
+  if (!price) return new Response("Subscriptions aren’t offered on this site.", { status: 404 });
 
   const body = await req.json().catch(() => null);
   const months = Number(body?.months);
@@ -84,8 +90,8 @@ export async function POST(req: NextRequest) {
       {
         quantity: 1,
         price_data: {
-          currency: "usd",
-          unit_amount: giftAmountCents(months, count),
+          currency: price.currency,
+          unit_amount: giftAmountMinor(price.amount, months, count),
           product_data: { name: productName },
         },
       },

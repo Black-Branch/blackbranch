@@ -225,7 +225,7 @@ test("overlay proximity reveal is coordinate-driven: HOST-edge distance sets dat
   host.remove();
 });
 
-// F1's "stuck open" half: without help, revealing the bar and then wandering
+// The "stuck open" case: without help, revealing the bar and then wandering
 // the pointer onto the (cross-origin, hence silent) video iframe would freeze
 // `nearEdge` at `true` forever, since no more `pointermove` ever arrives. The
 // `pointerout` listener is the fix — verified here with a REAL relatedTarget
@@ -267,7 +267,7 @@ test("entering the video iframe parks an already-revealed bar (pointerout, F1) �
   });
   assert.equal(bar.hasAttribute("data-revealed"), true, "setup: re-armed for the second branch");
 
-  // The guard's NON-park path (re-review, fix round 1): an ordinary
+  // The guard's NON-park path: an ordinary
   // element-to-element pointerout — relatedTarget is a plain Element — fires
   // constantly as the pointer crosses rows near the edge, and must NOT park.
   // A mutant that parks on ANY pointerout survived every other step here.
@@ -287,7 +287,7 @@ test("entering the video iframe parks an already-revealed bar (pointerout, F1) �
   host.remove();
 });
 
-// F4(c): the two `edge`/`dist` ternaries in Bar.tsx mirror slot="top" for
+// The two `edge`/`dist` ternaries in Bar.tsx mirror slot="top" for
 // slot="bottom" — untested by the test above, so a sign error in that branch
 // would be invisible. StreamMetaBar (the donate-pill bar) is precisely a
 // bottom overlay bar, which is why this specific slot is the money one.
@@ -326,7 +326,7 @@ test("overlay proximity reveal mirrors correctly for slot=\"bottom\" (the money 
   host.remove();
 });
 
-// F1 (final-review fix wave): a host (ChatSidebar's composer bar) needs to
+// A host (ChatSidebar's composer bar) needs to
 // sync something ELSE to Bar's own proximity reveal — the message list
 // translating up under a revealed composer — without duplicating the
 // pointer mechanism. `onRevealChange` is the surface. This test exercises

@@ -52,7 +52,7 @@ function harness({ poolQuery, ttsEnabled = true, sounds, fireStreamEffects } = {
     maskBlacklist: (t) => t,
     broadcast: (f) => log('broadcast', { type: f.type }),
     bufferPush: () => {}, bufferReplace: () => {},
-    ALERT_TTS_ENABLED: ttsEnabled,
+    ttsEnabled: () => ttsEnabled,
   });
   const routes = {};
   money.registerMoneyRoutes(
@@ -68,7 +68,7 @@ function harness({ poolQuery, ttsEnabled = true, sounds, fireStreamEffects } = {
   return { calls, post, credits };
 }
 
-// Qorm spends (cheer/highlight/sticker/...) credit NOTHING and await nothing
+// Currency spends (cheer/highlight/sticker/...) credit NOTHING and await nothing
 // (cheer is a pure `{ addedSeconds: 0 }` sink). A MONEY_KIND credits and is
 // awaitable via fireStreamEffects, so donation is the vehicle for these
 // idempotency tests.

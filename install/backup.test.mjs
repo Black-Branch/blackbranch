@@ -337,6 +337,41 @@ test("install verification pass: a new box whose .env was lost — the recovery 
   } finally { rmSync(h.home, { recursive: true, force: true }); }
 });
 
+// R1.6: a tunnel-mode move. A box installed with --moving has no tunnel of its own: the restore gives
+// it the snapshot's, which then connects from here. A box that made its own tunnel keeps it — the
+// snapshot's copied over it pointed cloudflared at a tunnel that no longer routes here.
+test("restore and the tunnel: a box with none takes the snapshot's; a box with its own keeps it", () => {
+  const OLD = "tunnel: 0ld00000-0000-0000-0000-000000000000\ncredentials-file: /etc/cloudflared/0ld00000-0000-0000-0000-000000000000.json\n";
+  const OWN = "tunnel: 11111111-2222-3333-4444-555555555555\ncredentials-file: /etc/cloudflared/11111111-2222-3333-4444-555555555555.json\n";
+  for (const own of [null, OWN]) {
+    const h = backupHome();
+    try {
+      const file = target(h, ["BK_TARGET=local"]);
+      writeFileSync(path.join(h.fake, "run-out-check"), 'BBRESULT {"ok":true,"repo":"ok"}\n');
+      const staged = path.join(h.home, "state/backup-scratch/r/bb/home");
+      mkdirSync(path.join(staged, "cloudflared"), { recursive: true });
+      writeFileSync(path.join(staged, ".env"), h.env());
+      writeFileSync(path.join(staged, "cloudflared/config.yml"), OLD);
+      writeFileSync(path.join(staged, "cloudflared/0ld00000-0000-0000-0000-000000000000.json"), '{"old":1}\n');
+      for (const [m, out] of [["restore-stage", '{"ok":true,"snapshot":"abcd1234abcd1234","snapshotTime":"2026-10-12T00:00:00Z"}'], ["restore-db", '{"ok":true}'], ["restore-media", '{"ok":true}']]) {
+        writeFileSync(path.join(h.fake, `run-out-${m}`), `BBRESULT ${out}\n`);
+      }
+      mkdirSync(path.join(h.home, "cloudflared"), { recursive: true });
+      if (own) writeFileSync(path.join(h.home, "cloudflared/config.yml"), own);
+      const r = h.runWith({ BB_BACKUP_TARGET_FILE: file, FAKE_RUN_STATUS: "0", BB_RESTORE_NO_START: "1" }, "restore", "latest", "--yes");
+      assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+      const config = readFileSync(path.join(h.home, "cloudflared/config.yml"), "utf8");
+      if (!own) {
+        assert.equal(config, OLD, "the snapshot's tunnel, to connect from here");
+        assert.ok(existsSync(path.join(h.home, "cloudflared/0ld00000-0000-0000-0000-000000000000.json")));
+      } else {
+        assert.equal(config, OWN, "this box's own tunnel is kept");
+        assert.match(r.stdout, /kept this box's own tunnel — the snapshot's is another one/);
+      }
+    } finally { rmSync(h.home, { recursive: true, force: true }); }
+  }
+});
+
 test("restore takes the snapshot's .env but keeps BB_RELEASE on the release in use (the images here are its)", () => {
   const bb = read("blackbranch");
   const restore = bb.slice(bb.indexOf("bb_restore() {"), bb.indexOf("backup_ssh_key() {"));

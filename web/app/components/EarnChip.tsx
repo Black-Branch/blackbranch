@@ -1,7 +1,7 @@
 "use client";
 
 // The "+2q" chip: a small badge that surfaces above the viewer's own avatar in
-// the composer when Qorm lands, then fades.
+// the composer when points land, then fades.
 //
 // It exists to make the earning loop legible: there are several different
 // participation awards, and a balance that silently ticks up teaches nobody
@@ -24,7 +24,7 @@
 // so its safety depends on staying narrow: about 54px before it would cross the
 // composer's left edge. "+9q" is ~38px and the largest realistic window is a
 // couple of digits (watch is capped at 30/stream and participation arrives a
-// few Qorm at a time), so the bound holds with room. If the chip ever gains
+// few points at a time), so the bound holds with room. If the chip ever gains
 // content again, anchor it `left-0` instead of centring — and move the -50%
 // out of both keyframe blocks, which is where the centring actually lives.
 //
@@ -36,6 +36,7 @@
 import { useEffect } from "react";
 import { formatCoinsShort, EARN_KINDS, type EarnKind } from "@/app/lib/coins";
 import { EARN_CHIP_MS, pushEarnChips, useEarnChip } from "@/app/lib/useEarnChip";
+import { DEBUG_FLAGS_ON } from "@/app/lib/debugFlags";
 
 /** `?chipdebug=1` — replay the full chip sequence on demand.
  *
@@ -44,12 +45,12 @@ import { EARN_CHIP_MS, pushEarnChips, useEarnChip } from "@/app/lib/useEarnChip"
  *  `?kbdebug=1` and `?pressdebug=1`.
  *
  *  It pushes to the CLIENT store only. No request is made, no ledger row is
- *  written, no Qorm exists. It cannot be used to fake earnings — the wallet is
+ *  written, no currency exists. It cannot be used to fake earnings — the wallet is
  *  server-side and this never speaks to it. That is what makes it safe to ship
  *  rather than gate behind an admin check. */
 function useChipDebug() {
   useEffect(() => {
-    if (!new URLSearchParams(window.location.search).has("chipdebug")) return;
+    if (!DEBUG_FLAGS_ON || !new URLSearchParams(window.location.search).has("chipdebug")) return;
     // Record<EarnKind, ...>, not Record<string, ...> — a new earn kind that
     // forgets to add itself here is a COMPILE error, not a silent `?? 1`
     // fallback that quietly demos the wrong amount forever.

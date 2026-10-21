@@ -249,7 +249,7 @@ test('support ledger reversals and reconciliation against real Postgres', async 
     assert.equal(frames.length, 0);
   });
 
-  // ── a ledger write that cannot succeed (security review) ─────────────────────
+  // ── a ledger write that cannot succeed ───────────────────────────────────────
 
   await t.test('a permanent database error (numeric overflow, class 22) is not retried: recorded as ledger_failed, nothing fires', async () => {
     frames.length = 0;

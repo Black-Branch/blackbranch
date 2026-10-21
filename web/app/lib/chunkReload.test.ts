@@ -78,6 +78,28 @@ test("no storage at all degrades to not reloading", () => {
   assert.equal(shouldReloadForChunkError(new Error("Failed to load chunk x"), null), false);
 });
 
+test("R1.25: a server action from the previous build reloads once too, on the same latch", () => {
+  for (const m of [
+    'Server Action "7f3a9c" was not found on the server. \nRead more: https://nextjs.org/docs/messages/failed-to-find-server-action',
+    'Failed to find Server Action "7f3a9c". This request might be from an older or newer deployment.',
+    "Server Reference ID did not match",
+  ]) {
+    assert.equal(shouldReloadForChunkError(new Error(m), fakeStore()), true, `should match: ${m}`);
+  }
+  const unrecognized = Object.assign(new Error("x"), { name: "UnrecognizedActionError" });
+  assert.equal(shouldReloadForChunkError(unrecognized, fakeStore()), true, "by Next's own error name");
+  // Retry: the second stale action in one session does not reload again.
+  const store = fakeStore();
+  assert.equal(shouldReloadForChunkError(new Error("Failed to find Server Action \"a\""), store), true);
+  assert.equal(shouldReloadForChunkError(new Error("Failed to load chunk y"), store), false, "one reload per session, shared");
+});
+
+test("R1.25: an action called from an event handler rejects past every boundary — the global rejection handler reloads too", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./clientError.ts", import.meta.url), "utf8");
+  assert.match(src, /reportClientError\("unhandledrejection", e\.reason\);\s*\/\/[^\n]*\n[^\n]*\n\s*if \(shouldReloadForChunkError\(e\.reason, sessionStore\(\)\)\) window\.location\.reload\(\);/);
+});
+
 // Vacuity anchor at the END: the function must genuinely behave differently
 // across calls, or every assertion above could be reading one constant.
 test("the same chunk error is not a constant answer — it depends on the store's history", () => {

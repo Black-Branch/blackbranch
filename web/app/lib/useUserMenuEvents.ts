@@ -79,7 +79,7 @@ export function useUserMenuEvents(h: {
       ref.current.onSupport((e as CustomEvent).detail as OpenSupportDetail | undefined);
     };
     const onStore = (e: Event) => {
-      // Claimable: the Qorm pill renders signed OUT, and its dispatch would
+      // Claimable: the currency pill renders signed OUT, and its dispatch would
       // otherwise go to nobody (UserMenu withholds this handler
       // without a matrixId) — a dead click on a money surface. Claiming tells
       // the pill a host took it; unclaimed, the pill falls back to sign-in.

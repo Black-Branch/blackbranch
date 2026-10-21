@@ -16,15 +16,17 @@ export type LoopVideo = { video_id: string; title: string | null };
 
 export type CommunityStatus = {
   display_name: string;
-  youtube_channel_id: string;
+  youtube_channel_id: string | null;
   video_id: string | null;
   stream_title: string;
   avatar_url: string | null;
+  /** The entry's Twitch login — the channel to visit when it has no YouTube one. */
+  twitch_login?: string | null;
   sources?: CommunitySource[];
 };
 
 export const PLATFORM_LABELS: Record<Platform, string> = {
-  sp: "stream.place",
+  sp: "Streamplace",
   yt: "YouTube",
   tw: "Twitch",
 };

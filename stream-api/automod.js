@@ -17,7 +17,7 @@
 // Every held row — any source, any status — is DELETED AUTOMOD_HELD_RETENTION_DAYS after it was
 // held (a daily prune, started with the module). The same daily run then deletes every OPEN mark
 // automod itself opened (source 'automod') once none of its evidence rows is left — an automatic
-// mark does not outlive its evidence (k, review round 6 D-E). Carried and hand-placed marks, and
+// mark does not outlive its evidence. Carried and hand-placed marks, and
 // cleared marks, stay. A mark of another source that automod adds evidence to keeps its reason.
 //
 // The verdict comes only from the model's own structured answer, parsed strictly by the adapter
@@ -52,12 +52,11 @@ function forCheck(text) {
 }
 const PLATFORMS = /^[a-z][a-z0-9.-]{0,23}$/;
 
-/** Days a site.automod_held row is kept, counted from held_at, whatever its status or source
- *  (owner decision, review round 5). The row carries the words of someone's message, and a
- *  moderator's decision is made within days, not months; keeping the words for ever made every
- *  hold a permanent copy of a message the person may have deleted. The marks (site.user_marks)
- *  hold no message text; an open automatic one goes when its last evidence row does
- *  (MARK_SWEEP_SQL, round 6 D-E), every other mark stays. The legal page states
+/** Days a site.automod_held row is kept, counted from held_at, whatever its status or source.
+ *  The row carries the words of someone's message, and a moderator's decision is made within
+ *  days, not months; keeping the words for ever would make every hold a permanent copy of a
+ *  message the person may have deleted. The marks (site.user_marks) hold no message text; an open
+ *  automatic one goes when its last evidence row does (MARK_SWEEP_SQL), every other mark stays. The legal page states
  *  this number (web/app/legal/automodRetention.ts, held equal by its render test). */
 const AUTOMOD_HELD_RETENTION_DAYS = 30;
 const PRUNE_FIRST_MS = 60_000;              // a minute after boot: never in the start-up rush
@@ -67,7 +66,7 @@ const PRUNE_SQL = `DELETE FROM site.automod_held WHERE held_at < now() - make_in
  *  statement: the removal and its record cannot part, and a second run finds nothing (retry-safe).
  *  The log row is how a moderator reading the person's history sees why the mark_set has no mark
  *  any more; it carries no message text. A mark that gains evidence while this runs may still go
- *  (READ COMMITTED) — the worst case k accepted: it reopens at the next threshold. */
+ *  (READ COMMITTED) — an accepted worst case: it reopens at the next threshold. */
 const MARK_SWEEP_SQL = `WITH gone AS (
     DELETE FROM site.user_marks m
      WHERE m.source = 'automod' AND m.cleared_at IS NULL
@@ -219,7 +218,7 @@ function createAutomod({
        ON CONFLICT ((COALESCE(canonical_id, matrix_id))) WHERE cleared_at IS NULL
        DO UPDATE SET evidence = ARRAY(SELECT DISTINCT e FROM unnest(site.user_marks.evidence || EXCLUDED.evidence) e ORDER BY e),
                      -- only automod's own mark takes the new count; a carried or moderator's mark
-                     -- keeps the reason a person (or the deletion record) gave it (round 6 D-E)
+                     -- keeps the reason a person (or the deletion record) gave it
                      reason = CASE WHEN site.user_marks.source = 'automod' THEN EXCLUDED.reason ELSE site.user_marks.reason END
        RETURNING id, (xmax = 0) AS opened`,
       [subject.canonicalId, subject.matrixId, platform || null, username || null, reason, ids]);

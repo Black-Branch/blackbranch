@@ -86,9 +86,9 @@ test("22: the video top bar's icon-only controls say what they DO", () => {
 });
 
 test("23: every inline money/mod error in the straggler files is a live region", () => {
-  // Round-2 gave role=alert to the main spend surfaces; these three files kept
-  // rendering red text silently — a screen-reader user taps Buy and hears
-  // nothing while "Not enough Qorm" sits on screen.
+  // The main spend surfaces have role=alert; these three files must too, or a
+  // screen-reader user taps Buy and hears nothing while "Not enough points"
+  // sits on screen.
   const files = [
     "../components/SupportContent.tsx",
     "../features/store/StoreSpend.tsx",

@@ -401,13 +401,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             if (_ff) document.documentElement.style.setProperty('--chat-font-family', _ff);
             if (localStorage.getItem('chatStyle_pfp') === '1') document.documentElement.classList.add('chat-pfp-on');
             if (localStorage.getItem('chatStyle_pfpRing') === '1') document.documentElement.classList.add('chat-pfp-ring-on');
-            if (localStorage.getItem('chatStyle_pronouns') === '0') document.documentElement.classList.add('chat-pron-off');
+            if (localStorage.getItem('chatStyle_pronouns') !== '1') document.documentElement.classList.add('chat-pron-off');
             if (localStorage.getItem('chatStyle_groupConsecutive') === '1') document.documentElement.classList.add('chat-group-on');
             if (localStorage.getItem('chatStyle_groupIndent') === '0') document.documentElement.classList.add('chat-group-flush');
             if (localStorage.getItem('chatStyle_altRows') === '1') document.documentElement.classList.add('alt-rows');
             if (localStorage.getItem('chatStyle_nameStyles')==='0') document.documentElement.classList.add('chat-namestyles-off');
             if (localStorage.getItem('chatStyle_badges')==='0') document.documentElement.classList.add('chat-badges-off');
-            if (localStorage.getItem('chatStyle_spotlight')==='0') document.documentElement.classList.add('chat-spotlight-off');
+            if (localStorage.getItem('chatStyle_spotlight')!=='1') document.documentElement.classList.add('chat-spotlight-off');
             if (localStorage.getItem('chatStyle_mentionHl')==='0') document.documentElement.classList.add('chat-mention-hl-off');
             if (localStorage.getItem('chatStyle_upvoteHl')==='0') document.documentElement.classList.add('chat-upvote-hl-off');
             if (localStorage.getItem('chatStyle_eventHl')==='0') document.documentElement.classList.add('chat-event-hl-off');

@@ -5,7 +5,7 @@ import "../../lib/testTsx.ts";
 import { resetHomeStore } from "../../lib/homeStore.ts";
 const { useHomeData } = await import("./useHomeData.ts");
 
-const body = { status: { live: false, viewers: null, community: null }, lastStream: null, news: [], vods: [], threads: [], boards: null, generatedAt: "2026-09-25T12:00:00.000Z" };
+const body = { status: { live: false, viewers: null, community: null }, lastStream: null, news: [], vods: [], threads: [], boards: null, platforms: [], generatedAt: "2026-09-25T12:00:00.000Z" };
 const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
 
 beforeEach(() => { resetHomeStore(); sessionStorage.clear(); });

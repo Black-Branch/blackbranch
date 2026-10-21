@@ -18,6 +18,11 @@ import { SignedInColumn } from "./SignUpSteps";
 // under the player) is the same widget grid without the column: it wraps to
 // the pane's width and scrolls down, rather than lining every panel up on one
 // horizontal axis that ignores the page dimensions.
+/** The body as this page reads it: `platforms` is the sign-in column's marks — the platforms this
+ *  install has set up (ids as PlatformIcon names them), listed by the server. A body without it
+ *  shows no marks. */
+type HomeBody = HomePayload & { platforms?: readonly string[] | null };
+
 export type HomeViewProps = {
   data: HomePayload | null;
   loading: boolean;
@@ -41,7 +46,7 @@ export function HomeView({
   const now = data ? Date.parse(data.generatedAt) : 0;
   // "Not asked yet" is loading, not failure: the server render and the first
   // client frame have no body and no error, and three "couldn't load" lines
-  // there would be the front door's first words (final review). A null KEY
+  // there would be the front door's first words. A null KEY
   // inside a body is the only per-widget failure; no body + error is the
   // page-wide one.
   const pending = data === null && !error;
@@ -63,7 +68,8 @@ export function HomeView({
   };
 
   // The Leaderboard draws its own header (its title is the face it shows).
-  const widgets = homeWidgets({ vods: vodPlaylist() !== null }).map((def) => (
+  // News shows once a feed has items: no feed (or a feed that never answered) is no card.
+  const widgets = homeWidgets({ vods: vodPlaylist() !== null, news: (data?.news?.length ?? 0) > 0 }).map((def) => (
     <Widget key={def.id} def={def} header={def.id === "boards" ? null : undefined}>{body(def)}</Widget>
   ));
 
@@ -92,7 +98,7 @@ export function HomeView({
       <div className="grid gap-3 grid-cols-1 md:grid-cols-[minmax(240px,300px)_1fr]">
         {signedIn
           ? <div data-home-left="card" className="min-w-0"><SignedInColumn active={active} /></div>
-          : <SignInColumn />}
+          : <SignInColumn platforms={(data as HomeBody | null)?.platforms ?? null} />}
         {grid}
       </div>
     </div>

@@ -1,7 +1,6 @@
-// Review round 4, step 2b (owner decision): the stats rebuild and the profile lookup carry NO
-// scoring label. A label is the scoring plugin's own reading of the scores — no scorer, no labels.
+// The stats rebuild and the profile lookup carry NO scoring label. A label is the scoring plugin's own reading of the scores — no scorer, no labels.
 // The product's part is two seams: the plugin's `afterAggregates` step, run once after every
-// rebuild, and `profileExtras` on /user/lookup (owner/temperament.test.js proves the owner's pill
+// rebuild, and `profileExtras` on /user/lookup (owner/temperament.test.js proves the site plugin's pill
 // still arrives through it; the label names and thresholds are named only there).
 // Run: node --test stats-labels-plugin.test.js
 'use strict';

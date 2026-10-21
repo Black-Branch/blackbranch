@@ -1,9 +1,9 @@
 // The Matrix media proxy's relay (app/api/matrix/media/[...path]/route.ts).
 //
-// Until external review S8 the route read every upstream body whole with
-// arrayBuffer() before answering — no byte cap and no bound on how many ran at
-// once, so a few large or parallel attachments could fill the web process's
-// memory inside the upstream deadline. Now the body is streamed through: at
+// Reading every upstream body whole with arrayBuffer() before answering — no
+// byte cap and no bound on how many run at once — lets a few large or parallel
+// attachments fill the web process's memory inside the upstream deadline. So
+// the body is streamed through: at
 // most `maxBytes` of it, cancelled upstream the moment the cap is passed or the
 // viewer goes away, and a small gate bounds how many relays are open at once.
 

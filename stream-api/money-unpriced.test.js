@@ -1,4 +1,4 @@
-// recordUnpriced (review round 2, R2-1): a payment the ledger cannot price
+// recordUnpriced: a payment the ledger cannot price
 // lands in stream.unpriced_support (v151) with its native amount and raw
 // string, and its unique event_id answers "already recorded" for a replay.
 // Run: node --test money-unpriced.test.js

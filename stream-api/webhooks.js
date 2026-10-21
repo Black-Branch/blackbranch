@@ -10,16 +10,13 @@
 // for reconciliation) when the write cannot land (alert.js). What a provider adds on top is
 // redelivery across a crash or restart, and that only works if nothing here tells it
 // "done" before the ledger has answered:
-//   • Ko-fi — expects a 200; with anything else it "will retry a reasonable number of
-//     times with the same message_id" (Ko-fi's webhook docs). So the 200 is sent only
-//     AFTER dispatch resolves (the ledger has answered); a throw answers 500.
-//   • Patreon — stores undelivered events and retries ≈30 s, 5 min, 15 min, 1 h, 3 h,
-//     1 day, 1 week after a failure, then pauses the webhook (Patreon API docs, "Robust
-//     Retries"). Same rule: the 200 follows the ledger's answer; a throw answers 500.
-//   TODO(verify): both retry behaviours above are quoted from memory (review round 5, F7), not
-//   re-read from the providers. Check against https://help.ko-fi.com/hc/en-us/articles/360004162298
-//   (Ko-fi webhooks) and https://docs.patreon.com/#webhooks (Patreon "Robust Retries") and correct
-//   this comment — the code's rule (acknowledge only after the ledger answers) holds either way.
+//   • Ko-fi — expects a 200; without one it "will retry a reasonable number of times with the
+//     same message_id" (help.ko-fi.com, "Does Ko-fi have an API or webhook?"; no schedule is
+//     published). So the 200 is sent only AFTER dispatch resolves; a throw answers 500.
+//   • Patreon — stores undelivered events and retries at roughly 30 s, 5 min, 15 min, 1 h, 3 h,
+//     1 day and 1 week, then needs a manual retry; repeated failures mark the webhook `paused`
+//     (docs.patreon.com, "Robust Retries" and the webhook's `paused` attribute). Same rule: the
+//     200 follows the ledger's answer; a throw answers 500.
 //   • Streamlabs — a socket, no acknowledgement at all; it re-emits recent history on
 //     every reconnect, which is the only redelivery there is.
 // The in-memory replay guard (createReplayGuard) remembers an id only once its dispatch

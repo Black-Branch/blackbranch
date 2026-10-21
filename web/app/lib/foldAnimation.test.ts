@@ -83,9 +83,9 @@ test("the player unmounts from the transition handler, not an effect", () => {
 
 test("the fold region carries the mode sizing, because .player-area no longer can", () => {
   // The region is the panel's flex child now and `.player-area` is its GRID
-  // ITEM, so `flex` on `.player-area` is inert. It was left there for one
-  // review round and fill mode silently de-centred: the area collapsed 600→338
-  // px and the video sat flush to the top.
+  // ITEM, so `flex` on `.player-area` is inert. Left there, fill mode
+  // silently de-centres: the area collapses 600→338 px and the video sits
+  // flush to the top.
   const css = stripCssComments(readFileSync(globalsPath, "utf8"));
   assert.match(css, /\.player-fill\s+\.player-fold-region\s*\{[^}]*flex:\s*1 1 0%/,
     "fill mode must grow the REGION, or the video is no longer centred in the column");

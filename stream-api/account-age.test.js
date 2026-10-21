@@ -105,6 +105,10 @@ test('Kick is honestly reported as uncheckable', () => {
 });
 
 // ── Wiring, with a fake pool ────────────────────────────────────────────────
+// Twitch is CHECKABLE only with the app's client id + secret (checkablePlatforms), so the wiring
+// tests below run with made-up ones; the cached paths never use them.
+process.env.TWITCH_CLIENT_ID = 'test-client-id';
+process.env.TWITCH_CLIENT_SECRET = 'test-client-secret';
 
 function fakePool(rows, onQuery) {
   return {
@@ -187,7 +191,7 @@ test('armed with no platform id is withheld as unknown, never allowed', async ()
   // trivially exploitable hole: omit the id, skip the gate.
   _resetCaches();
   const pool = fakePool([{ min_account_age_days: 7 }]);
-  const out = await checkAccountAge({ pool, platform: 'kick', platformId: '', now: NOW });
+  const out = await checkAccountAge({ pool, platform: 'twitch', platformId: '', now: NOW });
   assert.equal(out.action, 'withhold');
   assert.equal(out.reason, 'unknown_age');
 });
@@ -224,19 +228,88 @@ test('a FAILED lookup allows through; it does not withhold', async () => {
   }
 });
 
-test('a platform with no data source still withholds — that is the policy, not a bug', async () => {
-  // Kick returns null WITHOUT throwing, which is the whole point of separating
-  // the two paths: absent data is a product decision, a failed lookup is not.
+// ── an uncheckable platform is never held ───────────────────────────────────
+// Withholding every message whose age is unknown would withhold the WHOLE audience of a platform
+// with no dates (Kick), no lookup (stream.place) or no keys on this install (Twitch without the
+// app's id + secret, YouTube without an API key). So the lever never holds a platform whose age
+// cannot be checked; the moderation panel says so per platform.
+
+function armedPool() {
+  return fakePool([], (sql) => {
+    if (/min_account_age_days/.test(sql)) return { rows: [{ min_account_age_days: 7 }] };
+    if (/platform_account_age/.test(sql)) assert.fail('an uncheckable platform reached the age cache');
+    return null;
+  });
+}
+
+test('armed: Kick and stream.place are never held, and are not looked up', async () => {
+  for (const platform of ['kick', 'streamplace', 'Kick']) {
+    _resetCaches();
+    const out = await checkAccountAge({ pool: armedPool(), platform, platformId: '999', now: NOW });
+    assert.deepEqual(out, { action: 'allow', uncheckable: true }, `${platform} was held`);
+  }
+  // Not even the "no id" hole applies: the platform is not checkable at all.
+  _resetCaches();
+  assert.equal((await checkAccountAge({ pool: armedPool(), platform: 'kick', platformId: '', now: NOW })).action, 'allow');
+});
+
+test('armed: Twitch without app keys and YouTube without an API key are not held — and become checkable once a key is set, no restart', async () => {
+  const saved = { id: process.env.TWITCH_CLIENT_ID, secret: process.env.TWITCH_CLIENT_SECRET, yt: process.env.YOUTUBE_API_KEY };
+  try {
+    delete process.env.TWITCH_CLIENT_ID; delete process.env.TWITCH_CLIENT_SECRET; delete process.env.YOUTUBE_API_KEY;
+    for (const platform of ['twitch', 'youtube']) {
+      _resetCaches();
+      const out = await checkAccountAge({ pool: armedPool(), platform, platformId: '123', now: NOW });
+      assert.deepEqual(out, { action: 'allow', uncheckable: true }, `${platform} with no key was held`);
+    }
+    assert.deepEqual(checkablePlatforms(), { twitch: false, kick: false, youtube: false, streamplace: false, native: true });
+
+    // The key arrives (the Admin Panel saves it; here, env): the next message is checked.
+    process.env.YOUTUBE_API_KEY = 'yt-key';
+    _resetCaches();
+    const pool = fakePool([], (sql) => {
+      if (/min_account_age_days/.test(sql)) return { rows: [{ min_account_age_days: 7 }] };
+      if (/platform_account_age/.test(sql)) return { rows: [{ account_created_at: new Date(NOW - 2 * DAY).toISOString(), checked_at: new Date(NOW).toISOString() }] };
+      return null;
+    });
+    const out = await checkAccountAge({ pool, platform: 'youtube', platformId: 'UC1', now: NOW });
+    assert.equal(out.action, 'withhold', 'a checkable YouTube account that is too new passed');
+    assert.equal(out.reason, 'too_new');
+  } finally {
+    for (const [k, v] of [['TWITCH_CLIENT_ID', saved.id], ['TWITCH_CLIENT_SECRET', saved.secret], ['YOUTUBE_API_KEY', saved.yt]]) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+});
+
+test('armed: a CHECKABLE platform with one account the platform will not date is still withheld as unknown_age', async () => {
+  // The per-account unknown stays the policy: the epoch date, a Twitch "Bad Identifier", an empty
+  // answer. Only a platform that can date NOBODY is let through.
   _resetCaches();
   const pool = fakePool([], (sql) => {
     if (/min_account_age_days/.test(sql)) return { rows: [{ min_account_age_days: 7 }] };
-    if (/SELECT account_created_at/.test(sql)) return { rows: [] };
+    if (/SELECT account_created_at/.test(sql)) return { rows: [{ account_created_at: null, checked_at: new Date(NOW).toISOString() }] };
     return null;
   });
-  const out = await checkAccountAge({ pool, platform: 'kick', platformId: '999', now: NOW });
+  const out = await checkAccountAge({ pool, platform: 'twitch', platformId: '999', now: NOW });
   assert.equal(out.action, 'withhold');
   assert.equal(out.reason, 'unknown_age');
-  assert.notEqual(out.degraded, true, 'Kick is not degraded — it is correctly reporting no data');
+});
+
+test('GET /lockdown/checkable: requireInternal, and the contract-3 shape', () => {
+  const { registerLockdownRoutes } = require('./account-age');
+  const routes = {};
+  const requireInternal = () => {};
+  registerLockdownRoutes({ get: (p, ...h) => { routes[p] = h; } }, { requireInternal });
+  const h = routes['/lockdown/checkable'];
+  assert.ok(h, 'the route is not registered');
+  assert.equal(h[0], requireInternal);
+  let body = null;
+  h.at(-1)({}, { json(b) { body = b; } });
+  assert.deepEqual(Object.keys(body).sort(), ['kick', 'native', 'streamplace', 'twitch', 'youtube']);
+  assert.equal(body.native, true);
+  assert.equal(body.kick, false);
+  assert.equal(body.twitch, true, 'Twitch with the app id + secret set is checkable');
 });
 
 test('an unverifiable IDENTIFIER is unknown; only auth/infra failures degrade', () => {

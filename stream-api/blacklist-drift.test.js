@@ -10,9 +10,8 @@
 // (`/blacklist`, `/whitelist`) is DB-backed and genuinely shared, so it cannot
 // drift and is not checked here.
 //
-// Baseline when written: 183 terms each side, zero drift. This
-// locks in a correct state rather than fixing a live bug — the two agreed then,
-// and nothing was stopping them diverging tomorrow.
+// This locks in a correct state: the two lists agree, and nothing else stops
+// them diverging.
 //
 // Run: node --test blacklist-drift.test.js
 

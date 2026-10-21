@@ -1,4 +1,4 @@
-// The composer's refusal note (U1 rework, k 2026-10-18), mounted: one calm,
+// The composer's refusal note, mounted: one calm,
 // dismissible line INSIDE the empty field, where the placeholder sits — never a
 // row that grows the composer bar and never an overlay on the chat.
 //

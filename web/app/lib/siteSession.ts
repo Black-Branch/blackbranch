@@ -6,7 +6,7 @@
 // Logging out (destroyMatrixSession), a refresh grant the homeserver refuses, re-signing-in on the
 // same device (the callbacks rotate session_id) and deleting the account each remove or replace
 // that row — so a COPY of the cookie taken before any of them authorizes nothing afterwards.
-// Without this check the copy kept working until the JWT expired (external review S1).
+// Without this check the copy would keep working until the JWT expired.
 //
 // Four answers:
 //   live        — the row exists for this account, and the account is not deleted.

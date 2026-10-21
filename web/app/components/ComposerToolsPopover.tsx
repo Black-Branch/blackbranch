@@ -10,6 +10,7 @@ import { keepFocus } from "@/app/lib/keepFocus";
 import { ctlBox, ctlClass, CTL_ICON } from "@/app/lib/composerControls";
 import type { ChatMsg } from "@/app/lib/chatMsg";
 import type { EmoteMap } from "@/app/lib/useEmotes";
+import { featureOn } from "@/app/lib/siteFeatures";
 
 /** Mirrors SpendChip.tsx's SpendMode — redeclared, not imported. This file
  *  lives outside the chat feature, and importing past that feature's public
@@ -53,7 +54,7 @@ type ComposerToolsPopoverProps = {
 // "attach something to this message" affordance, which is what a poll, a
 // spend and a sticker all are.
 //
-// The trigger still surfaces armed spend state (gold Qorm icon) — an armed
+// The trigger still surfaces armed spend state (gold currency icon) — an armed
 // spend costs real currency on the next Enter, so it must never be invisible.
 export function ComposerToolsPopover({
   matrixId, spendMode, setSpendMode, highlightPrice, ttsPrice,
@@ -133,7 +134,9 @@ export function ComposerToolsPopover({
             {spendMode === "highlight" ? "Cancel highlight" : "Highlight message"}
             {spendMode !== "highlight" && <span className="ml-auto text-muted">{highlightPrice}</span>}
           </button>
-          <button
+          {/* Read aloud only where stream-api speaks: elsewhere it would charge for
+              nothing — the same rule /tts follows (commands/spec.ts `module`). */}
+          {(featureOn("tts") || spendMode === "tts") && <button
             type="button"
             disabled={!!replyTo}
             title={replyTo ? "Buying is paused while replying" : undefined}
@@ -143,7 +146,7 @@ export function ComposerToolsPopover({
             <span className="flex w-4 items-center justify-center"><PointsIcon size="1em" /></span>
             {spendMode === "tts" ? "Cancel read aloud" : "Read aloud"}
             {spendMode !== "tts" && <span className="ml-auto text-muted">{ttsPrice}</span>}
-          </button>
+          </button>}
           <button
             type="button"
             disabled={stickerBusy || stickerPrice === null}
@@ -160,7 +163,10 @@ export function ComposerToolsPopover({
             also the one place a NON-Supporter learns this exists — a disabled
             row that says why, not a hidden one.
           */}
-          <button
+          {/* On a site with no subscription to buy, a "Supporters only" row is a perk
+              nobody can get — hidden, unless this viewer is a Supporter already (a gift, or a
+              subscription from before the price was removed). */}
+          {(canEncrypt === true || encryptArmed || featureOn("subscriptions")) && <button
             type="button"
             disabled={canEncrypt === false}
             title={
@@ -179,7 +185,7 @@ export function ComposerToolsPopover({
             </span>
             {encryptArmed ? "Stop redacting" : "Redacted message"}
             {canEncrypt === false && <span className="ml-auto text-muted">Supporters</span>}
-          </button>
+          </button>}
         </ComposerPopover>
       )}
 

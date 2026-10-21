@@ -86,7 +86,7 @@ function bridgeBots(room: DemoteRoom, listed: Record<string, unknown>, level: nu
  * itself, because power is granted to mods who never joined (above). Only levels in (0, `level`]
  * are taken — the level the sync above grants; a higher level was set by hand and survives, as it
  * does there. Never the viewer.
- * Never an account that holds power for the install rather than as a mod (round 5): `keepIds`, the
+ * Never an account that holds power for the install rather than as a mod: `keepIds`, the
  * install's staff accounts (streamer, bot, extra staff — /api/community/mods), and every bridge bot
  * the room itself names in its bridge state (a mautrix bridge's bot, say) — if the event came from
  * above mod level (bridgeBots). Taken from what the

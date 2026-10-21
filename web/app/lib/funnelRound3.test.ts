@@ -1,4 +1,4 @@
-// Round-3 items 8 + 12: the signed-out money funnel stops dead-ending, and
+// The signed-out money funnel stops dead-ending, and
 // mod delete grows the same two-step confirm everywhere.
 //
 // Run: node --test app/lib/funnelRound3.test.ts
@@ -17,7 +17,7 @@ const { dispatchClaimable, claimEvent } = await import("./claimableEvent.ts");
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
 test("8: the claimable handshake distinguishes hosted from unhosted dispatch", () => {
-  // The lived bug: the signed-out Qorm pill dispatched bb:open-store to
+  // Without it the signed-out points pill dispatches bb:open-store to
   // NOBODY (the only listener lives in UserMenu, which needs a matrixId) —
   // a dead click on a money surface. The handshake tells the dispatcher no
   // host is mounted so it can fall back to sign-in.
@@ -74,8 +74,8 @@ test("8: a signed-out donation opens the guest flow, not the sign-in wall", () =
 });
 
 test("8: a signed-out subscribe keeps its intent across sign-in", () => {
-  // The redirect used to drop WHY the user was signing in — they came back to
-  // the home page and had to find the button again.
+  // The redirect keeps WHY the user was signing in — otherwise they come back
+  // to the home page and have to find the button again.
   const view = read("../components/StreamView.tsx");
   assert.match(view, /sessionStorage\.setItem\("bb_pending-support", section\)/,
     "the sign-in redirect drops the support intent");

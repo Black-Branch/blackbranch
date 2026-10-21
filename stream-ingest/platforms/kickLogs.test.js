@@ -1,6 +1,5 @@
-// Round 7 (ingest-logs): a Kick money event's journal line carries the event name, its id and
-// the payload's top-level KEYS — never a value. The old line printed the first 400 characters
-// of the raw payload, which names the subscriber, the gifter and every giftee.
+// A Kick money event's journal line carries the event name, its id and the payload's top-level
+// KEYS — never a value. The raw payload names the subscriber, the gifter and every giftee.
 //
 // Run: node --test platforms/kickLogs.test.js
 import test from 'node:test';

@@ -2,7 +2,8 @@
 //
 // Dual voice (instance key tts.dualVoice): a spoken turn is split into casual/loud RUNS
 // (`splitRuns`/`isLoud`) and each run is synthesized with the matching ElevenLabs voice —
-// ELEVENLABS_VOICE_CASUAL vs ELEVENLABS_VOICE_LOUD (Flash v2.5, default voice settings).
+// instance keys tts.voiceCasual vs tts.voiceLoud (Flash v2.5, default voice settings). Nothing is
+// spoken unless tts.enabled is on (enabled() below).
 // Audio is synthesized to a file and PLAYED to completion (the player exits when done →
 // exact end-of-speech, no guessing), so the bot's avatar can be raised while speaking and
 // hidden the instant playback ends.
@@ -23,8 +24,25 @@ const { instanceConfig } = require('./instance-config');
 // call time so a key saved on the Credentials page applies without a restart.
 const apiKey = () => instanceConfig.get('elevenlabs.apiKey') || '';
 const MODEL = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5';
-const VOICE_CASUAL = process.env.ELEVENLABS_VOICE_CASUAL || '';
-const VOICE_LOUD = process.env.ELEVENLABS_VOICE_LOUD || '';
+// Instance keys tts.voiceCasual / tts.voiceLoud (env ELEVENLABS_VOICE_CASUAL / _LOUD, else the
+// Admin Panel's value), read per run so a saved voice applies without a restart.
+const voiceCasual = () => instanceConfig.get('tts.voiceCasual') || '';
+const voiceLoud = () => instanceConfig.get('tts.voiceLoud') || '';
+
+// Instance key tts.enabled (env ALERT_TTS_ENABLED): whether anything is SPOKEN at all — alerts,
+// paid read-aloud, the bot's /speak. Off on a fresh install. Restart-applied like the module
+// switches: taken from env + defaults at boot, then once more at the settings layer's first
+// successful load (the value the Admin Panel shows as running), never again — so a saved change
+// reads "pending restart" until it is true.
+let enabledNow = instanceConfig.get('tts.enabled') === true;
+instanceConfig.loaded.then(() => { enabledNow = instanceConfig.get('tts.enabled') === true; });
+function enabled() { return enabledNow; }
+
+/** GET /tts/status's facts, never a value: is the key set, is a voice set,
+ *  which sink. `enabled` is added by the route from enabled(). */
+function status() {
+  return { keySet: !!apiKey(), voiceSet: !!(voiceCasual() || voiceLoud()), sink: ttsSink() };
+}
 const OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || 'mp3_44100_128';
 // Instance key tts.dualVoice (env TTS_DUAL_VOICE), read per turn. Off = one voice for every run.
 const dualVoice = () => instanceConfig.get('tts.dualVoice') === true;
@@ -142,18 +160,19 @@ function splitRuns(text) {
 }
 
 // The voice for one run (loud vs casual).
-// @parked plugin API: an install's owner plugin voices its own lines with it (the radio DJ, owner/radio-dj.js)
+// @parked plugin API: an install's site plugin voices its own lines with it (the radio DJ, owner/radio-dj.js)
 function voiceFor(loud) {
-  return (loud ? VOICE_LOUD : VOICE_CASUAL) || VOICE_CASUAL || VOICE_LOUD;
+  const casual = voiceCasual(); const shout = voiceLoud();
+  return (loud ? shout : casual) || casual || shout;
 }
 
 // ── ElevenLabs synthesis (raw REST; Node fetch) ─────────────────────────────
 // Returns a Buffer of mp3 audio for one run, or throws.
-// @parked plugin API: an install's owner plugin voices its own lines with it (the radio DJ, owner/radio-dj.js)
+// @parked plugin API: an install's site plugin voices its own lines with it (the radio DJ, owner/radio-dj.js)
 async function synthRun(text, voiceId) {
   if (!apiKey()) throw new Error('ELEVENLABS_API_KEY not set');
   if (!voiceId) throw new Error('no voiceId configured');
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${encodeURIComponent(OUTPUT_FORMAT)}`;
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(OUTPUT_FORMAT)}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'xi-api-key': apiKey(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
@@ -335,7 +354,7 @@ function speakTest(clip) {
 }
 
 module.exports = {
-  speak, speakTest,
+  speak, speakTest, enabled, status,
   noisePath,
   cleanForTTS,
   // money.js's /speak validation clamps with these — one rule, one copy of the numbers.
@@ -343,7 +362,7 @@ module.exports = {
   // exposed for tests / ad-hoc
   splitRuns, isLoud, synthRun, voiceFor, speakTurn: _speak,
   config: {
-    MODEL, VOICE_CASUAL, VOICE_LOUD, get hasKey() { return !!apiKey(); },
+    MODEL, get voiceCasual() { return voiceCasual(); }, get voiceLoud() { return voiceLoud(); }, get hasKey() { return !!apiKey(); },
     get sink() { return ttsSink(); }, get dualVoice() { return dualVoice(); }, get clipsDir() { return clipsDir(); },
   },
 };

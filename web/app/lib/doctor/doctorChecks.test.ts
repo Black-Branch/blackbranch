@@ -96,13 +96,13 @@ test("alerts: no topic is amber with the plain sentence; one topic is enough", (
   assert.equal(row("alerts.channel", (s) => { s.alerts = null; }).status, "grey");
 });
 
-test("a homeserver managed outside Blackbranch: no switch to match, and no blackbranch command in the fix", () => {
+test("a homeserver managed outside Black Branch: no switch to match, and no blackbranch command in the fix", () => {
   const bundle = row("matrix.federation", (s) => { s.matrix.federation.reachable = true; });
   assert.equal(bundle.status, "fail", "on a bundle the switch is off and others can reach it");
   assert.match(bundle.fix, /blackbranch render/);
   const outside = row("matrix.federation", (s) => { s.matrix.federation.reachable = true; }, "none");
   assert.equal(outside.status, "grey");
-  assert.equal(outside.detail, "managed outside Blackbranch — other servers can reach it");
+  assert.equal(outside.detail, "managed outside Black Branch — other servers can reach it");
   assert.doesNotMatch(outside.fix, /blackbranch/);
   for (const id of ["matrix.synapse", "matrix.mas", "matrix.issuer", "matrix.wellknown", "services.api", "services.ingest"]) {
     assert.doesNotMatch(row(id, () => {}, "none").fix, /blackbranch (render|up|restart|status|logs)/, `${id}'s fix on an install that is not a bundle`);

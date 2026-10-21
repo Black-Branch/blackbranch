@@ -14,7 +14,7 @@ test("signed-in guard first, then a validated face + window, then findRank over 
   assert.match(src, /if \(face === null \|\| !isWindowId\(window\)\) return Response\.json\(\{ error: "bad face or window" \}, \{ status: 400 \}\);/);
   assert.match(src, /resolveIdentities\(\{ matrixId: who \}\)/);
   // The caller's own keys are the keys a board row carries: Matrix ids and the public id of each
-  // platform identity they hold (boards.ts publicKey) — never a canonical (owner decision 2026-10-17).
+  // platform identity they hold (boards.ts publicKey) — never a canonical.
   assert.match(src, /const keys = \[\.\.\.ids\.matrixIds, \.\.\.rows\.map\(\(r\) => publicIdFor\(r\.canonical, r\.platform\)\)\.filter\(\(k\): k is string => !!k\)\];/);
   assert.match(src, /findRank\(face, window, keys\)/);
   assert.match(src, /"Cache-Control": "private, no-store"/);

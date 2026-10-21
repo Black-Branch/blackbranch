@@ -68,7 +68,7 @@ export function setPlayerSeen(seen: boolean, t = now()): void {
   s.seen = seen;
 }
 
-/** The video panel closed (the player is unmounted, F4) — time spent so is its own bucket. */
+/** The video panel closed (the player is unmounted) — time spent so is its own bucket. */
 export function setPlayerFolded(folded: boolean, t = now()): void {
   tick(t);
   s.folded = folded;

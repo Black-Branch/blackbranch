@@ -1,4 +1,4 @@
-// The chat commands keep their meaning (owner's decision, review round 4): `/ban` is permanent —
+// The chat commands keep their meaning: `/ban` is permanent —
 // the word says it — and `/timeout` defaults to 10 minutes. Driven through the real runner.
 // Run: node --test app/lib/commands/banCommands.test.ts
 import test from "node:test";

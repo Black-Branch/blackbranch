@@ -2,7 +2,7 @@
 // linked platform lines tombstoned (rows kept), quotes of them in other people's replies removed,
 // their name stripped from support events (the amount kept), the site link removed, AI memory
 // forgotten, the live buffer purged — and nobody else's rows touched. The stream-side PROFILE goes
-// too (review round 3, P5): stream.users, user_stats, nameidx and every platform link of a canonical
+// too: stream.users, user_stats, nameidx and every platform link of a canonical
 // that was this account's alone are deleted, the kept lines and payments are moved onto the one
 // erased-person row, and /user/lookup answers 404 — even after an aggregate rebuild.
 // Fixtures are scoped to ids beginning `aetest` and removed before and after.
@@ -19,7 +19,7 @@ const { registerProfileRoutes } = require('./profiles');
 const { createAggregates } = require('./aggregates');
 const { createIdentity } = require('./identity');
 const { serially } = require('./testlib/db-serial.js');
-// The install's owner plugin, through the seam index.js uses (absent in the public build).
+// The install's site plugin, through the seam index.js uses (absent in the public build).
 const owner = require('./plugins').loadOwnerPlugin();
 
 const URL = process.env.SQL_PARSE_DATABASE_URL || '';
@@ -83,7 +83,7 @@ test('stream-side account erase against real Postgres', async (t) => {
   await pool.query(`INSERT INTO stream.support_events (user_id, platform, username, amount_usd, event_type, event_id) VALUES ('aetestcanon', 'twitch', 'meontwitch', 4.99, 'sub', 'aetest-se-mine'), ('aetestother', 'twitch', 'someoneelse', 1, 'bits', 'aetest-se-other')`);
 
   const memory = createMemory({ pool, log: quiet, config: { get: () => null, snapshot: () => ({ state: { loaded: true } }) } });
-  // The owner plugin's REAL forget handler, registered exactly as index.js does (its bot data
+  // The site plugin's REAL forget handler, registered exactly as index.js does (its bot data
   // surface registers it on memory) — without it the lore assertion below would pass over nothing.
   // No plugin (the public build): no handler, and nothing else writes that table.
   const noRoutes = { get() {}, post() {}, put() {}, delete() {} };
@@ -95,7 +95,7 @@ test('stream-side account erase against real Postgres', async (t) => {
   ];
   const frames = [];
   const redacted = [];
-  // The REAL identity module (its cache is what P8 is about) and a sponsor pool that records the hook.
+  // The REAL identity module (its cache must forget the person too) and a sponsor pool that records the hook.
   const identity = createIdentity({ pool, requestAggregateRefresh: () => {} });
   const sponsorErased = [];
   const sponsors = { erase: (x) => sponsorErased.push(x) };
@@ -125,7 +125,7 @@ test('stream-side account erase against real Postgres', async (t) => {
   const again = await ae.erase(me);
   assert.deepEqual([again.chatLog, again.quotes, again.supportEvents, again.links, again.profiles], [0, 0, 0, 0, 0], 'the erase is not idempotent');
 
-  await t.test('the stream-side profile is gone and /user/lookup answers 404, even after an aggregate rebuild (P5)', async () => {
+  await t.test('the stream-side profile is gone and /user/lookup answers 404, even after an aggregate rebuild', async () => {
     const left = (await pool.query(`
       SELECT (SELECT count(*) FROM stream.users WHERE id = 'aetestcanon')::int AS users,
              (SELECT count(*) FROM stream.user_stats WHERE user_id = 'aetestcanon')::int AS stats,
@@ -168,7 +168,7 @@ test('stream-side account erase against real Postgres', async (t) => {
     });
   });
 
-  await t.test('after the erase their platform id starts a FRESH identity, and memory stays off for it (D2, P8)', async () => {
+  await t.test('after the erase their platform id starts a FRESH identity, and memory stays off for it', async () => {
     // The sponsor pool was told to drop them, by id and by every name it may hold them under.
     assert.equal(sponsorErased.length, 1, 'the sponsor pool was not told about the erase exactly once (the re-run finds nothing left)');
     assert.deepEqual(sponsorErased[0].canonicalIds, ['aetestcanon']);
@@ -225,7 +225,7 @@ test('stream-side account erase against real Postgres', async (t) => {
     assert.match(src, /module\.exports = \{ createAccountErase, ERASED_NAME, ERASED_CANONICAL, RESTRICTION_UPSERT_SQL \};\s*$/, 'vacuity: the file was read to its end');
   });
 
-  // Review round 5: a TIMEOUT's restriction ends when the timeout does; a case never does.
+  // A TIMEOUT's restriction ends when the timeout does; a case never does.
   await t.test('/account/erase: a timed ban records its end; a case (or no end) records none; garbage is permanent', async () => {
     const routes = {};
     ae.registerAccountEraseRoutes({ post: (p, ...h) => { routes[p] = h[h.length - 1]; } }, { requireSecret: () => {}, wrap: (fn) => fn });
@@ -254,7 +254,7 @@ test('stream-side account erase against real Postgres', async (t) => {
       { reason: 'ban', expires_at: null }, 'an unreadable end must keep the restriction, not drop it');
   });
 
-  // L4 (review round 4): moderation retention is PRIVATE. A case keeps the words (mods-only) and a
+  // Moderation retention is PRIVATE. A case keeps the words (mods-only) and a
   // ban keeps the record of which platform ids were the account's — but the profile is not public,
   // /user/lookup answers 404 like any unknown person, and new messages start a FRESH identity.
   await t.test('with an open case and a ban: words kept mods-only, the platform-id record kept privately — and the profile is NOT public', async () => {
@@ -303,7 +303,7 @@ test('stream-side account erase against real Postgres', async (t) => {
     await serially(pool, () => pool.query(`DELETE FROM stream.users WHERE id = $1`, [fresh]));
   });
 
-  // L5: the payments the ledger could not price (or record) are anonymised too, found by the
+  // The payments the ledger could not price (or record) are anonymised too, found by the
   // platform ids captured before the links went.
   await t.test('their unpriced payments lose the name, message and platform id; the amounts stay', async () => {
     const who = '@aetest-unpriced:x';

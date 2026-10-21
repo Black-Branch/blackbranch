@@ -141,7 +141,7 @@ test("FINDING 2: a late-resolving youtube script upgrades YouTubeFrame instead o
 
 test("FINDING 7: script preload is not gated to the Live tab", () => {
   // A viewer who lands on Community or opens a VOD without ever visiting Live
-  // used to fetch neither script — inert for the whole session even though
+  // must still fetch both scripts — otherwise inert for the whole session even though
   // load() is idempotent and cheap to call unconditionally.
   assert.doesNotMatch(area(), /if\s*\(tab\s*!==\s*"live"\)\s*return;/,
     "the script preload is still gated to the Live tab only");

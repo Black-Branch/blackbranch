@@ -263,7 +263,7 @@ test('a turn that plays nothing records no end', async () => {
   assert.equal(turn.endedAt, undefined);
 });
 
-// L7: the bot's /speak lines reach tts.speak WITHOUT going through an alert path, so the markup
+// The bot's /speak lines reach tts.speak WITHOUT going through an alert path, so the markup
 // strip lives inside speak() itself — every caller is covered. The turn is cleaned in place
 // (it is the object the engine is handed, and the one /speak's `wait` reads timings back from).
 test('speak() strips markup and stray angle brackets from every turn before the engine sees it', async () => {
@@ -282,4 +282,18 @@ test('speak() on an alert line that was already cleaned changes nothing (idempot
   const done = captureWarn(() => speak(turn));
   assert.equal(turn.text, once);
   await done;
+});
+
+test('synthRun puts the voice id into the ElevenLabs path encoded — a stored id can never add path segments or a query', async () => {
+  const { synthRun } = require('./tts');
+  const hadKey = process.env.ELEVENLABS_API_KEY; process.env.ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || 'test-key';
+  const realFetch = globalThis.fetch; const seen = [];
+  globalThis.fetch = async (url) => { seen.push(String(url)); return { ok: true, arrayBuffer: async () => new ArrayBuffer(4) }; };
+  try {
+    await synthRun('hello', 'abc/../x?model_id=evil&y').catch(() => {});
+    assert.equal(seen.length, 1, 'one request');
+    const u = new URL(seen[0]);
+    assert.equal(u.pathname, '/v1/text-to-speech/abc%2F..%2Fx%3Fmodel_id%3Devil%26y', 'the id is one encoded path segment');
+    assert.equal(u.searchParams.get('model_id'), null, 'nothing from the id reached the query');
+  } finally { globalThis.fetch = realFetch; if (hadKey === undefined) delete process.env.ELEVENLABS_API_KEY; }
 });

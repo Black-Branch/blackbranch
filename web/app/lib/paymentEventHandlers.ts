@@ -66,7 +66,7 @@ export function createPaymentEventHandlers(deps: { pool: Pool; stripe: () => Str
   }
 
   /** Matches site.donations by payment_intent, stamps refunded_at
-   *  idempotently. A refund of any money-bought Qorm (tip or coin purchase)
+   *  idempotently. A refund of any money-bought points (tip or coin purchase)
    *  claws it back — only on refund.created, since refund.updated is the same
    *  refund changing state and the clawback ref makes a redelivery a no-op
    *  anyway.
@@ -90,7 +90,7 @@ export function createPaymentEventHandlers(deps: { pool: Pool; stripe: () => Str
     if (event.type === "refund.created" && paymentIntentId && refund.amount > 0) {
       // `refund.amount` is in the CHARGE's settlement minor units, not USD
       // cents — for a non-USD settlement it is not safe to pass through as
-      // Qorm cents. Take back everything still held for this payment instead;
+      // point cents. Take back everything still held for this payment instead;
       // clawbackForPayment's own cap does the rest. Never log a payer field.
       const usd = (refund.currency ?? "usd").toLowerCase() === "usd";
       if (!usd) {
@@ -139,7 +139,7 @@ export function createPaymentEventHandlers(deps: { pool: Pool; stripe: () => Str
       outcome: event.type === "charge.dispute.created" ? "dispute_opened" : "dispute_closed",
     });
 
-    // Qorm clawback / restore. Nothing on stream is reversed by either — this
+    // Points clawback / restore. Nothing on stream is reversed by either — this
     // only moves the wallet.
     if (paymentIntentId && event.type === "charge.dispute.created") {
       // Same non-USD guard as handleRefund: `dispute.amount` is the charge's
@@ -161,7 +161,7 @@ export function createPaymentEventHandlers(deps: { pool: Pool; stripe: () => Str
       // (status starts `warning_needs_response`) and the clawback above
       // already ran for it — an inquiry that closes without escalating ends
       // as `warning_closed`, never `won`, so it must restore too or the
-      // viewer loses the Qorm forever while we kept the money.
+      // viewer loses the points forever while we kept the money.
       await deps.credits.restoreClawback({
         clawbackRef: `stripe:dispute:${dispute.id}`, ref: `stripe:dispute-won:${dispute.id}`,
       });
@@ -171,7 +171,7 @@ export function createPaymentEventHandlers(deps: { pool: Pool; stripe: () => Str
   /** Recorded only — no buyer-facing notice. */
   async function handleInvoicePaymentFailed(event: Stripe.Event): Promise<void> {
     const inv = event.data.object as Stripe.Invoice;
-    // R1: Stripe.Invoice has no top-level `subscription` in this SDK (basil
+    // Stripe.Invoice has no top-level `subscription` in this SDK (basil
     // API) — the subscription id lives at parent.subscription_details.subscription,
     // same idiom as subRenewal.ts:17-44.
     const subscriptionId = idOf(

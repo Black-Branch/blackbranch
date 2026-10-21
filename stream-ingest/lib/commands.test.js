@@ -14,13 +14,22 @@ test('!dono answers with the install\'s support line, and only to !dono', () => 
   assert.equal(handleDonoCommand({ message: 'just chatting' }, line), null);
 });
 
-test('!dono line: money.supportLine wins; unset = this site\'s own tip page, never anyone else\'s links', () => {
+test('!dono line: supportLine wins; a provider on → the site\'s donate page; else site.donateUrl (https); else "not set up"', () => {
   const cfg = (o) => (k) => o[k] ?? null;
-  assert.equal(donoLine(cfg({ 'money.supportLine': '  Tips → example.tv  ', 'site.origin': 'https://site.example' })), 'Tips → example.tv');
-  assert.equal(donoLine(cfg({ 'site.origin': 'https://site.example/' })), 'support the stream → https://site.example/donate');
-  assert.match(donoLine(cfg({})), /^support the stream/);
+  const site = { 'site.origin': 'https://site.example/' };
+  assert.equal(donoLine(cfg({ 'money.supportLine': '  Tips → example.tv  ', ...site })), 'Tips → example.tv');
+  assert.equal(donoLine(cfg({ ...site, 'modules.stripe': true })), 'support the stream → https://site.example/donate');
+  assert.equal(donoLine(cfg({ ...site, 'modules.paypal': true, 'site.donateUrl': 'https://tips.example/casey' })), 'support the stream → https://site.example/donate', 'the site\'s own page beats an outside link');
+  assert.equal(donoLine(cfg({ 'modules.stripe': true })), 'support the stream on the site — tap Donate under the player');
+  assert.equal(donoLine(cfg({ ...site, 'site.donateUrl': ' https://tips.example/casey ' })), 'support the stream → https://tips.example/casey');
+  // No provider: never the site's own donate page, which would only say billing is not set up.
+  assert.equal(donoLine(cfg(site)), 'donations aren\'t set up here');
+  assert.equal(donoLine(cfg({ ...site, 'modules.stripe': false, 'modules.paypal': false })), 'donations aren\'t set up here');
+  for (const bad of ['http://tips.example/casey', 'javascript:alert(1)', 'not a url']) {
+    assert.equal(donoLine(cfg({ ...site, 'site.donateUrl': bad })), 'donations aren\'t set up here', `${bad} was posted`);
+  }
   // A fresh install's !dono must name no outside service at all.
-  for (const o of [{}, { 'site.origin': 'https://site.example' }]) {
+  for (const o of [{}, site, { ...site, 'modules.stripe': true }]) {
     assert.doesNotMatch(donoLine(cfg(o)), /patreon|ko-?fi|streamlabs/i);
   }
 });
@@ -59,10 +68,10 @@ test('mod commands are not handled in platform chat', async () => {
   }
 });
 
-// ── !rank / !karma answer for the ONE platform identity asked about (review round 5, PB1) ──────
-// The lookup used to be asked by bare name across the merged identity and printed the identity's
-// preferred name (the SITE name when one is linked): a Twitch `!rank gadget_tw` said "@CaseySite".
-// It now always names the asking platform; stream-api answers that one identity (its handle and
+// ── !rank / !karma answer for the ONE platform identity asked about ──────────────────────────
+// A lookup by bare name across the merged identity prints the identity's preferred name (the SITE
+// name when one is linked): a Twitch `!rank gadget_tw` would say "@CaseySite", revealing the link.
+// The lookup always names the asking platform; stream-api answers that one identity (its handle and
 // its own figures) unless every account on the person shows its links (stream-api profiles.js).
 test('!rank <name> asks for that name ON the platform the command came from', async () => {
   const asked = [];

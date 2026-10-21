@@ -1,9 +1,8 @@
-// Platform chat readers after a failed first settings load (external review, startup recovery).
+// Platform chat readers after a failed first settings load (startup recovery).
 //
-// index.js used to ignore what `instanceConfig.start()` returned and choose the platforms once.
-// When stream-api was briefly unreachable at boot, that choice was made from env + defaults: on an
-// install whose channels live only in the database it selected nothing, and when the settings
-// arrived seconds later nothing started the readers — no platform chat until a manual restart.
+// When stream-api is briefly unreachable at boot, a choice made once from env + defaults selects
+// nothing on an install whose channels live only in the database, and when the settings arrive
+// seconds later nothing would start the readers — no platform chat until a manual restart.
 // Here a real settings reader fails its first load and recovers; the starters are spies.
 //
 // Run: node --test lib/platformStarter.test.js
@@ -77,29 +76,41 @@ test('a failed first load, then recovery: the readers the settings name start, o
   } finally { config.stop(); }
 });
 
-test('a load that lands while the boot start is still running starts nothing twice', async () => {
+test('a load that lands while the boot start is still running never runs two copies of a reader', async () => {
   const { config, up } = reader();
   const calls = { kick: 0, streamplace: 0, twitch: 0, youtube: 0 };
+  let live = 0;
+  let maxLive = 0;
   let release;
   const gate = new Promise((r) => { release = r; });
   const starters = {
     twitch: async () => { calls.twitch += 1; return {}; },
     youtube: async () => { calls.youtube += 1; return {}; },
-    kick: async () => { calls.kick += 1; await gate; return { stop() {} }; },
+    kick: async () => {
+      calls.kick += 1; live += 1; maxLive = Math.max(maxLive, live);
+      await gate;
+      return { stop() { live -= 1; } };
+    },
     streamplace: async () => { calls.streamplace += 1; return { stop() {} }; },
   };
   try {
     const bootLoaded = await config.start();
     up();
     // PLATFORMS-style env choice that names kick at boot, so the boot pass is mid-start when the
-    // settings arrive.
+    // settings arrive — and the settings change kick's slug (unset at boot), so the second pass
+    // restarts it with the stored one: AFTER the first start finished, never beside it.
     const platforms = createPlatformStarter({ starters, choose: () => choosePlatforms('kick,streamplace', Object.keys(starters), (k) => config.get(k)), log: quiet });
     const boot = startPlatformsWhenLoaded({ platforms, config, bootLoaded, log: quiet });
     await config.load();
     release();
     await boot;
     await platforms.settled();
-    assert.deepEqual(calls, { kick: 1, streamplace: 1, twitch: 0, youtube: 0 });
+    assert.equal(maxLive, 1, 'two Kick readers ran at once');
+    assert.equal(live, 1, 'exactly one Kick reader is left running');
+    assert.deepEqual(calls, { kick: 2, streamplace: 2, twitch: 0, youtube: 0 }, 'one start at boot, one restart with the stored values');
+    await config.load();
+    await platforms.settled();
+    assert.deepEqual(calls, { kick: 2, streamplace: 2, twitch: 0, youtube: 0 }, 'an unchanged load starts nothing');
   } finally { config.stop(); }
 });
 
@@ -146,5 +157,5 @@ test('index.js starts the platforms through startPlatformsWhenLoaded with the bo
   assert.match(src, /main\(\)\.catch\([\s\S]*\}\);\s*$/, 'read to the end of index.js');
   assert.match(src, /const bootLoaded = await instanceConfig\.start\(\);/);
   assert.match(src, /await startPlatformsWhenLoaded\(\{ platforms, config: instanceConfig, bootLoaded \}\);/);
-  assert.doesNotMatch(src, /for \(const name of enabled\)/, 'the old one-shot start loop is gone');
+  assert.doesNotMatch(src, /for \(const name of enabled\)/, 'no one-shot start loop');
 });

@@ -1,7 +1,6 @@
-// Review round 5, F3 / L14: no donor or viewer NAME in a journal line on the money and identity
-// paths. A first donation printed "[API] New user: <name>", YouTube's alert lines printed
-// "from <name>", and an unrecognised gift banner was logged raw (it carries the gifter's name).
-// Ids, amounts and platforms identify an event well enough to reconcile it; a name is personal
+// No donor or viewer NAME in a journal line on the money and identity paths — not a
+// "[API] New user: <name>", not an alert line's "from <name>", not an unrecognised gift banner
+// logged raw (it carries the gifter's name). Ids, amounts and platforms identify an event well enough to reconcile it; a name is personal
 // data the journal keeps for months.
 //
 // A source scan: every console.log/warn/error/info/debug/trace call's ARGUMENTS in the files below, string literal
@@ -9,9 +8,9 @@
 // a person's name. Vacuity anchors: a minimum count of calls per file, and the scanner must reach
 // the file's last console call.
 //
-// Round 7: a name test that looks for NAME identifiers cannot see a raw dump. Kick's money line
-// printed `JSON.stringify(d).slice(0, 400)` — the subscriber, the gifter and every giftee — and
-// passed, because `d` is not called "username". So in the ingest adapters, lib/pipeline.js and
+// A name test that looks for NAME identifiers cannot see a raw dump: a money line printing
+// `JSON.stringify(d).slice(0, 400)` — the subscriber, the gifter and every giftee — passes, because
+// `d` is not called "username". So in the ingest adapters, lib/pipeline.js and
 // lib/alerts.js a console argument that serialises anything (`JSON.stringify(`, `String(`) or
 // hands over a whole payload (`${data}`, `, payload`) fails too. Log the event's id and
 // `payloadShape()` (stream-ingest lib/logShape.js: id + top-level keys) instead. A dump that is
@@ -36,16 +35,30 @@ const FILES = {
   'stream-ingest/lib/alerts.js': 3,
   'stream-ingest/lib/pipeline.js': 8,
 };
-// The raw-dump rule's scope (round 7): the ingest side, where a raw platform payload is in hand.
+// The raw-dump rule's scope: the ingest side, where a raw platform payload is in hand.
 const DUMP_SCOPE = (rel) => rel.startsWith('stream-ingest/platforms/')
-  || rel === 'stream-ingest/lib/pipeline.js' || rel === 'stream-ingest/lib/alerts.js';
-// Review round 6, L-1: Twitch's and Kick's alert lines still printed "from <name>" because the
-// list above named only YouTube. Every platform adapter is scanned now, found by listing the
-// folder, so a platform added later is covered without anyone remembering this file.
+  || rel.startsWith('stream-ingest/lib/') || rel === 'stream-api/money.js';
+// Every platform adapter is scanned, found by listing the folder, so a platform added later is
+// covered without anyone remembering this file.
 const PLATFORM_DIR = 'stream-ingest/platforms';
 const platformFiles = fs.readdirSync(path.join(ROOT, PLATFORM_DIR))
   .filter((f) => f.endsWith('.js') && !/\.test\./.test(f)).map((f) => `${PLATFORM_DIR}/${f}`);
 for (const f of platformFiles) if (!(f in FILES)) FILES[f] = 1;
+// The rest of stream-ingest's lib/ (every file, sub-folders included) and stream-api's money.js:
+// both hold payloads and viewers in hand. A file found by listing may have no console call at all
+// (floor 0); the end-of-file anchor below still proves the scan reached its last one.
+const LIB_DIR = 'stream-ingest/lib';
+function listJs(dir) {
+  return fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) => {
+    const rel = `${dir}/${e.name}`;
+    if (e.isDirectory()) return listJs(rel);
+    return e.name.endsWith('.js') && !/\.test\.|\.generated\./.test(e.name) ? [rel] : [];
+  });
+}
+const libFiles = listJs(LIB_DIR);
+for (const f of libFiles) if (!(f in FILES)) FILES[f] = 0;
+if (!('stream-api/money.js' in FILES)) FILES['stream-api/money.js'] = 10;
+if (!('stream-api/aggregates.js' in FILES)) FILES['stream-api/aggregates.js'] = 2;
 // `primary`: a YouTube banner's raw text, which starts with the gifter's name when the author is missing.
 const NAME_IDENT = /\b(username|userName|author|displayName|display_name|donorName|gifterName|name|primary)\b/;
 // A serialised value or a whole payload handed to the journal. Literal text is already gone from
@@ -131,7 +144,7 @@ test('the raw-dump rule itself: a serialised payload is caught, an id and the ke
   assert.equal(rawDumps('// log-names: allow — above\nconsole.log(JSON.stringify(t));').bad.length, 1, 'the line above does not count');
 });
 
-test('every platform adapter is in the scan (L-1: twitch.js and kick.js were left out)', () => {
+test('every platform adapter is in the scan', () => {
   for (const f of ['stream-ingest/platforms/twitch.js', 'stream-ingest/platforms/kick.js', 'stream-ingest/platforms/youtube.js', 'stream-ingest/platforms/streamplace.js']) {
     assert.ok(f in FILES, `${f} is not scanned`);
   }
@@ -144,6 +157,7 @@ for (const [rel, min] of Object.entries(FILES)) {
     const calls = consoleCalls(src);
     assert.ok(calls.length >= min, `${rel}: only ${calls.length} console calls found — the scan would be vacuous`);
     const last = src.lastIndexOf('console.');
+    assert.ok(last < 0 || calls.length > 0, `${rel}: the file names console but the scanner found no call`);
     assert.ok(last < 0 || calls[calls.length - 1].line === src.slice(0, last).split('\n').length,
       `${rel}: the scan stopped before the file's last console call`);
     // A value passed through the masker (stream-ingest lib/alerts.js maskBannerName) is not a name.
@@ -161,10 +175,14 @@ for (const rel of Object.keys(FILES).filter(DUMP_SCOPE)) {
   });
 }
 
-test('the raw-dump rule covers the ingest adapters, pipeline.js and alerts.js', () => {
+test('the raw-dump rule covers the ingest adapters, every file in stream-ingest/lib and money.js', () => {
   const scoped = Object.keys(FILES).filter(DUMP_SCOPE);
-  for (const f of [...platformFiles, 'stream-ingest/lib/pipeline.js', 'stream-ingest/lib/alerts.js']) {
+  for (const f of [...platformFiles, ...libFiles, 'stream-api/money.js']) {
     assert.ok(scoped.includes(f), `${f} is not in the raw-dump scope`);
   }
-  assert.equal(scoped.length, platformFiles.length + 2, `scope drifted: ${scoped.join(', ')}`);
+  assert.equal(scoped.length, platformFiles.length + libFiles.length + 1, `scope drifted: ${scoped.join(', ')}`);
+  // Vacuity: the lib listing reached the sub-folders and the files this rule was written for.
+  for (const f of ['stream-ingest/lib/twitchToken.js', 'stream-ingest/lib/bot/index.js', 'stream-ingest/lib/pipeline.js']) {
+    assert.ok(libFiles.includes(f), `${f} was not listed`);
+  }
 });

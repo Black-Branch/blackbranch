@@ -88,7 +88,7 @@ test("watch stops paying at the cap, and stops hoarding seconds there", () => {
 });
 
 test("every award is a non-negative integer", () => {
-  // creditCoins throws on a non-positive amount and a fractional Qorm is not a
+  // creditCoins throws on a non-positive amount and a fractional point is not a
   // thing. This is what keeps a rules change from reaching the wallet.
   const awards: number[] = [
     messageAward({ firstAwarded: false, lastAwardMs: null }, T0).points,

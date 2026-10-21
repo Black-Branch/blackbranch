@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 //
 // Pronouns live on the CANONICAL (stream.users) — the same hop the chat history
 // route makes (canonicalFromMatrixSql) — the style on site.users.
-// Accepted (review round 4, low): like /api/users/colors it answers for any guessed Matrix id, not
+// Accepted risk: like /api/users/colors it answers for any guessed Matrix id, not
 // only ids recently on screen; it returns only what chat already shows beside a site line, and it
 // is rate-limited with no bulk read.
 type Looks = Record<string, { s?: unknown; p?: string }>;

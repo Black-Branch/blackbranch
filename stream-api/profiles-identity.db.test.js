@@ -1,8 +1,8 @@
 // /user/lookup asked FOR ONE PLATFORM (`platform=…`) — what the !rank / !karma chat command asks —
-// against a REAL Postgres (review round 5, PB1). Before this, the command looked a name up across
-// the whole merged identity and answered with the identity's preferred name: on Twitch,
-// `!rank gadget_tw` for a person whose site account "CaseySite" is linked with show_links off said
-// "@CaseySite — …", publishing the link to everyone in that chat. Now, unless every account on the
+// against a REAL Postgres. Looking a name up across the whole merged identity and answering with
+// the identity's preferred name would publish a hidden link: on Twitch, `!rank gadget_tw` for a
+// person whose site account "CaseySite" is linked with show_links off would say "@CaseySite — …"
+// to everyone in that chat. So, unless every account on the
 // identity shows its links (noOptOutSql), the answer is the ONE platform identity asked about: its
 // handle on that platform and that identity's own figures, and a name from another platform (or the
 // site) is not found at all.

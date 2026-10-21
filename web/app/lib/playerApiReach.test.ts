@@ -40,7 +40,7 @@ test("a featured streamer's YouTube embed enables the JS API, channel and video 
 });
 
 test("the VOD replay embed enables the JS API", () => {
-  // Since task 8, the tail is no longer a literal here — it's built from the
+  // The tail is not a literal here — it's built from the
   // shared YT_EMBED_PARAMS constant (which carries enablejsapi=1; pinned by
   // the constant's own tests below), so a source scan can only see the
   // reference, not the token.
@@ -79,7 +79,7 @@ test("the stream.place embed carries no inert parameters", async () => {
   assert.doesNotMatch(src, /pictureInPictureEnabled/,
     "an inert query param is still being sent to the stream.place embed");
   // Not /spParams|muted/ — "muted" alone matches ANYWHERE in this large file
-  // (finding 9), including unrelated Twitch/YouTube mute params. Pin the
+  // including unrelated Twitch/YouTube mute params. Pin the
   // actual mechanism: the stream.place params object setting "muted".
   assert.match(src, /spParams\.set\("muted"/, "the mobile mute param must survive");
 });

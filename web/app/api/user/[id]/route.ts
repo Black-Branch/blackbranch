@@ -13,13 +13,13 @@ import { pluginProfileFields } from "@/app/lib/plugins/profile";
 
 // Public read — proxies stream-api /user/lookup so the web card shows the same profile as the
 // !rank / !karma chat command. Only the fields a card renders leave (publicProfile.ts): never the
-// exact support total, never what the owner plugin adds.
+// exact support total, never what a site plugin adds.
 //
-// WHAT THE CARD MAY SAY is one decision, profileView.ts (owner decision 2026-10-17): a person's
+// WHAT THE CARD MAY SAY is one decision, profileView.ts: a person's
 // cross-platform link — which site account a Twitch name is, which platforms they are on — is shown
 // only to the person, to moderators, and to everyone once the person switches on "show my linked
-// platforms" (site.users.show_links, v153). This route used to return the linked Matrix id, site
-// name and platform list for any canonical, to anyone, and called that deliberate; it is reversed.
+// platforms" (site.users.show_links, v153). This route never returns the linked Matrix id, site
+// name or platform list for a canonical to anyone else.
 //
 // The id asked about is one of:
 //   - a PUBLIC id (what every chat line carries — publicIdServer.ts): one person on one platform;
@@ -66,7 +66,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const siteKey = key.kind === "matrix" || (key.kind === "public" && isNativePlatform(key.platform ?? ""));
   const view = profileView({ isMod, isSelf, showLinks: owner?.show_links === true, siteKey });
 
-  // The stream profile. Failures no longer short-circuit the response: the
+  // The stream profile. Failures do not short-circuit the response: the
   // banner lookup must run regardless, so a bannered user whose stream
   // lookup fails (stream-api down, no record) still renders their banner.
   const fetchProfile = async (): Promise<Record<string, unknown> | null> => {

@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { INSTANCE_KEYS } from "../../lib/instanceSchema.generated.mjs";
-import { ADMIN_SECTIONS, SUBS, KEY_GROUPS, aiSubOf, keyGroupsFor, isAdminSection, guidesFor } from "./adminLayout.ts";
+import { ADMIN_SECTIONS, SUBS, KEY_GROUPS, aiSubOf, keyGroupsFor, isAdminSection, guidesFor, adminRail, adminSearch, adminItemFor, ADMIN_HOME } from "./adminLayout.ts";
 import { SETUP_GUIDES } from "../../lib/setup/setupGuideMap.ts";
 import { MODULES, SETUP_CORE } from "../../lib/instanceSchema.generated.mjs";
 
@@ -35,7 +35,7 @@ test("every key the Credentials page listed sits in exactly one card, and no car
 
 test("each admin section holds the number of keys the move table places in it", () => {
   const per = Object.fromEntries(ADMIN_SECTIONS.map((s) => [s.key, allGroups().filter((g) => g.section === s.key).flatMap((g) => g.keys).length]));
-  assert.deepEqual(per, { ai: 4, utility: 13, payments: 12, platforms: 18, site: 68, doctor: 0, updates: 0 });
+  assert.deepEqual(per, { ai: 4, utility: 16, payments: 15, platforms: 20, site: 69, doctor: 0, updates: 0 });
   // The Doctor and Updates sections hold checks and the box's files, not keys.
   assert.deepEqual(SUBS.doctor, []);
   assert.deepEqual(SUBS.updates, []);
@@ -53,7 +53,7 @@ test("each admin section holds the number of keys the move table places in it", 
   // + backups: target, address, region, the bucket's two keys, daily and weekly kept
   // + the legacy site id
   // + who may sign in from other servers: mode, allow list, deny list.
-  assert.equal(keyGroupsFor("site", "general").flatMap((g) => g.keys).length, 45, "the Site cards");
+  assert.equal(keyGroupsFor("site", "general").flatMap((g) => g.keys).length, 46, "the Site cards");
   // The federated sign-in policy is its own card, right after the Community server card.
   const titles = keyGroupsFor("site", "general").map((g) => g.title);
   assert.equal(titles[titles.indexOf("Community server") + 1], "Sign-in from other servers");
@@ -70,9 +70,14 @@ test("each admin section holds the number of keys the move table places in it", 
     INSTANCE_KEYS.filter((e) => e.key.startsWith("backup.")).map((e) => e.key).sort(), "every backup setting is on the Backups card");
   assert.deepEqual(INSTANCE_KEYS.filter((e) => e.surface === "setup").map((e) => e.key), ["setup.completedAt", "setup.state"],
     "the setup pages' own progress is never a card");
-  assert.deepEqual(keyGroupsFor("payments", "connections").find((g) => g.title === "Links")?.keys, ["money.subscribeUrl", "money.supportLine"]);
+  assert.deepEqual(keyGroupsFor("payments", "connections").find((g) => g.title === "Links")?.keys, ["money.subscribeUrl", "money.supportLine", "site.donateUrl"]);
+  // The beta's switches sit beside what they switch: speech with its key and voices, the
+  // subscription price with Stripe, the chatroom override with Kick.
+  assert.deepEqual(keyGroupsFor("utility", "tts").find((g) => g.title === "Voice")?.keys, ["tts.enabled", "elevenlabs.apiKey", "tts.voiceCasual", "tts.voiceLoud"]);
+  assert.ok(keyGroupsFor("payments", "connections").find((g) => g.title === "Stripe")?.keys.includes("stripe.supporterPriceId"));
+  assert.deepEqual(keyGroupsFor("platforms", "kick").flatMap((g) => g.keys).slice(-2), ["kick.chatroomId", "kick.channelId"]);
   assert.deepEqual(keyGroupsFor("site", "general").find((g) => g.title === "Legal")?.keys,
-    ["legal.operator", "legal.contactEmail", "legal.governingLaw", "legal.effectiveDate"]);
+    ["legal.operator", "legal.contactEmail", "legal.governingLaw", "legal.effectiveDate", "legal.liabilityCapUsd"]);
   const points = keyGroupsFor("site", "points").flatMap((g) => g.keys);
   assert.equal(points.length, 16);
   assert.deepEqual(INSTANCE_KEYS.filter((e) => e.module === "currency").map((e) => e.key).sort(), [...points].sort(),
@@ -132,4 +137,40 @@ test("ONE source — every setup list is a guide on exactly one tab, and every f
   }
   assert.deepEqual(guidesFor("platforms", "twitch"), ["core:twitch"]);
   assert.deepEqual(guidesFor("payments", "connections"), ["module:stripe", "module:paypal", "core:donations"]);
+});
+
+test("Site opens on the streamer's name: the Streamer card is the first one, its display name an editable row", () => {
+  const site = keyGroupsFor("site", "general");
+  assert.ok(site.length >= 5, "vacuity: the Site cards were not read");
+  assert.equal(site[0]!.title, "Streamer");
+  assert.equal(site[0]!.keys[0], "streamer.displayName");
+  // Editable here = not an install key (those are set where the site is built).
+  assert.equal(INSTANCE_KEYS.find((e) => e.key === "streamer.displayName")?.tier, "instance");
+});
+
+test("federation and sign-in from other servers are worded as two different things", () => {
+  const site = keyGroupsFor("site", "general");
+  const community = site.find((g) => g.title === "Community server");
+  const signin = site.find((g) => g.title === "Sign-in from other servers");
+  assert.ok(community?.keys.includes("matrix.federation") && signin?.keys.includes("auth.federatedSignin"), "vacuity: the two cards");
+  assert.match(community!.blurb ?? "", /exchange messages/);
+  assert.match(community!.blurb ?? "", /does not decide who may sign in here/);
+  assert.match(signin!.blurb ?? "", /^Who may sign in HERE/);
+  assert.match(signin!.blurb ?? "", /not federation/);
+});
+
+test("Utility → Overlays is a place of its own in the rail, found by searching for OBS words", () => {
+  const rail = adminRail();
+  assert.ok(rail.some((x) => x.id === "utility/overlays" && x.label === "Overlays"));
+  assert.ok(adminSearch(rail, "browser source").some((x) => x.id === "utility/overlays"));
+  assert.ok(adminSearch(rail, "support bar").some((x) => x.id === "utility/overlays"));
+});
+
+test("the panel opens on Site, not AI: the window's default place is the Site settings page", () => {
+  assert.equal(ADMIN_HOME, "site");
+  assert.equal(adminItemFor(adminRail(), ADMIN_HOME, undefined).id, "site/general");
+  const src = readFileSync(join(here, "AdminWindow.tsx"), "utf8");
+  assert.match(src, /section: sectionProp = ADMIN_HOME,/, "AdminWindow opened with no place uses ADMIN_HOME");
+  // Vacuity: the whole file was read (it ends with the component's closing lines).
+  assert.match(src, /<\/Window>\n {2}\);\n}\n$/);
 });

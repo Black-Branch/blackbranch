@@ -203,10 +203,10 @@ test("every registry key is guard-rendered by BOTH hosts (add a tab → add its 
 });
 
 test("hosts derive their row through partitionTabs, never by re-filtering SITE_TABS", () => {
-  // Both hosts used to carry the same four filters over SITE_TABS with one
-  // hand-spelled `k !== "vods" ||` availability clause each — two spellings of
-  // one rule, which had already drifted (the chat bar also required a picker
-  // callback, the dock did not). partitionTabs is the single spelling, and its
+  // Two hosts each carrying the same four filters over SITE_TABS with a
+  // hand-spelled `k !== "vods" ||` availability clause is two spellings of
+  // one rule, and they drift (one bar requiring a picker callback, the other
+  // not). partitionTabs is the single spelling, and its
   // TabReadiness argument is exhaustive over SiteTabKey, so a new tab cannot
   // be silently treated as always-available: the host stops compiling.
   for (const rel of ["app/components/BottomDock/index.tsx", "app/features/chat/ChatSidebar.tsx"]) {

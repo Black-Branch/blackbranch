@@ -4,7 +4,7 @@
 // none — so each entry is pinned to the thing it describes:
 //   • served by the site      → its page exists under app/overlay/<path>/page.tsx
 //   • served by stream-api    → a PUBLIC GET in route-surface.snapshot.json
-//   • a file on the rig       → listed by the install's owner plugin, and pinned there
+//   • a file on the rig       → listed by the install's site plugin, and pinned there
 //                               (app/(owner)/rigOverlays.test.ts on an install that has one)
 //
 // Run: node --test app/lib/overlayDirectory.test.ts
@@ -29,7 +29,7 @@ test("every source has a unique id, a name, one line on what it shows, and a siz
     ids.add(s.id);
     assert.ok(s.name.length > 0 && s.shows.length > 0 && s.size.length > 0, `${s.id}: incomplete`);
   }
-  assert.deepEqual([...ids].sort(), ["chat", "credit", "poll", "rig", "sticker"],
+  assert.deepEqual([...ids].sort(), ["alert", "bubble", "chat", "credit", "meter", "poll", "rig", "sticker", "support-bar"],
     "every source, by name — a deleted entry must fail here, not vanish");
   assert.ok(OVERLAY_SOURCES.every((s) => s.served !== "rig"), "a file on the streaming PC is an install's own: its plugin lists it");
 });
@@ -47,7 +47,9 @@ test("site-served sources point at pages that exist", () => {
 test("stream-api sources are PUBLIC GETs on the pinned route surface", () => {
   const surface = readFileSync(join(repo, "stream-api", "route-surface.snapshot.json"), "utf8");
   const api = OVERLAY_SOURCES.filter((s) => s.served === "stream-api");
-  assert.ok(api.length >= 2, "the poll and sticker overlays");
+  // The four money overlays are agent D's routes (contract 4): this stays red in a tree without
+  // them, by design — the directory must not name a source stream-api does not serve.
+  assert.ok(api.length >= 6, "the poll, sticker, alert, support-bar, meter and bubble overlays");
   for (const s of api) {
     assert.ok(surface.includes(`"GET ${s.path} [PUBLIC]"`), `${s.id}: GET ${s.path} is not a PUBLIC route`);
   }

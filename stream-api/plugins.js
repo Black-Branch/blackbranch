@@ -1,4 +1,4 @@
-// The ONE place stream-api reads this install's owner plugin.
+// The ONE place stream-api reads this install's site plugin.
 //
 // owner/ holds what is the owner's own and not part of the product. The public export drops the
 // folder, so a missing folder means "no plugin" — but a folder whose code throws fails the boot,

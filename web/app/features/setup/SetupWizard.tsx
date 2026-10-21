@@ -5,21 +5,24 @@
 // checks every value again; this file only draws the page and posts it. Controls follow
 // docs/DESIGN-STANDARD.md (24px, FIELD, Toggle).
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FIELD, Toggle } from "@/app/components/SettingsControls";
 import { deviceIdForSignIn } from "@/app/lib/deviceId";
 import type { SetupView } from "@/app/lib/setup/setupServer";
 import type { FormField } from "@/app/lib/setup/setupValidate";
-import type { SetupPage } from "@/app/lib/setup/setupPages";
+import type { SetupPage, SetupStepView } from "@/app/lib/setup/setupPages";
 import { previousStep } from "@/app/lib/setup/setupFlow";
+import { formatProblem } from "@/app/lib/setup/setupExtras";
 import SetupStepGuide from "@/app/components/SetupStepGuide";
 import { PRODUCT_MARK } from "@/app/lib/siteIcons";
 
 const card = "rounded-xl border border-edge bg-surface-1 p-4 space-y-3";
-const btn = "h-6 shrink-0 px-2.5 rounded-md border border-edge bg-surface-2 hover:bg-surface-3 text-xs font-medium text-body transition-colors outline-none focus-visible:ring-1 focus-visible:ring-edge-bright disabled:opacity-40";
-const primary = "h-6 shrink-0 px-3 rounded-md bg-strong text-on-accent text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-edge-bright disabled:opacity-40";
+// The buttons' backgrounds are OPAQUE: in a browser theme that makes pages see-through (Zen's
+// transparent theme) a translucent surface left Back, Skip and Continue invisible.
+const btn = "h-6 shrink-0 px-2.5 rounded-md border border-edge-strong bg-raised hover:bg-control text-xs font-medium text-body transition-colors outline-none focus-visible:ring-1 focus-visible:ring-edge-bright disabled:opacity-40";
+const primary = "h-6 shrink-0 px-3 rounded-md border border-strong bg-strong text-on-accent text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-edge-bright disabled:opacity-40";
 const input = `${FIELD} w-full min-w-0 px-2 text-xs placeholder:text-muted disabled:opacity-60`;
 const label = "block text-xs font-medium text-body";
 const hint = "text-2xs text-muted";
@@ -28,7 +31,7 @@ const TITLES: Record<string, string> = {
   admin: "Your account", recovery: "Recovery sheet", site: "Your site", points: "Points",
   modules: "Modules", community: "Community", finish: "Finish",
 };
-const titleOf = (step: string) => TITLES[step] ?? (step.startsWith("core:") ? "Platform setup" : "Module setup");
+const titleOf = (step: string) => TITLES[step] ?? (step.startsWith("core:") ? "Platforms and services" : "Module setup");
 
 type Json = Record<string, unknown>;
 
@@ -211,21 +214,140 @@ function Recovery({ save }: { save: (data: Json) => Promise<void> }) {
   );
 }
 
+/** Every time zone this browser knows: the time zone field's list (contract 9). Read once. */
+let zoneList: string[] | null = null;
+function browserZones(): string[] {
+  if (!zoneList) { try { zoneList = Intl.supportedValuesOf("timeZone"); } catch { zoneList = []; } }
+  return zoneList;
+}
+
+/** The browser's own time zone, the field's value while nothing is saved or typed. */
+function browserZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
+}
+
+// Both are the browser's: the server's HTML draws none (empty), the browser's first draw fills them.
+const NO_ZONES: string[] = [];
+const never = () => () => {};
+const useBrowserZones = () => useSyncExternalStore(never, browserZones, () => NO_ZONES);
+const useBrowserZone = () => useSyncExternalStore(never, browserZone, () => "");
+
+/** Time zone: a searchable list (free text cannot match the many ways people type one city).
+ *  `guess` is the browser's zone, shown while nothing is saved and nothing typed. Typing still
+ *  works: the server matches a city name or a lower-case spelling to its zone. */
+function TimeZoneInput({ f, value, guessed, onChange }: { f: FormField; value: string; guessed: boolean; onChange: (v: string) => void }) {
+  const zones = useBrowserZones();
+  return (
+    <>
+      <input id={`bb-${f.name}`} className={input} value={value} maxLength={f.max} list="bb-time-zones" autoComplete="off" spellCheck={false}
+        placeholder="Start typing a city — New York, Berlin…" onChange={(e) => onChange(e.target.value)} />
+      <datalist id="bb-time-zones">{zones.map((z) => <option key={z} value={z} />)}</datalist>
+      {guessed && <p className="text-2xs text-body">Filled in from this browser — change it if your stream runs on another zone&apos;s clock.</p>}
+      {!value && <p className="text-2xs text-body">Empty means UTC: backups and updates then run at the quiet hour in UTC.</p>}
+    </>
+  );
+}
+
+/** The five icon files the site serves (app/lib/setup/setupIcons.ts ICON_FILES) and their sizes. */
+const ICON_SIZES = [["icon.png", 512], ["icon-192.png", 192], ["icon-512.png", 512], ["icon-maskable-512.png", 512], ["apple-touch-icon.png", 180]] as const;
+
+/** Draw the picked image into one square PNG: the whole image fitted in (never cropped). A maskable
+ *  icon is cut to a circle by phones, so it sits inside the middle 80% on the page's own colour. */
+function drawIcon(img: HTMLImageElement, size: number, maskable: boolean): string {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  if (!g) throw new Error("this browser cannot draw images");
+  if (maskable) { g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--color-canvas").trim() || "black"; g.fillRect(0, 0, size, size); }
+  const box = maskable ? size * 0.8 : size;
+  const scale = Math.min(box / img.naturalWidth, box / img.naturalHeight);
+  const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+  return c.toDataURL("image/png");
+}
+
+/** "Your site" → the icon: pick a picture, and the site's icons are made from it (a streamer
+ *  has no server path to type). The files go to the server through its request folder; once it has
+ *  placed them, Finish applies them with the other details. */
+function SiteIcons({ data }: { data: Json }) {
+  const icons = (data.icons as { upload: boolean; staged: boolean } | undefined) ?? { upload: false, staged: false };
+  const [state, setState] = useState<"idle" | "sending" | "waiting" | "placed" | "unanswered">(icons.staged ? "placed" : "idle");
+  const [preview, setPreview] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
+  if (!icons.upload) {
+    return <p className={`${hint} border-t border-edge pt-3`}>Site icon: this install cannot take an upload. On the server, put the icon files in <code className="text-body">site-files/</code> and run <code className="text-body">blackbranch set SITE_ICON_SET /site-files</code>.</p>;
+  }
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    setErr(null); setState("sending");
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      await new Promise<void>((ok, bad) => { img.onload = () => ok(); img.onerror = () => bad(new Error("that file is not a picture this browser can open")); img.src = url; });
+      if (img.naturalWidth < 64 || img.naturalHeight < 64) throw new Error("the picture is too small — at least 512 × 512 looks sharp");
+      const files = Object.fromEntries(ICON_SIZES.map(([name, size]) => [name, drawIcon(img, size, name.includes("maskable"))]));
+      setPreview(files["icon-192.png"] ?? null);
+      const r = await call("/api/setup/step", { icons: files });
+      if (!r.ok) throw new Error(errorOf(r.json));
+      const asked = String(r.json.requestedAt);
+      setState("waiting");
+      const until = Date.now() + 60_000;
+      timer.current = setInterval(async () => {
+        const s = await call("/api/setup/step", { iconsAskedAt: asked });
+        const st = s.ok ? s.json.state : null;
+        if (st === "placed") { clearInterval(timer.current!); setState("placed"); }
+        else if (st === "refused") { clearInterval(timer.current!); setErr(`the server did not take the icon: ${String(s.json.message ?? "")}`); setState("idle"); }
+        else if (Date.now() > until) { clearInterval(timer.current!); setState("unanswered"); }
+      }, 2000);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "that did not work"); setState("idle");
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  };
+  return (
+    <div className="space-y-1 border-t border-edge pt-3">
+      <label className={label} htmlFor="bb-site-icon">Site icon <span className="text-muted font-normal"> · optional</span></label>
+      <div className="flex items-center gap-2">
+        {preview && <img src={preview} alt="" width={32} height={32} className="size-8 shrink-0 rounded-md" />}
+        <input id="bb-site-icon" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="min-w-0 text-xs text-body file:mr-2 file:h-6 file:rounded-md file:border file:border-edge-strong file:bg-raised file:px-2.5 file:text-xs file:text-body"
+          disabled={state === "sending" || state === "waiting"} onChange={(e) => void pick(e.target.files?.[0])} />
+      </div>
+      <p className={hint}>A square picture works best (at least 512 × 512). It becomes the browser tab icon and the icon on a phone&apos;s home screen. Empty: the product&apos;s own icon.</p>
+      {state === "sending" && <p className={hint}>Making the icons…</p>}
+      {state === "waiting" && <p className={hint}>Handing them to the server…</p>}
+      {state === "placed" && <p className="text-xs text-body">✓ Your icon is on the server; it shows once you finish setting up.</p>}
+      {state === "unanswered" && <p className="text-xs text-body">The server did not take the icon — this release&apos;s server may not accept uploads yet. You can carry on; on the server, put the icon files in <code>site-files/</code> and run <code>blackbranch set SITE_ICON_SET /site-files</code>.</p>}
+      <Problem text={err} />
+    </div>
+  );
+}
+
 function FieldsForm({ title, intro, fields, values, back, onBack, save, footer }: {
   title: string; intro: React.ReactNode; fields: FormField[]; values: Record<string, string>;
   back: boolean; onBack: () => void; save: (data: Json) => Promise<void>; footer?: React.ReactNode;
 }) {
   const [v, setV] = useState<Record<string, string>>(values);
   const [busy, setBusy] = useState(false);
+  // The time zone: nothing saved and nothing typed → the browser's own (sent as typed when saved).
+  const guess = useBrowserZone();
+  const [tzTyped, setTzTyped] = useState(false);
+  const tzGuessed = !tzTyped && !v.SITE_TIME_ZONE && !!guess;
+  const shown = tzGuessed ? { ...v, SITE_TIME_ZONE: guess } : v;
   return (
-    <form className={card} onSubmit={async (e) => { e.preventDefault(); setBusy(true); await save(v); setBusy(false); }}>
+    <form className={card} onSubmit={async (e) => { e.preventDefault(); setBusy(true); await save(shown); setBusy(false); }}>
       <h2 className="text-sm font-semibold text-body">{title}</h2>
       <div className="text-sm text-secondary">{intro}</div>
       {fields.map((f) => (
         <div key={f.name} className="space-y-1">
           <label className={label} htmlFor={`bb-${f.name}`}>{f.label}{f.required ? "" : <span className="text-muted font-normal"> · optional</span>}</label>
-          <input id={`bb-${f.name}`} className={input} value={v[f.name] ?? ""} maxLength={f.max} placeholder={f.placeholder}
-            required={f.required} onChange={(e) => setV({ ...v, [f.name]: e.target.value })} />
+          {f.name === "SITE_TIME_ZONE"
+            ? <TimeZoneInput f={f} value={shown[f.name] ?? ""} guessed={tzGuessed} onChange={(x) => { setTzTyped(true); setV((cur) => ({ ...cur, [f.name]: x })); }} />
+            : <input id={`bb-${f.name}`} className={input} value={v[f.name] ?? ""} maxLength={f.max} placeholder={f.placeholder}
+                required={f.required} onChange={(e) => setV({ ...v, [f.name]: e.target.value })} />}
           <p className={hint}>{f.description}</p>
         </div>
       ))}
@@ -236,16 +358,21 @@ function FieldsForm({ title, intro, fields, values, back, onBack, save, footer }
 }
 
 function Modules({ data, back, onBack, save }: { data: Json; back: boolean; onBack: () => void; save: (d: Json) => Promise<void> }) {
-  const mods = (data.modules as { id: string; label: string; description: string; on: boolean; hasSetup: boolean }[]) ?? [];
+  const mods = (data.modules as { id: string; label: string; description: string; on: boolean; hasSetup: boolean; note?: string }[]) ?? [];
   const later = (data.later as { id: string; label: string; description: string }[]) ?? [];
   const core = (data.core as { id: string; label: string; description: string; chosen: boolean }[]) ?? [];
   const [on, setOn] = useState<Record<string, boolean>>(Object.fromEntries(mods.map((m) => [m.id, m.on])));
   const [chosen, setChosen] = useState<Record<string, boolean>>(Object.fromEntries(core.map((c) => [c.id, c.chosen])));
+  const [donateUrl, setDonateUrl] = useState(typeof data.donateUrl === "string" ? data.donateUrl : "");
+  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   return (
     <form className={card} onSubmit={async (e) => {
-      e.preventDefault(); setBusy(true);
-      await save({ modules: on, core: core.filter((c) => chosen[c.id]).map((c) => c.id) });
+      e.preventDefault(); setErr(null);
+      const problem = formatProblem("site.donateUrl", donateUrl);
+      if (problem) { setErr(`Donate link: ${problem}`); return; }
+      setBusy(true);
+      await save({ modules: on, core: core.filter((c) => chosen[c.id]).map((c) => c.id), donateUrl: donateUrl.trim() });
       setBusy(false);
     }}>
       <h2 className="text-sm font-semibold text-body">Choose what your site runs</h2>
@@ -257,13 +384,20 @@ function Modules({ data, back, onBack, save }: { data: Json; back: boolean; onBa
           <div className="min-w-0">
             <p className="text-xs font-medium text-body">{m.label}</p>
             <p className={hint}>{m.description}</p>
+            {m.note && on[m.id] && <p className="text-2xs text-body">{m.note}</p>}
           </div>
         </div>
       ))}
+      <div className="space-y-1 rounded-md border border-edge p-2">
+        <label className={label} htmlFor="bb-donate-url">Donate link <span className="text-muted font-normal"> · optional</span></label>
+        <input id="bb-donate-url" className={input} value={donateUrl} maxLength={512} spellCheck={false} autoComplete="off"
+          placeholder="https://ko-fi.com/yourname" onChange={(e) => setDonateUrl(e.target.value)} />
+        <p className={hint}>No card or PayPal payments here? A link to your Ko-fi, PayPal.me or similar page gives the Donate button and the !dono command somewhere to go. With a payment provider on, they use this site&apos;s own donate page instead.</p>
+      </div>
       {core.length > 0 && (
         <div className="space-y-2 border-t border-edge pt-3">
           <p className="text-xs font-medium text-body">Where you stream, and other services</p>
-          <p className={hint}>Each one you tick gets its own page next, with what to paste where. A platform is read as soon as its channel is set; untick it to leave it out of setup (the Admin Panel still has it).</p>
+          <p className={hint}>Each one you tick gets its own short page next, with what to paste where. Untick it to leave it out of setup — the Admin Panel still has it.</p>
           {core.map((c) => (
             <div key={c.id} className="flex items-start gap-3 rounded-md border border-edge p-2">
               <Toggle on={!!chosen[c.id]} onToggle={() => setChosen({ ...chosen, [c.id]: !chosen[c.id] })} label={c.label} />
@@ -281,6 +415,7 @@ function Modules({ data, back, onBack, save }: { data: Json; back: boolean; onBa
           {later.map((c) => <p key={c.id} className={hint}><span className="text-body">{c.label}:</span> {c.description} Until then they are set in the Admin Panel.</p>)}
         </div>
       )}
+      <Problem text={err} />
       <Nav back={back} onBack={onBack} busy={busy} />
     </form>
   );
@@ -293,7 +428,7 @@ const PAYMENT_KEY_STEP: Record<string, { provider: string; step: string }> = {
 };
 
 /** Before the live keys: what a paying viewer can see about the operator. A warning, never a gate —
- *  no checkbox, no "checked" value, nothing saved (k, 2026-10-19). The words are the product form
+ *  no checkbox, no "checked" value, nothing saved. The words are the product form
  *  of the docs page "Protect your personal name and home address"; the wizard links no docs
  *  pages, so this does not either. */
 function PaymentIdentityWarning({ provider }: { provider: string }) {
@@ -318,28 +453,70 @@ function PaymentIdentityWarning({ provider }: { provider: string }) {
   );
 }
 
+type Field = SetupStepView["fields"][number];
+
+/** One value on a setup page: its control, what it is, and its own Check — the value's shape
+ *  first, then (when the step has one) the provider's live test of what is saved. */
+function FieldRow({ f, value, isSet, onChange, check, result }: {
+  f: Field; value: string; isSet: boolean; onChange: (v: string) => void; check: () => void; result: string | undefined;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className={label} htmlFor={`bb-${f.key}`}>{f.label}</label>
+      {f.kind === "bool" ? (
+        <div className="flex items-center gap-2">
+          <Toggle on={value === "true"} onToggle={() => onChange(value === "true" ? "false" : "true")} label={f.label} />
+          <span className="text-xs text-body">{value === "true" ? "On" : "Off"}</span>
+        </div>
+      ) : f.values?.length ? (
+        <select id={`bb-${f.key}`} className={input} value={value} onChange={(e) => onChange(e.target.value)}>
+          <option value="">—</option>
+          {f.values.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+      ) : (
+        <div className="flex gap-2">
+          <input id={`bb-${f.key}`} className={input} type={f.secret ? "password" : "text"} autoComplete="off" spellCheck={false}
+            placeholder={f.secret && isSet ? "saved — type to replace" : ""} value={value} onChange={(e) => onChange(e.target.value)} />
+          <button type="button" className={btn} onClick={check} aria-label={`Check ${f.label}`}>Check</button>
+        </div>
+      )}
+      <p className={hint}>{f.description}</p>
+      {result && <p className="text-2xs text-body" aria-live="polite">{result}</p>}
+    </div>
+  );
+}
+
 function ModulePage({ stepId, data, back, onBack, save }: { stepId: string; data: Json; back: boolean; onBack: () => void; save: (d: Json) => Promise<void> }) {
   const page = data.page as SetupPage | null;
   const isSet = (data.isSet as Record<string, boolean>) ?? {};
   const [values, setValues] = useState<Record<string, string>>((data.values as Record<string, string>) ?? {});
   const [skipped, setSkipped] = useState<string[]>(((data.skipped as string[]) ?? []).map((s) => s.split(":")[1] ?? ""));
-  const [tests, setTests] = useState<Record<string, string>>({});
+  const [checks, setChecks] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (!page) return <section className={card}><p className={hint}>This module has no setup page.</p><Nav back={back} onBack={onBack} busy={false} /></section>;
   const payment = PAYMENT_KEY_STEP[stepId];
-  const test = async (key: string) => {
-    setTests({ ...tests, [key]: "testing…" });
-    // The test reads what is stored, so the fields are saved first (without moving on).
+  const say = (key: string, words: string) => setChecks((c) => ({ ...c, [key]: words }));
+  const check = async (s: SetupStepView, key: string) => {
+    const typed = (values[key] ?? "").trim();
+    const problem = formatProblem(key, typed);
+    if (problem) { say(key, `✗ ${problem}`); return; }
+    if (!s.test) { say(key, typed ? "✓ looks right" : "nothing to check yet — paste a value"); return; }
+    if (!typed && !isSet[key] && !s.fields.some((f) => isSet[f.key] || (values[f.key] ?? "").trim())) { say(key, "nothing to check yet — paste a value"); return; }
+    say(key, "checking…");
+    // The live test reads what is stored, so the page is saved first (without moving on).
     const saved = await call("/api/setup/step", { step: stepId, data: { values, skipped }, stay: true });
-    if (!saved.ok) { setTests({ ...tests, [key]: errorOf(saved.json) }); return; }
-    const r = await call("/api/setup/test", { key });
+    if (!saved.ok) { say(key, `✗ ${errorOf(saved.json)}`); return; }
+    const r = await call("/api/setup/test", { key: s.test });
     const results = (r.json.results as { package: string; ok: boolean; detail: string }[] | undefined) ?? [];
-    setTests({ ...tests, [key]: r.ok ? results.map((x) => `${x.ok ? "✓" : "✗"} ${x.detail}`).join(" · ") || "no result" : errorOf(r.json) });
+    say(key, r.ok ? results.map((x) => `${x.ok ? "✓" : "✗"} ${x.detail}`).join(" · ") || "no result" : `✗ ${errorOf(r.json)}`);
   };
   return (
     <form className="space-y-3" onSubmit={async (e) => {
       e.preventDefault(); setErr(null);
+      const fields = page.steps.flatMap((s) => s.fields);
+      const bad = fields.find((f) => formatProblem(f.key, values[f.key] ?? ""));
+      if (bad) { setErr(`${bad.label}: ${formatProblem(bad.key, values[bad.key] ?? "")}`); return; }
       const missing = page.steps.filter((s) => s.need === "required" && !skipped.includes(s.id) && s.fields.some((f) => !isSet[f.key] && !(values[f.key] ?? "").trim()));
       if (missing.length) { setErr(`fill "${missing[0]!.title}", or tick "skip for now"`); return; }
       setBusy(true); await save({ values, skipped }); setBusy(false);
@@ -354,24 +531,10 @@ function ModulePage({ stepId, data, back, onBack, save }: { stepId: string; data
         <section className={card}>
           <SetupStepGuide step={s} />
           {s.fields.map((f) => (
-            <div key={f.key} className="space-y-1">
-              <label className={label} htmlFor={`bb-${f.key}`}>{f.label}</label>
-              {f.values?.length ? (
-                <select id={`bb-${f.key}`} className={input} value={values[f.key] ?? ""} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}>
-                  <option value="">—</option>
-                  {f.values.map((v) => <option key={v} value={v}>{v}</option>)}
-                </select>
-              ) : (
-                <input id={`bb-${f.key}`} className={input} type={f.secret ? "password" : "text"} autoComplete="off"
-                  placeholder={f.secret && isSet[f.key] ? "saved — type to replace" : ""}
-                  value={values[f.key] ?? ""} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} />
-              )}
-              <p className={hint}>{f.description}</p>
-            </div>
+            <FieldRow key={f.key} f={f} value={values[f.key] ?? ""} isSet={!!isSet[f.key]} result={checks[f.key]}
+              onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} check={() => void check(s, f.key)} />
           ))}
           <div className="flex flex-wrap items-center gap-3">
-            {s.test && <button type="button" className={btn} onClick={() => void test(s.test!)}>Test</button>}
-            {s.test && tests[s.test] && <span className="text-2xs text-secondary">{tests[s.test]}</span>}
             <label className="ml-auto flex items-center gap-1.5 text-2xs text-muted">
               <input type="checkbox" checked={skipped.includes(s.id)} onChange={(e) => setSkipped(e.target.checked ? [...skipped, s.id] : skipped.filter((x) => x !== s.id))} />
               skip for now (stays on the Admin Panel&apos;s list)
@@ -397,6 +560,7 @@ function Community({ data, back, onBack, save }: { data: Json; back: boolean; on
   const [registration, setRegistration] = useState<string | null>(typeof data.registration === "string" ? data.registration : null);
   const [rooms, setRooms] = useState<{ hub: string | null; general: string | null }>({ hub: (data.hub as string) ?? null, general: (data.general as string) ?? null });
   const [state, setState] = useState<"idle" | "working" | "done">(data.hub && data.general ? "done" : "idle");
+  const [made, setMade] = useState<string>(typeof data.made === "string" ? data.made : "");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -411,7 +575,9 @@ function Community({ data, back, onBack, save }: { data: Json; back: boolean; on
       if (!s.ok) return;
       const result = s.json.result as { ok: boolean; at: string; message: string } | null;
       if (s.json.hub && s.json.general && (!result || Date.parse(result.at) >= Date.parse(asked))) {
-        clearInterval(timer.current!); setRooms({ hub: s.json.hub as string, general: s.json.general as string }); setState("done");
+        clearInterval(timer.current!); setRooms({ hub: s.json.hub as string, general: s.json.general as string });
+        if (typeof s.json.made === "string") setMade(s.json.made);
+        setState("done");
       } else if (result && Date.parse(result.at) >= Date.parse(asked) && !result.ok) {
         clearInterval(timer.current!); setErr(`the server could not make the community: ${result.message}`); setState("idle");
       }
@@ -443,10 +609,10 @@ function Community({ data, back, onBack, save }: { data: Json; back: boolean; on
         <p className={hint}>Sign-up stays closed until setup is finished, then follows this. You can change it later in the Admin Panel.</p>
       </fieldset>
       {state === "done" ? (
-        <p className="text-xs text-body">✓ Community made — the space and #general exist, and your account is in both.</p>
+        <p className="text-xs text-body">✓ {made || "Made: your community's space and #general. They belong to your account, and you are in each."}</p>
       ) : (
         <button type="button" className={btn} onClick={() => void make()} disabled={state === "working" || data.hostRequests === false || !registration}>
-          {state === "working" ? "Making the community… (up to a minute)" : "Make the community"}
+          {state === "working" ? "Making the community… (usually under half a minute)" : "Make the community"}
         </button>
       )}
       {data.hostRequests === false && <p className={hint}>This install cannot ask its server for this; run <code className="text-body">blackbranch matrix bootstrap</code> there.</p>}
@@ -652,7 +818,10 @@ function Finish({ data, back, onBack, siteName }: { data: Json; back: boolean; o
         <select id="bb-quiet" className={`${FIELD} px-2 text-xs`} value={quiet} onChange={(e) => setQuiet(Number(e.target.value))}>
           {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}
         </select>
-        <p className={hint}>When backups and security updates run each day, in your site&apos;s time zone — pick an hour you are never live.</p>
+        <p className={hint}>
+          When backups and security updates run each day — pick an hour you are never live. The hour is in{" "}
+          <span className="text-body">{typeof data.timeZone === "string" && data.timeZone ? data.timeZone : "(UTC) — no time zone was set on Your site"}</span>.
+        </p>
       </div>
       <label className="flex items-start gap-2 text-xs text-body">
         <input type="checkbox" className="mt-0.5" checked={reports} onChange={(e) => setReports(e.target.checked)} />
@@ -713,7 +882,10 @@ function Wizard({ view, siteName: builtName }: { view: Extract<SetupView, { phas
   else if (step === "site") {
     body = <FieldsForm title="Your site" back={back} onBack={onBack} save={save} values={values} fields={(data.fields as FormField[]) ?? []}
       intro={<>What people see as your site&apos;s name and details. The legal details fill your Terms and Privacy pages. Your site is built with these when you finish.</>}
-      footer={<p className={`${hint} border-t border-edge pt-3`}>The site&apos;s address ({String(data.domain ?? "")}) and the community&apos;s server name ({String(data.serverName ?? "")}) are permanent: they cannot be changed later. Everything on this page can.</p>} />;
+      footer={<>
+        <SiteIcons data={data} />
+        <p className={`${hint} border-t border-edge pt-3`}>The site&apos;s address ({String(data.domain ?? "")}) and the community&apos;s server name ({String(data.serverName ?? "")}) are permanent: they cannot be changed later. Everything on this page can.</p>
+      </>} />;
   } else if (step === "points") {
     body = <FieldsForm title="Points" back={back} onBack={onBack} save={save} values={values} fields={(data.fields as FormField[]) ?? []}
       intro={<>Your community earns points for taking part. Name them — leave a field empty for the built-in word.</>} />;

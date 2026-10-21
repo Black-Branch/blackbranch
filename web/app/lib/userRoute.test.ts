@@ -4,8 +4,8 @@
 //
 // Run: node --test app/lib/userRoute.test.ts
 //
-// The regression the first two pin: the site-identity enrichment used to sit in the SAME try/catch
-// as the stream-api lookup, so a throw on it fell through to `{ found: false }` and blanked a real
+// What the first two pin: if the site-identity enrichment sat in the SAME try/catch as the
+// stream-api lookup, a throw on it would fall through to `{ found: false }` and blank a real
 // profile. The payload is computed first and the enrichment can only ADD.
 
 import { test } from "node:test";

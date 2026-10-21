@@ -1,6 +1,6 @@
 // Source scan: matrix-discover's answer comes ONLY from discoverIssuer (federatedSignIn.ts), which
 // runs the openid-configuration fallback through parseAuthMetadata too — tested there with a
-// `javascript:` endpoint. The route used to return the fallback document's endpoints unvalidated.
+// `javascript:` endpoint. The route never returns the fallback document's endpoints unvalidated.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

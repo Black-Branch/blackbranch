@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { encToken, decToken } from "./tokenCrypto.ts";
 
 // Platform OAuth tokens and Matrix refresh tokens are stored through encToken.
-// With no key it used to hand the plaintext straight back, in production too —
-// a deployment that forgot TOKEN_ENC_KEY (or mistyped it) stored every token
-// readable, with one console line nobody was watching. stream-api refuses to
+// With no key, handing the plaintext straight back, in production too, would
+// mean a deployment that forgot TOKEN_ENC_KEY (or mistyped it) stores every token
+// readable, with one console line nobody is watching. stream-api refuses to
 // start without its secret; this is the same rule for the same class of mistake.
 
 const KEY = "ab".repeat(32);

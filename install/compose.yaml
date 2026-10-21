@@ -100,6 +100,9 @@ services:
   stream-api:
     <<: *app
     image: blackbranch/stream-api:${BB_RELEASE:-local}
+    # Docker's default 10 s kills a draining service mid-drain: stream-api drains for up to 30 s
+    # (SHUTDOWN_GRACE_MS) and says so in its log if that runs out; 40 s leaves room for the log.
+    stop_grace_period: 40s
     build: { context: "${BB_RELEASE_DIR:-./release}", dockerfile: install/Dockerfile, target: stream-api }
     environment:
       STREAM_API_HOST: 0.0.0.0
@@ -135,20 +138,41 @@ services:
     <<: *app
     image: blackbranch/stream-ingest:${BB_RELEASE:-local}
     build: { context: "${BB_RELEASE_DIR:-./release}", dockerfile: install/Dockerfile, target: stream-ingest }
+    stop_grace_period: 40s
     # No PLATFORMS: unset = read no platform until the setup pages switch one on.
     environment:
       STREAM_API_URL: http://stream-api:3001
+      # The reader-state endpoint (lib/health.js) binds to localhost by default; inside the bundle the
+      # website reads it across the private network, so it listens on the container's interface here.
+      INGEST_HEALTH_BIND: 0.0.0.0
       STREAM_API_SECRET: ${STREAM_API_SECRET:?}
       SITE_NAME: ${SITE_NAME:?}
       SITE_ORIGIN: ${SITE_ORIGIN:?}
+      # Its readers' state: GET :3010/health (stream-ingest's default port; the bind above), on the
+      # bundle network only — nothing publishes the port. The Stream tab, the doctor and the health
+      # check below read it.
     depends_on:
       stream-api: { condition: service_healthy }
+    # Healthy = every platform the settings switch on has a running reader (or one starting for
+    # under two minutes). The image has no curl: node asks. A reader that failed makes this
+    # "unhealthy" — `blackbranch status` says so and the doctor's "Chat readers started" row names
+    # it — but the service keeps running and nothing waits on it: the readers depend on platforms
+    # outside the box, so neither `up` nor an update stops for them (blackbranch wait_healthy).
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3010/health').then(r=>r.json()).then(j=>process.exit(j.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 150s
 
   # The site: the same image on every install (a release: by digest, pulled; a checkout: built here).
   web:
     <<: *app
     image: blackbranch/web:${BB_RELEASE:-local}
     build: { context: "${BB_RELEASE_DIR:-./release}", dockerfile: install/Dockerfile, target: web }
+    # The site ends a waiting request within 10 s of the stop signal; 40 s covers the rest of its drain.
+    # (After `build`: the release tool replaces web's image and build lines as a pair.)
+    stop_grace_period: 40s
     environment:
       <<: *install-values
       NODE_ENV: production
@@ -158,6 +182,8 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:?}
       TOKEN_ENC_KEY: ${TOKEN_ENC_KEY:?}
       STREAM_API_URL: http://stream-api:3001
+      # The chat readers' state for the Stream tab (stream-ingest's GET /health).
+      STREAM_INGEST_URL: http://stream-ingest:3010
       # Every request reaches the site from caddy, which SETS CF-Connecting-IP to the visitor's
       # address (direct: the connecting address; tunnel: Cloudflare's header, believed from
       # cloudflared alone): the site believes that header from caddy's fixed address only, and keys

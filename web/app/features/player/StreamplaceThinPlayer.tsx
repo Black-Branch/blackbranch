@@ -600,10 +600,10 @@ export default function StreamplaceThinPlayer({
     let recoveredOnce = false;
     let playedOnce = false;
     const url = hlsPlaylistUrl(channel);
-    // A fatal HLS error used to call onFallback(), which is wired to the viewer's
-    // PERSISTED player preference — so one blip didn't just demote the session,
-    // it rewrote their setting and they never came back. Now it stops here and
-    // the viewer chooses. See NO AUTOMATIC DEMOTION at the top of this file.
+    // A fatal HLS error does not call onFallback(), which is wired to the viewer's
+    // PERSISTED player preference — one blip would not just demote the session,
+    // it would rewrite their setting and they would never come back. It stops here
+    // and the viewer chooses. See NO AUTOMATIC DEMOTION at the top of this file.
     // Same rule as the WebRTC path: a fatal hls.js error does not necessarily mean
     // the viewer's picture stopped (a variant can fail while the buffer plays on),
     // so never paint the error panel over advancing frames — hold and re-check.
@@ -701,7 +701,7 @@ export default function StreamplaceThinPlayer({
     };
     // hls.js cannot fail silently here: a rejected import (a stale tab across a
     // deploy — the chunk hash 404s) or a manifest that never yields `playing`
-    // used to leave "Connecting…" up forever. Same window as the WebRTC watchdog;
+    // would otherwise leave "Connecting…" up forever. Same window as the WebRTC watchdog;
     // giveUp() still defers to advancing frames.
     start().catch(() => { if (!cancelled) giveUp(); });
     const watchdog = setTimeout(() => {
@@ -738,7 +738,7 @@ export default function StreamplaceThinPlayer({
     try {
       ms.metadata = new MediaMetadata({
         title: `${siteName()} — Live`,
-        artist: "stream.place",
+        artist: "Streamplace",
         artwork: [{ src: siteIcon("icon.png"), sizes: "512x512", type: "image/png" }],
       });
       ms.setActionHandler("play", tryPlay);
@@ -766,7 +766,7 @@ export default function StreamplaceThinPlayer({
   // jitter so "is the audio crackle the network or the source?" is answerable.
   // Gated on showStats so there's zero overhead unless a viewer opens it, and on
   // WebRTC mode like the panel and its toggle (getStats needs the peer
-  // connection; the poll used to outlive a switch to HLS).
+  // connection; the poll must not outlive a switch to HLS).
   useEffect(() => {
     if (status !== "playing" || !showStats || mode !== "webrtc") return;
     let cancelled = false;
@@ -1000,8 +1000,8 @@ export default function StreamplaceThinPlayer({
       )}
 
       {/* Couldn't establish playback. Replaces the automatic demotion: same three
-          escapes the ladder used to take on the viewer's behalf, now offered as
-          a choice. Copy names the actual failure rather than claiming the stream
+          escapes an automatic ladder would take on the viewer's behalf, offered
+          as a choice. Copy names the actual failure rather than claiming the stream
           ended — the viewer can see chat is still moving. */}
       {status === "failed" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-scrim-heavy px-4 text-center">
@@ -1099,8 +1099,6 @@ export default function StreamplaceThinPlayer({
             </span>
           </>
         )}
-        <span className="text-muted">·</span>
-        <span className="text-secondary font-medium">beta</span>
       </div>
 
       {/* Control bar — fades with the auto-hide timer (pointer/touch reveal).
@@ -1247,7 +1245,7 @@ export default function StreamplaceThinPlayer({
           <button
             type="button"
             onClick={onFallback}
-            title="Switch back to the stream.place embed"
+            title="Switch back to the Streamplace embed"
             className="px-2 h-8 rounded text-2xs font-semibold text-body-dim hover:text-strong hover:bg-surface-3 transition-colors"
           >
             Embed

@@ -352,7 +352,8 @@ const INSTANCE_KEYS = [
       "SITE_TIME_ZONE"
     ],
     "packages": [
-      "web"
+      "web",
+      "stream-api"
     ],
     "label": "Time zone",
     "description": "The time zone the site runs on, as a name like Europe/Berlin — the quiet hour and daily jobs use it. Unset = UTC."
@@ -375,6 +376,47 @@ const INSTANCE_KEYS = [
     ],
     "label": "Data since",
     "description": "The first day this site's history counts from (YYYY-MM-DD), e.g. the day it opened. Unset = no lower bound."
+  },
+  {
+    "key": "site.donateUrl",
+    "kind": "string",
+    "maxLength": 512,
+    "default": null,
+    "scope": "public",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "DONATE_URL"
+    ],
+    "packages": [
+      "web",
+      "stream-ingest"
+    ],
+    "label": "Donate link",
+    "description": "Where the Donate button and the !dono command send people when no payment provider is set up here (a Ko-fi, PayPal.me or similar https address). Unset = the site's own donate page when a provider is on; otherwise the button is hidden and the command answers that donations are not set up here."
+  },
+  {
+    "key": "legal.liabilityCapUsd",
+    "kind": "number",
+    "integer": true,
+    "min": 0,
+    "max": 100000,
+    "default": 50,
+    "scope": "public",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "LEGAL_LIABILITY_CAP_USD"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Liability cap (USD)",
+    "description": "The amount the legal page names as the most this site is liable for. Shown in US dollars until a currency setting exists."
   },
   {
     "key": "updates.quietHour",
@@ -908,7 +950,7 @@ const INSTANCE_KEYS = [
     "scope": "public",
     "module": "core",
     "secret": false,
-    "reload": "restart",
+    "reload": "live",
     "tier": "instance",
     "env": [
       "TWITCH_CHANNEL"
@@ -947,7 +989,7 @@ const INSTANCE_KEYS = [
     "scope": "public",
     "module": "core",
     "secret": false,
-    "reload": "restart",
+    "reload": "live",
     "tier": "instance",
     "env": [
       "YOUTUBE_CHANNEL_ID"
@@ -984,7 +1026,7 @@ const INSTANCE_KEYS = [
     "scope": "public",
     "module": "core",
     "secret": false,
-    "reload": "restart",
+    "reload": "live",
     "tier": "instance",
     "env": [
       "KICK_CHANNEL_SLUG",
@@ -1022,7 +1064,7 @@ const INSTANCE_KEYS = [
     "scope": "public",
     "module": "core",
     "secret": false,
-    "reload": "restart",
+    "reload": "live",
     "tier": "instance",
     "env": [
       "STREAMPLACE_STREAMER_DID"
@@ -1032,7 +1074,7 @@ const INSTANCE_KEYS = [
       "stream-ingest"
     ],
     "test": "streamplace",
-    "label": "stream.place account",
+    "label": "Streamplace account",
     "description": "The streamer's stream.place DID (did:plc:…) — the player and its chat."
   },
   {
@@ -1050,8 +1092,8 @@ const INSTANCE_KEYS = [
     "packages": [
       "web"
     ],
-    "label": "stream.place handle",
-    "description": "The handle the stream.place player opens."
+    "label": "Streamplace handle",
+    "description": "The handle the Streamplace player opens."
   },
   {
     "key": "player.embedsOff",
@@ -2012,7 +2054,7 @@ const INSTANCE_KEYS = [
     ],
     "legacyOn": true,
     "label": "Card payments (Stripe)",
-    "description": "Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, and Stripe's webhook address answers \"not found\", so Stripe keeps its events and retries them for about three days."
+    "description": "Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers \"not found\" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them — cancel their subscriptions in Stripe first, or switch back on."
   },
   {
     "key": "modules.paypal",
@@ -2031,7 +2073,7 @@ const INSTANCE_KEYS = [
     ],
     "legacyOn": true,
     "label": "PayPal and Venmo",
-    "description": "Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. One-time payments only: subscriptions and gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers \"not found\", so PayPal keeps its events and retries them for about three days."
+    "description": "Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers \"not found\", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them — cancel their subscriptions in PayPal first, or switch back on."
   },
   {
     "key": "obs.url",
@@ -2219,6 +2261,62 @@ const INSTANCE_KEYS = [
     "description": "The folder of the bot's own short sounds (<id>.v0.mp3 …) played on its voice output; a relative path is inside the chat service's folder. Unset = no clips."
   },
   {
+    "key": "tts.enabled",
+    "kind": "bool",
+    "default": false,
+    "scope": "server",
+    "module": "tts",
+    "secret": false,
+    "reload": "restart",
+    "tier": "instance",
+    "env": [
+      "ALERT_TTS_ENABLED"
+    ],
+    "packages": [
+      "stream-api"
+    ],
+    "label": "Speak alerts and paid messages",
+    "description": "Off = nothing is ever spoken, whatever else is set (a safe default for a new install). On = alerts, paid read-aloud and the bot speak through ElevenLabs with the voices below."
+  },
+  {
+    "key": "tts.voiceCasual",
+    "kind": "string",
+    "maxLength": 64,
+    "default": null,
+    "scope": "server",
+    "module": "tts",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "ELEVENLABS_VOICE_CASUAL"
+    ],
+    "packages": [
+      "stream-api"
+    ],
+    "label": "Voice",
+    "description": "The ElevenLabs voice id everything is spoken with (from the Voices page of your ElevenLabs account)."
+  },
+  {
+    "key": "tts.voiceLoud",
+    "kind": "string",
+    "maxLength": 64,
+    "default": null,
+    "scope": "server",
+    "module": "tts",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "ELEVENLABS_VOICE_LOUD"
+    ],
+    "packages": [
+      "stream-api"
+    ],
+    "label": "Loud voice",
+    "description": "The ElevenLabs voice id for shouted lines when \"Loud voice for shouting\" is on. Unset = the main voice."
+  },
+  {
     "key": "homeassistant.url",
     "kind": "origin",
     "default": null,
@@ -2388,6 +2486,25 @@ const INSTANCE_KEYS = [
     "description": "Verifies that a payment event really came from Stripe."
   },
   {
+    "key": "stripe.supporterPriceId",
+    "kind": "string",
+    "maxLength": 64,
+    "default": null,
+    "scope": "server",
+    "module": "stripe",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "STRIPE_PRICE_SUPPORTER"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Supporter subscription price",
+    "description": "The Stripe Price id (price_…) of the monthly Supporter subscription. Its amount and currency are read from Stripe and shown on the site; gifts charge the same. Unset = subscriptions are not offered."
+  },
+  {
     "key": "paypal.clientId",
     "kind": "secret",
     "default": null,
@@ -2424,6 +2541,25 @@ const INSTANCE_KEYS = [
     "test": "paypal",
     "label": "PayPal client secret",
     "description": "PayPal and Venmo payments."
+  },
+  {
+    "key": "paypal.plans",
+    "kind": "string",
+    "maxLength": 2000,
+    "default": null,
+    "scope": "server",
+    "module": "paypal",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "PAYPAL_PLANS"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Subscription plans",
+    "description": "The PayPal billing plan (P-…) for each tier this site sells, as JSON: {\"supporter\":\"P-…\"}. Set = subscriptions can be paid through PayPal; the plan's price and currency are read from PayPal. The plan must bill monthly at a fixed price — any other plan is refused credit and flagged. Unset = PayPal subscriptions are not offered."
   },
   {
     "key": "paypal.webhookId",
@@ -2527,6 +2663,44 @@ const INSTANCE_KEYS = [
     "test": "kick",
     "label": "Kick app client secret",
     "description": "Pairs with the Kick app client id."
+  },
+  {
+    "key": "kick.chatroomId",
+    "kind": "string",
+    "maxLength": 32,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "KICK_CHATROOM_ID"
+    ],
+    "packages": [
+      "stream-ingest"
+    ],
+    "label": "Kick chatroom id",
+    "description": "Only when the reader cannot look it up itself (Kick's bot protection): the numeric chatroom id of your Kick channel. Unset = looked up automatically."
+  },
+  {
+    "key": "kick.channelId",
+    "kind": "string",
+    "maxLength": 32,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "KICK_CHANNEL_ID"
+    ],
+    "packages": [
+      "stream-ingest"
+    ],
+    "label": "Kick channel id",
+    "description": "Pairs with the Kick chatroom id. Unset = looked up automatically."
   },
   {
     "key": "youtube.apiKey",
@@ -2989,21 +3163,6 @@ const MODULES = [
           "youtube.apiKey"
         ],
         "test": "youtube.apiKey"
-      },
-      {
-        "id": "posting",
-        "title": "Posting into YouTube chat (a later release)",
-        "need": "optional",
-        "explain": "Your viewers are never asked to sign in with Google here. Posting site chat into YouTube chat arrives in a later release: it will need one account (the bot or you) signed in with Google each stream. Google will then show \"Google hasn't verified this app\" on that sign-in, and an unverified app may sign in at most 100 accounts, ever — that is why viewers are never asked. The token is cleared every day at the quiet hour. Nothing to do now.",
-        "links": [
-          {
-            "label": "Google: unverified apps",
-            "url": "https://support.google.com/cloud/answer/7454865"
-          }
-        ],
-        "paste": [],
-        "fields": [],
-        "test": null
       }
     ]
   },
@@ -3016,7 +3175,7 @@ const MODULES = [
       "web"
     ],
     "legacyOn": true,
-    "description": "Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, and Stripe's webhook address answers \"not found\", so Stripe keeps its events and retries them for about three days.",
+    "description": "Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers \"not found\" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them — cancel their subscriptions in Stripe first, or switch back on.",
     "api": {
       "files": []
     },
@@ -3049,7 +3208,7 @@ const MODULES = [
           },
           {
             "label": "Permissions: Read",
-            "value": "Subscriptions · Invoices · PaymentIntents · Webhook Endpoints · Account"
+            "value": "Subscriptions · Invoices · PaymentIntents · Webhook Endpoints · Account · Prices"
           }
         ],
         "fields": [
@@ -3134,7 +3293,7 @@ const MODULES = [
       "web"
     ],
     "legacyOn": true,
-    "description": "Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. One-time payments only: subscriptions and gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers \"not found\", so PayPal keeps its events and retries them for about three days.",
+    "description": "Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers \"not found\", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them — cancel their subscriptions in PayPal first, or switch back on.",
     "api": {
       "files": []
     },
@@ -3142,7 +3301,8 @@ const MODULES = [
       "paypal.env",
       "paypal.clientId",
       "paypal.clientSecret",
-      "paypal.webhookId"
+      "paypal.webhookId",
+      "paypal.plans"
     ],
     "doneTest": [],
     "setup": [
@@ -3150,7 +3310,7 @@ const MODULES = [
         "id": "app",
         "title": "Your PayPal app",
         "need": "required",
-        "explain": "In the PayPal Developer Dashboard → Apps & Credentials, pick Live (or Sandbox to try it first) and create an app of type Merchant. Paste its client id and secret, and say which of the two it is. PayPal decides when to offer Venmo: only to a buyer it finds eligible, which in practice means a US business account and a US buyer paying in US dollars. Everyone else sees only PayPal.",
+        "explain": "In the PayPal Developer Dashboard → Apps & Credentials, pick Live (or Sandbox to try it first) and create an app of type Merchant. Paste its client id and secret, and say which of the two it is. PayPal decides when to offer Venmo: only to a buyer it finds eligible, which in practice means a US business account and a US buyer paying in US dollars. Everyone else sees only PayPal. Subscription plans: monthly, a fixed price, and a payment failure threshold (3) set on the plan in PayPal — any other plan is refused credit and flagged; without the threshold PayPal keeps retrying and the perks last only a month past the last payment.",
         "links": [
           {
             "label": "PayPal: Apps & Credentials",
@@ -3183,7 +3343,7 @@ const MODULES = [
           },
           {
             "label": "Events",
-            "value": "PAYMENT.CAPTURE.COMPLETED · PAYMENT.CAPTURE.REFUNDED · PAYMENT.CAPTURE.REVERSED · CUSTOMER.DISPUTE.RESOLVED"
+            "value": "PAYMENT.CAPTURE.COMPLETED · PAYMENT.CAPTURE.REFUNDED · PAYMENT.CAPTURE.REVERSED · CUSTOMER.DISPUTE.RESOLVED · BILLING.SUBSCRIPTION.CREATED · BILLING.SUBSCRIPTION.ACTIVATED · BILLING.SUBSCRIPTION.UPDATED · BILLING.SUBSCRIPTION.EXPIRED · BILLING.SUBSCRIPTION.CANCELLED · BILLING.SUBSCRIPTION.SUSPENDED · BILLING.SUBSCRIPTION.PAYMENT.FAILED · PAYMENT.SALE.COMPLETED · PAYMENT.SALE.REFUNDED · PAYMENT.SALE.REVERSED"
           }
         ],
         "fields": [
@@ -3468,7 +3628,7 @@ function parseInstanceValue(entry, raw) {
     let v = raw;
     if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return { ok: false, error: 'expected JSON' }; } }
     if (!v || typeof v !== 'object' || Array.isArray(v)) return { ok: false, error: 'expected {step, adminPending, install}' };
-    if (!Object.keys(v).every((k) => ['step', 'adminPending', 'install', 'skipped', 'backupAskedAt', 'core'].includes(k))) return { ok: false, error: 'expected {step, adminPending, install, skipped, backupAskedAt, core}' };
+    if (!Object.keys(v).every((k) => ['step', 'adminPending', 'install', 'skipped', 'backupAskedAt', 'core', 'visited'].includes(k))) return { ok: false, error: 'expected {step, adminPending, install, skipped, backupAskedAt, core, visited}' };
     const out = {};
     if (v.step !== undefined) {
       if (typeof v.step !== 'string' || !/^[a-z][a-z0-9:-]{0,63}$/.test(v.step)) return { ok: false, error: 'step: a step id' };
@@ -3504,6 +3664,14 @@ function parseInstanceValue(entry, raw) {
         return { ok: false, error: 'skipped: a list of step ids' };
       }
       out.skipped = [...new Set(v.skipped)];
+    }
+    if (v.visited !== undefined) {
+      // Setup pages the operator has opened ("module:<id>", "core:<id>"), first visit first: the Doctor
+      // counts a never-visited module's unset keys as "not set up yet", not as failing.
+      if (!Array.isArray(v.visited) || v.visited.length > 50 || !v.visited.every((x) => typeof x === 'string' && /^[a-z][a-z0-9:-]{0,63}$/.test(x))) {
+        return { ok: false, error: 'visited: a list of page ids' };
+      }
+      out.visited = [...new Set(v.visited)];
     }
     if (v.core !== undefined) {
       // The product's setup lists chosen on the modules page (twitch, kick…): each gets its page.
@@ -3784,6 +3952,11 @@ async function runProviderCheck(test, get, fetchImpl) {
       'customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted', 'invoice.paid', 'invoice.payment_failed',
       'payment_intent.payment_failed', 'refund.created', 'refund.updated', 'charge.dispute.created', 'charge.dispute.closed'];
     const PAYPAL_EVENTS = ['PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.REFUNDED', 'PAYMENT.CAPTURE.REVERSED', 'CUSTOMER.DISPUTE.RESOLVED'];
+    // Subscriptions (subscription sources S3): the subscription's life and each cycle's sale — required
+    // only on a site that sells them (paypal.plans set); a tips-only site's webhook is complete without them.
+    const PAYPAL_SUBSCRIPTION_EVENTS = ['BILLING.SUBSCRIPTION.CREATED', 'BILLING.SUBSCRIPTION.ACTIVATED', 'BILLING.SUBSCRIPTION.UPDATED', 'BILLING.SUBSCRIPTION.EXPIRED',
+      'BILLING.SUBSCRIPTION.CANCELLED', 'BILLING.SUBSCRIPTION.SUSPENDED', 'BILLING.SUBSCRIPTION.PAYMENT.FAILED',
+      'PAYMENT.SALE.COMPLETED', 'PAYMENT.SALE.REFUNDED', 'PAYMENT.SALE.REVERSED'];
     const json = async (res) => { try { return await res.json(); } catch { return null; } };
     // A provider's numeric id for a channel: digits only, or nothing (never text).
     const digits = (v) => (typeof v === 'number' || typeof v === 'string') && /^\d{1,20}$/.test(String(v)) ? String(v) : null;
@@ -3854,7 +4027,8 @@ async function runProviderCheck(test, get, fetchImpl) {
         if (url !== `${origin()}/api/billing/paypal/webhook`) return { ok: false, code: 'wrong_target', mode };
       }
       const names = Array.isArray(hook?.event_types) ? hook.event_types.map((e) => e && e.name) : [];
-      const missing = names.includes('*') ? 0 : PAYPAL_EVENTS.filter((x) => !names.includes(x)).length;
+      const wanted = String(get('paypal.plans') || '').trim() ? [...PAYPAL_EVENTS, ...PAYPAL_SUBSCRIPTION_EVENTS] : PAYPAL_EVENTS;
+      const missing = names.includes('*') ? 0 : wanted.filter((x) => !names.includes(x)).length;
       return missing ? { ok: false, code: 'missing_events', count: missing, mode } : { ok: true, code: 'accepted', mode };
     }
     if (test === 'twitch') {

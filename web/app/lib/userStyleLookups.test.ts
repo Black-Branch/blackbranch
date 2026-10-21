@@ -1,4 +1,4 @@
-// The public name-style lookups (P6/P7 of review round 3): /api/users/colors and /api/users/looks
+// The public name-style lookups: /api/users/colors and /api/users/looks
 // answer only for the ids asked, the credit overlay's lookup never names an account, and the
 // client asks for exactly the ids it draws. The helpers are RUN; the routes (which import through
 // the @/ alias node --test cannot resolve) are scanned.

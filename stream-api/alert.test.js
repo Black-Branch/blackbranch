@@ -16,7 +16,7 @@ test('cleanForTTS strips URLs and :emote: tokens', () => {
   assert.equal(cleanForTTS(':kek: :lul:'), ''); // all emotes → empty
 });
 
-// R2-16: donor text reaches ElevenLabs as-is, so markup in a message could
+// Donor text reaches ElevenLabs as-is, so markup in a message could
 // reach the engine — a `<break time="10s"/>` or an SSML tag the donor chose.
 // cleanForTTS strips any <…> tag, including one with spaces inside it.
 test('cleanForTTS strips <…> markup, even a tag with spaces inside it', () => {
@@ -125,11 +125,11 @@ test('buildEventCard: cheer card shape + blacklist mask + zero-coin null', () =>
 });
 
 test('buildEventCard: highlight card shape — sender identity + masked message, not the donation fall-through', () => {
-  // Plan-defect regression: `highlight` was added to money.js's
-  // COIN_KINDS/KIND_POLICY without a buildEventCard arm, so a real highlight
-  // send fell through every `if (kind === ...)` check to the bare donation
-  // branch at the bottom — reading body.donor/body.amount/body.currency (none
-  // of which a highlight payload carries) under a `system: 'highlight'` tag.
+  // `highlight` is in money.js's COIN_KINDS/KIND_POLICY; without a
+  // buildEventCard arm a real highlight send falls through every
+  // `if (kind === ...)` check to the bare donation branch at the bottom —
+  // reading body.donor/body.amount/body.currency (none of which a highlight
+  // payload carries) under a `system: 'highlight'` tag.
   // The card IS the product for a highlight (money.js's effect handler is a
   // pure no-op — see money-policy.test.js), so this is load-bearing, not
   // cosmetic.
@@ -171,7 +171,7 @@ test('fireStreamEffects: native sub credits support bar + speaks (TTS enabled)',
     broadcast: (m) => broadcasts.push(m),
     bufferPush: () => {},
     obs: { playSound: async () => {} },
-    tts: { speak: (t) => spoken.push(t) },        // simulates ALERT_TTS_ENABLED=1
+    tts: { speak: (t) => spoken.push(t) },        // simulates tts.enabled on
     supportBar: { add: (v, u) => supported.push({ v, u }) },
     logSupport: async (row) => logged.push(row),
   });
@@ -307,7 +307,7 @@ test('supportbar onAdd payload: no notionalFor injected -> notionalSec defaults 
   assert.equal(payload.grossSec, 17);
 });
 
-// Review round 2, minor 5d: a notionalFor that returns something unusable
+// A notionalFor that returns something unusable
 // WITHOUT throwing (NaN, undefined, Infinity) must be coerced back to
 // grossSec just like the throwing case — it must never ride onto the payload
 // as-is.
@@ -509,7 +509,7 @@ test('marathonEnded is false for a zero-applied donation on a GOLD night', async
   assert.equal(marathonEnded, false, 'a gold night read as a marathon ending');
 });
 
-test('takeHomeUSD 0 (a Qorm spend): no ledger, no bar, card still fires — and marathonEnded stays false even under a lock', async () => {
+test('takeHomeUSD 0 (a currency spend): no ledger, no bar, card still fires — and marathonEnded stays false even under a lock', async () => {
   // A big cheer rides fireStreamEffects for its overlay/sound/TTS moment with
   // NOTHING to credit, so "added 0 seconds while locked" alone must not read as
   // marathonEnded — every such cheer would satisfy it.

@@ -138,8 +138,11 @@ test("PayPal: a token, then the webhook id — it exists, points at this site an
   assert.ok(handled.length >= 4, `vacuity: ${handled.length} PayPal cases read`);
   const paypal = (MODULES as { id: string; setup?: { id: string; paste: { label: string; value: string }[] }[] }[]).find((m) => m.id === "paypal")!;
   assert.deepEqual(paypal.setup!.find((s) => s.id === "webhook")!.paste.find((p) => p.label === "Events")!.value.split(" · ").sort(), handled);
-  const vals: Record<string, string> = { "paypal.clientId": "cid", "paypal.clientSecret": "SECRET", "paypal.env": "sandbox", "paypal.webhookId": "WH-1", "site.origin": BB };
+  // A site that sells PayPal subscriptions (paypal.plans set) needs every handled event; a tips-only
+  // site's webhook is complete with the four capture/dispute events.
+  const vals: Record<string, string> = { "paypal.clientId": "cid", "paypal.clientSecret": "SECRET", "paypal.env": "sandbox", "paypal.webhookId": "WH-1", "site.origin": BB, "paypal.plans": '{"supporter":"P-1"}' };
   const get = (k: string) => vals[k] ?? null;
+  const tipsOnly = (k: string) => (k === "paypal.plans" ? null : vals[k] ?? null);
   const tok: [RegExp, Resp] = [/sandbox\.paypal\.com\/v1\/oauth2\/token/, { status: 200, body: { access_token: "AT" } }];
   const hook = (body: Record<string, unknown>) => stub([tok, [/notifications\/webhooks\/WH-1$/, { status: 200, body }]]);
   const full = { url: `${BB}/api/billing/paypal/webhook`, event_types: handled.map((name) => ({ name })) };
@@ -148,6 +151,11 @@ test("PayPal: a token, then the webhook id — it exists, points at this site an
   harmless(ok.calls);
   assert.equal(words(await check("paypal-webhook", get, hook({ ...full, url: "https://old.test/api/billing/paypal/webhook" }))), "the webhook points at another address, not this site");
   assert.equal(words(await check("paypal-webhook", get, hook({ ...full, event_types: full.event_types.slice(1) }))), "the webhook does not send 1 of the events this site handles");
+  const captureOnly = full.event_types.filter((e) => !String(e.name ?? "").startsWith("BILLING.SUBSCRIPTION.") && !String(e.name ?? "").startsWith("PAYMENT.SALE."));
+  assert.ok(captureOnly.length >= 4 && captureOnly.length < full.event_types.length, "vacuity: the capture/dispute events are a strict subset");
+  assert.equal(words(await check("paypal-webhook", tipsOnly, hook({ ...full, event_types: captureOnly }))), "accepted (sandbox)", "tips-only: the subscription events are not demanded");
+  assert.equal(words(await check("paypal-webhook", tipsOnly, hook({ ...full, event_types: captureOnly.slice(1) }))), "the webhook does not send 1 of the events this site handles", "tips-only: a capture event is still demanded");
+  assert.equal(words(await check("paypal-webhook", get, hook({ ...full, event_types: captureOnly }))), `the webhook does not send ${full.event_types.length - captureOnly.length} of the events this site handles`, "with plans: every subscription event is demanded");
   assert.equal(words(await check("paypal-webhook", get, stub([tok, [/notifications\/webhooks/, { status: 404, body: { name: "INVALID_RESOURCE_ID" } }]]))), "not found at the provider — check the name, id or address");
   assert.equal(words(await check("paypal", get, stub([[/oauth2\/token/, { status: 401, body: { error: "invalid_client" } }]]))), "rejected (HTTP 401)");
   assert.equal(words(await check("paypal", get, stub([tok]))), "accepted (sandbox)");

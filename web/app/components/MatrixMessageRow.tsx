@@ -656,9 +656,8 @@ function MatrixMessageRowImpl({
             </span>
           </div>
         )}
-        {/* A grouped row's time used to show in the gutter on hover; the
-            gutter is gone and the row's right edge is the action bar's, so it
-            is the text's tooltip now. */}
+        {/* A grouped row's time is the text's tooltip: there is no gutter,
+            and the row's right edge is the action bar's. */}
         {/* Text colour = Colours › Text colour. */}
         <div className="mx-text break-words" title={grouped ? shortTime : undefined} style={{ color: "var(--chat-text-color)", fontSize: CHAT_FONT, fontFamily: "var(--chat-font-family, inherit)", fontWeight: "var(--chat-font-weight, 400)" as React.CSSProperties["fontWeight"], lineHeight: "var(--chat-line-height, 1.4)" }}>
           {body}

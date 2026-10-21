@@ -84,7 +84,7 @@ test("the line label", () => {
   assert.equal(undeliveredLabel(["kick", "twitch"]), "not delivered to Kick, Twitch");
 });
 
-// ── Persistent vs transient (U1 rework) ─────────────────────────────────────
+// ── Persistent vs transient ─────────────────────────────────────────────────
 // A PERSISTENT refusal will refuse the next message too (the channel's mode, or
 // the person's standing there): it is explained once and the platform is skipped.
 // Everything else is TRANSIENT: shown, rate-limited, and tried again next time.
@@ -125,7 +125,7 @@ test("skipPlatformsFrom: only routable platform ids, deduplicated, bounded; anyt
   assert.deepEqual(many, new Set(["kick"]));
 });
 
-// ── Infrastructure (k, ticket #184, 2026-10-19) ─────────────────────────────
+// ── Infrastructure ──────────────────────────────────────────────────────────
 // A failure the viewer cannot act on — the platform's API quota, a rate limit,
 // an upstream 5xx, a timeout, our own token/DB throw — is its own class, so the
 // client can stay silent about it. The provider's own text never reaches the client.

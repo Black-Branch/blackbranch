@@ -1,7 +1,6 @@
-// The public chat socket never carries a canonical id (owner decision on the cross-platform
-// link, 2026-10-17). One canonical per person rode every chat frame and the `history` replay, and
-// the socket has no sign-in, so anyone could group a person's Twitch, YouTube, Kick and site lines
-// by it. The frames now carry a per-platform `publicId` (pseudonym.js); the canonical stays on the
+// The public chat socket never carries a canonical id. One canonical per person on every chat
+// frame and the `history` replay — on a socket with no sign-in — would let anyone group a person's
+// Twitch, YouTube, Kick and site lines by it. The frames carry a per-platform `publicId` (pseudonym.js); the canonical stays on the
 // frame for the install's own internal sockets (the chat bot keys its memory on it) and the hub
 // strips it, at ANY depth, from what a public socket receives — live frames, the `history` replay
 // and the connect-time state frames alike. One REAL socket of each kind.
@@ -26,7 +25,7 @@ function collect(url, headers, ms = 300) {
     ws.on('error', reject);
     ws.on('open', () => setTimeout(() => {
       ws.close();
-      // The hub's hello comes first (M4), saying whether this socket was taken as internal.
+      // The hub's hello comes first, saying whether this socket was taken as internal.
       assert.deepEqual(JSON.parse(got[0]), { type: 'hello', internal: !!(headers && headers.Authorization === INTERNAL) });
       resolve(got.slice(1));
     }, ms));

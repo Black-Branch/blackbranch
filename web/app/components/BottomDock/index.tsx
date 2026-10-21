@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { subscribeHomeStore, readHomeStore } from "@/app/lib/homeStore";
 import { Plus } from "@phosphor-icons/react/dist/ssr";
 import FeedPanel from "@/app/components/FeedPanel";
 import { HomeTab } from "@/app/features/home";
@@ -105,10 +106,12 @@ export default function BottomDock({
     if (next !== null) setArmedRaw(next);
     setStreamArmFlag("1");
   }, [isAdmin, streamArmFlag, armedRaw, setArmedRaw, setStreamArmFlag]);
+  const newsHasItems = (useSyncExternalStore(subscribeHomeStore, readHomeStore, () => null)?.news?.length ?? 0) > 0;
   const { shown, tabs, unarmed } = partitionTabs(armed, {
     home: true,
     forums: true,
-    news: true,
+    // Hidden until a feed has items (§0): read from the remembered Home body.
+    news: newsHasItems,
     vods: vods.length > 0,
     stream: isAdmin,
   });

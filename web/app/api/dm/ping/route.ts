@@ -8,7 +8,7 @@ import { ACTIVE_BAN_SQL, DM_BANNED } from "@/app/lib/dm/banGate";
 // The DM nudge: "someone just sent you a direct message", for the recipient's own page only.
 // The nudge stays on this server (nudgeBox.ts) and the recipient's signed-in page asks for it —
 // nothing about it goes out on the public chat socket, so no one can learn a recipient's nudges by
-// sending one (external review S5). A nudge carries no sender, room or content: a forged one only
+// sending one. A nudge carries no sender, room or content: a forged one only
 // makes a page look and find nothing.
 //   GET  → { at } — the newest pending nudge stamp for this session's own account (0 = none).
 //   POST { to } → nudge `to` (a site account). 20 a minute per sender, one per 3 s per pair.

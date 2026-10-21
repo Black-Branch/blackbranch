@@ -25,8 +25,10 @@ const {
 // Tests that are not about pronouns build a chat without them; index.js always
 // passes the real module (chat-pronouns.test.js pins the wiring).
 const NO_PRONOUNS = { get: async () => null, set: async () => false, maybeAlejo: async () => false };
+// Likewise the ban hold: index.js passes the real one (ban-hold.js); a test without it holds nobody.
+const NO_BAN_HOLD = { isHeld: () => false };
 
-function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRONOUNS, pollEngine,
+function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRONOUNS, banHold = NO_BAN_HOLD, pollEngine,
                       msgBuffer, broadcast, bufferPush,
                       // The live session's id, for /chat/native's corpus row.
                       // Platform messages arrive stamped by ingest; a native
@@ -144,7 +146,7 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
 
   // A message that is ONLY a valid option number of the running poll (1–N, N = that poll's
   // option count) is counted as a vote and NOT shown — not in site chat, not in history, not on an
-  // overlay (owner decision). Shown, a bare number moving the live tallies a second later ties a
+  // overlay. Shown, a bare number moving the live tallies a second later ties a
   // voter's accounts on different platforms together. Outside a poll, or a number that is not an
   // option ("12" with three options), the line displays normally. Returns the option or null.
   function pollVoteOf(message) {
@@ -193,6 +195,13 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
     username = username.replace(/^@/, '').trim();
 
     const canonicalId = await resolveOrCreate(platform, userId || '', username);
+    // ── Banned on the site (ban-hold.js) ─────────────────────────────────────
+    // A banned chatter's platform lines stop HERE, the moment the ban is written — not when the
+    // platform's own ban lands seconds later (or never, when that fan-out fails). Not stored, not
+    // broadcast; 200 so stream-ingest does not retry it. The site's own chat is web's to refuse.
+    if (!isNativePlatform(String(platform).toLowerCase()) && banHold.isHeld(canonicalId)) {
+      return res.json({ ok: true, filtered: true, reason: 'banned' });
+    }
     rememberAvatar(canonicalId, avatarUrl);
 
     // Suppress "send to all" platform echoes (see allSendDedup). The Next.js
@@ -559,10 +568,10 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
     res.status(202).json({ ok: true, registered });
   }));
 
-  // The row id is a bigint. ingest once scored a dedup-suppressed echo whose
-  // /chat response carried no id and PATCHed `/chat/undefined/karma`; the
-  // string reached Postgres and came back as an unhandled 500 (09-17 stream,
-  // 14×). A bad id is the caller's mistake and gets a 400, not a pg error —
+  // The row id is a bigint. A caller scoring a dedup-suppressed echo (whose
+  // /chat response carries no id) PATCHes `/chat/undefined/karma`; unchecked,
+  // that string reaches Postgres and comes back as an unhandled 500. A bad id
+  // is the caller's mistake and gets a 400, not a pg error —
   // and that includes digits past the bigint range, which pg refuses the
   // same way.
   const BIGINT_MAX = 9223372036854775807n;
@@ -627,7 +636,7 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
     let { matrixId, username, message, streamId, usernameColor, reply_to_id, reply_to_username, reply_to_text,
           allSend, canonicalId: bodyCanonicalId, expectedEchoes, destPlatform, echoText, echoTextAlt } = req.body;
     // Boundary caps, same as /chat. The web sanitizer already caps at 500, but
-    // direct internal callers (the owner plugin's bot, automod release) bypass it.
+    // direct internal callers (the site plugin's bot, automod release) bypass it.
     message = clampLen(message, MAX_MESSAGE_LEN);
     username = clampLen(username, MAX_USERNAME_LEN);
     reply_to_username = clampLen(reply_to_username, MAX_USERNAME_LEN);

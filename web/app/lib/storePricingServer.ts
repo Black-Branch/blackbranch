@@ -1,7 +1,7 @@
-// Store prices — the server side of the streams-to-Qorm rendering.
+// Store prices — the server side of the streams-to-points rendering.
 //
 // site.store_prices holds base_streams (the source of truth) and `price` (the
-// rendered Qorm figure). Reads take the cached `price`, never recompute it: the
+// rendered points figure). Reads take the cached `price`, never recompute it: the
 // number a viewer was shown has to be a stored fact, because the spend routes
 // compare against it and refuse with `price_changed` on a mismatch. A price
 // recomputed per request would make that comparison meaningless.

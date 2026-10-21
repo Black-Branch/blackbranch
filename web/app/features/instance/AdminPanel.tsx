@@ -17,7 +17,7 @@ import { createElement, useCallback, useEffect, useMemo, useState, type ReactNod
 import {
   Cpu, Robot, ChartBar, ShieldCheck, Lifebuoy, Database, VideoCamera, SpeakerHigh,
   ClockCounterClockwise, CreditCard, YoutubeLogo, TwitchLogo, Broadcast, Butterfly, DiscordLogo,
-  GlobeSimple, Coins, PuzzlePiece, Timer, Gauge, Sparkle, Medal, Ticket, Brain, Stethoscope, ArrowsClockwise,
+  GlobeSimple, Coins, PuzzlePiece, Timer, Gauge, Sparkle, Medal, Ticket, Brain, Stethoscope, ArrowsClockwise, Browsers,
 } from "@phosphor-icons/react/dist/ssr";
 import { Rail, RailLayout } from "@/app/components/chrome";
 import { getJson } from "@/app/lib/http";
@@ -39,11 +39,13 @@ import PointsPanel from "./PointsPanel";
 import DoctorPanel from "./DoctorPanel";
 import UpdatesPanel from "./UpdatesPanel";
 import RigPanel from "./RigPanel";
+import OverlaysPanel from "./OverlaysPanel";
+import DiscordNote from "./DiscordNote";
 
 const ic = (C: typeof Cpu) => createElement(C, { size: 18, weight: "bold" });
 const ICON: Record<string, ReactNode> = {
   "ai/models": ic(Cpu), "ai/bot": ic(Robot), "ai/scoring": ic(ChartBar), "ai/automod": ic(ShieldCheck), "ai/helpdesk": ic(Lifebuoy), "ai/embeddings": ic(Database),
-  "utility/obs": ic(VideoCamera), "utility/timer": ic(Timer), "utility/bar": ic(Gauge), "utility/effects": ic(Sparkle), "utility/tts": ic(SpeakerHigh),
+  "utility/obs": ic(VideoCamera), "utility/timer": ic(Timer), "utility/bar": ic(Gauge), "utility/effects": ic(Sparkle), "utility/tts": ic(SpeakerHigh), "utility/overlays": ic(Browsers),
   "payments/history": ic(ClockCounterClockwise), "payments/connections": ic(CreditCard),
   "platforms/youtube": ic(YoutubeLogo), "platforms/twitch": ic(TwitchLogo), "platforms/kick": ic(Broadcast), "platforms/streamplace": ic(Butterfly), "platforms/discord": ic(DiscordLogo),
   "site/general": ic(GlobeSimple), "site/points": ic(Coins), "site/modules": ic(PuzzlePiece), "site/badges": ic(Medal), "site/tickets": ic(Ticket),
@@ -172,6 +174,7 @@ function AdminPlace({ item, inst, error, loadInst, note, go }: {
   if (section === "site" && sub === "badges") return <BadgesAdmin />;
   if (section === "site" && sub === "tickets") return <SupportTickets note={note} />;
   if (section === "site" && sub === "moderators") return <ModeratorList note={note} />;
+  if (section === "utility" && sub === "overlays") return <OverlaysPanel go={go} />;
   if (error) return <p className="text-sm text-red-300">Could not load the settings: {error}</p>;
   if (!inst) return <p role="status" className="text-sm text-muted">Loading settings…</p>;
   if (section === "ai") return <AiPanel sub={sub as AiSub} inst={inst} reloadInst={loadInst} note={note} />;
@@ -183,9 +186,10 @@ function AdminPlace({ item, inst, error, loadInst, note, go }: {
       {section === "utility" && sub === "obs" && (
         <>
           <RigPanel note={note} />
-          <p className="text-xs text-muted">Other sources: <a href="/overlay" className="text-body-dim underline hover:text-strong">the overlay directory</a> (chat, credit line, poll, stickers — each its own size).</p>
+          <p className="text-xs text-muted">Other sources: <a href="/overlay" className="text-body-dim underline hover:text-strong">the overlay directory</a> (chat, the credit line); alerts, the support bar and the other overlays: <button type="button" className="text-body-dim underline hover:text-strong" onClick={() => go("utility/overlays")}>Utility → Overlays</button>.</p>
         </>
       )}
+      {section === "platforms" && sub === "discord" && <DiscordNote view={inst} />}
       {guides.length > 0 && <SetupGuides guides={guides} />}
       <KeyCards view={inst} groups={keyGroupsFor(section, sub, inst.ownerPlugin !== false)} onChanged={loadInst} note={note} placeLabel={item.label} />
     </>

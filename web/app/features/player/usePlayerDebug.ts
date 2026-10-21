@@ -7,6 +7,7 @@ import { useEffect, type RefObject } from "react";
 import { PlayerDebugLog, PLAYER_DEBUG_KEY, readPlayerDebugSwitch } from "@/app/lib/playerDebug";
 import { reportClientError } from "@/app/lib/clientError";
 import { lsGet, lsRemove, lsSet } from "@/app/lib/safeLocalStorage";
+import { DEBUG_FLAGS_ON } from "@/app/lib/debugFlags";
 
 let log: PlayerDebugLog | null = null;
 let mounts = 0;
@@ -14,6 +15,7 @@ let mounts = 0;
 function debugLog(): PlayerDebugLog | null {
   if (log) return log;
   if (typeof window === "undefined") return null;
+  if (!DEBUG_FLAGS_ON) return null;
   const sw = readPlayerDebugSwitch(window.location.search, lsGet(PLAYER_DEBUG_KEY));
   if (sw.store === "1") lsSet(PLAYER_DEBUG_KEY, "1");
   else if (sw.store === null) lsRemove(PLAYER_DEBUG_KEY);

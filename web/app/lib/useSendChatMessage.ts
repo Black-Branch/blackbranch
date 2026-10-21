@@ -4,7 +4,9 @@ import { platformLabel, isRoutablePlatform } from "./platforms";
 import { setCoinBalance } from "./useCoinBalance";
 import { pokeCoinHeartbeat } from "./useCoinHeartbeat";
 import { refreshStorePrices } from "./useStorePrices";
-import { currencyName } from "./currency";
+import { currencyName, scoreName } from "./currency";
+import { REDACT_MIN_CREDIT } from "./redactedMessage";
+import { featureOn } from "./siteFeatures";
 import type { ChatMsg } from "./chatMsg";
 import { emitChatNotice } from "./chatNotice";
 import { announceHeld, HELD_PENDING_TEXT } from "./heldMessages";
@@ -14,7 +16,7 @@ import { recordFailures, skippedPlatforms } from "./platformRefusals";
 
 /**
  * A line that IS on the site but did not reach every platform it was aimed at.
- * Never an error and never per message (U1 rework, k 2026-10-18): the refusal
+ * Never an error and never per message: the refusal
  * store decides — a persistent refusal is explained once and that platform is
  * skipped for the session; a transient failure is noted at most once per window.
  * Only a transient failure marks the line (a zero-height marker, ChatMessage).
@@ -177,8 +179,9 @@ export function useSendChatMessage(setBanExpiry: (expiry: string | null | undefi
       // Read from a clone so that branch can still read the body.
       const d = await res.clone().json().catch(() => ({}));
       if (d.error === "supporter_only") {
+        // "subscribe" only where a subscription can be bought.
         throw new Error(encrypted
-          ? "Redacted messages are a Supporter perk — subscribe to send one."
+          ? `Redacted messages are a Supporter perk${featureOn("subscriptions") ? " — subscribe to send one" : ""}.`
           : "Redacting with || is a Supporter perk — remove the || marks to send it normally.");
       }
       // Sub-only chat (lockdown, v147) — not a ban, so it must not fall through to the ban branch.
@@ -186,7 +189,7 @@ export function useSendChatMessage(setBanExpiry: (expiry: string | null | undefi
         throw new Error("Sub-only chat is on right now — only subscribers can send.");
       }
       if (d.error === "low_credit") {
-        throw new Error("You need at least 1 social credit to send a redacted message.");
+        throw new Error(`You need a ${scoreName()} of at least ${REDACT_MIN_CREDIT} to send a redacted message — it goes up when people upvote your messages.`);
       }
       if (d.error === "redact_no_spend") {
         throw new Error("A highlighted or read-aloud message can't have redacted parts — nothing was charged.");

@@ -1,5 +1,8 @@
-// The fold follows the stream state on every visit: offline → player folded,
-// chat folded, Home open; live → both unfolded.
+// The fold follows the stream state on every visit: offline → player folded, Home open; live, or a
+// featured community stream on → the player unfolded. The CHAT (the side panel) is never folded by
+// a visit: a first visit shows it, and after that it is what the viewer last left it —
+// otherwise a first-time viewer would meet a hidden chat on every offline visit. Going live still
+// unfolds a folded chat (the live edge).
 // StreamView seeds the FIRST PAINT from the server's `isLive` when this device
 // has nothing stored (so a stranger's first frame is already the right shape),
 // and runs this rule once in a layout effect for what IS stored — before
@@ -32,6 +35,8 @@ type VisitFold = {
 
 export function foldForVisit(a: {
   live: boolean;
+  /** A featured community stream is on (offline): the video has something to show. */
+  community?: boolean;
   narrow: boolean;
   storedPlayerMode: string | null;
   storedPanelMode: string | null;
@@ -46,9 +51,7 @@ export function foldForVisit(a: {
     };
   }
   if (!a.narrow && deliberate) return { player: null, chat: null, openHome: false };
-  return {
-    player: folded ? null : "fold",
-    chat: a.narrow || a.storedPanelMode === "chatFolded" ? null : "chatFolded",
-    openHome: true,
-  };
+  // A community feed on: unfold the video to it; the chat stays as the viewer left it.
+  if (a.community) return { player: folded ? "unfold" : null, chat: null, openHome: false };
+  return { player: folded ? null : "fold", chat: null, openHome: true };
 }

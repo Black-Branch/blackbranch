@@ -1,5 +1,5 @@
 // The setup wizard's payment pages warn about the operator's legal name and home address BEFORE
-// the keys that take live money are pasted (k, 2026-10-19; product wording from the docs page
+// the keys that take live money are pasted (product wording from the docs page
 // "Protect your personal name and home address"). A warning, not a gate: no checkbox, no "I
 // checked" value, nothing new saved. A real mount of the wizard on each module page.
 //

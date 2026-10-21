@@ -1,4 +1,4 @@
-// The per-tab refusal store (U1 rework), RUN through its hooks: what a
+// The per-tab refusal store, RUN through its hooks: what a
 // persistent refusal and a transient failure each leave behind — the note, the
 // skip list, the Send-to menu's state.
 //
@@ -129,7 +129,7 @@ test("dismissing by id leaves a newer note alone", async () => {
   await v.unmount();
 });
 
-// ── Infrastructure (ticket #184) ─────────────────────────────────────────────
+// ── Infrastructure ───────────────────────────────────────────────────────────
 // Not viewer-actionable: silent unless the viewer picked that platform ALONE,
 // and then ONE plain line per platform per session.
 

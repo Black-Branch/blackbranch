@@ -17,12 +17,13 @@
 // needs the broadcaster's OAuth token for this call. The error log carries the
 // API's `reason` so a 403 can be told apart from quota exhaustion.
 
-import { chromium } from 'playwright';
+import { launchBrowser } from '../lib/browser.js';
 import { processMessage } from '../lib/pipeline.js';
 import { normalizeYouTubeEvent } from '../lib/alerts.js';
 import { postAlert, postPlatformDelete } from '../lib/api.js';
 import { decideWatchdog, STALL_MS, STALL_TICKS } from '../lib/ytWatchdog.js';
 import { decideEnd } from '../lib/ytEndDecision.js';
+import { createCadenceReporter } from '../lib/ytCadence.js';
 import { instanceConfig } from '../lib/instanceConfig.js';
 
 // Instance key platform.youtube.channelId, read at call time.
@@ -367,12 +368,27 @@ async function watchLiveState(videoId) {
 // already being watched — is verified against its own watch page: the owner
 // channel must match AND the video must be live right now.
 export async function findLiveVideoId(channelId = channelIdCfg(), { allowEnvOverride = true, knownId = '' } = {}) {
-  if (allowEnvOverride && process.env.YOUTUBE_VIDEO_ID) return process.env.YOUTUBE_VIDEO_ID.trim(); // manual override/testing
+  return (await youtubeLiveState(channelId, { allowEnvOverride, knownId })).videoId || null;
+}
+
+/**
+ * The same lookup, with the difference between "YouTube said not live" and "could not ask" kept:
+ * the viewer poller votes from it when no chat reader is running, and a failed lookup must
+ * vote `unknown`, never `offline`.
+ *   live     — a video owned by this channel is live now (videoId set)
+ *   offline  — the /live page answered and names no live video of this channel
+ *            (a recommended video of another channel included — what an offline /live page shows)
+ *   unknown  — the page or the video check failed
+ * @returns {Promise<{ state: 'live'|'offline'|'unknown', videoId: string }>}
+ */
+export async function youtubeLiveState(channelId = channelIdCfg(), { allowEnvOverride = true, knownId = '' } = {}) {
+  if (allowEnvOverride && process.env.YOUTUBE_VIDEO_ID) return { state: 'live', videoId: process.env.YOUTUBE_VIDEO_ID.trim() }; // manual override/testing
+  const none = (state) => ({ state, videoId: '' });
   // Sticky path: once live on a video, re-verify THAT video directly and skip
   // the flaky /live scrape entirely while it stays live.
   if (knownId) {
     const st = await watchLiveState(knownId).catch(() => null);
-    if (st && st.channelId === channelId && st.isLiveNow) return knownId;
+    if (st && st.channelId === channelId && st.isLiveNow) return { state: 'live', videoId: knownId };
   }
   try {
     const res = await fetch(`https://www.youtube.com/channel/${channelId}/live?hl=en`,
@@ -382,17 +398,19 @@ export async function findLiveVideoId(channelId = channelIdCfg(), { allowEnvOver
     const m = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})">/)
            || html.match(/"videoId":"([\w-]{11})"/);
     const candidate = m ? m[1] : null;
-    if (!candidate || candidate === knownId) return null; // knownId already failed verification above
+    if (!candidate) return none('offline');
+    if (candidate === knownId) return none('offline'); // knownId already failed verification above
     const st = await watchLiveState(candidate);
-    if (!st) { console.warn(`[youtube] live lookup: cannot verify ${candidate} (no player response)`); return null; }
+    if (!st) { console.warn(`[youtube] live lookup: cannot verify ${candidate} (no player response)`); return none('unknown'); }
     if (st.channelId !== channelId) {
       console.warn(`[youtube] live lookup: /live resolved to foreign video ${candidate} (owner ${st.channelId || '?'}) — ignored`);
-      return null;
+      // An offline channel's /live page shows a recommendation: answered, and not this channel live.
+      return none('offline');
     }
-    return st.isLiveNow ? candidate : null;
+    return st.isLiveNow ? { state: 'live', videoId: candidate } : none('offline');
   } catch (err) {
     console.warn('[youtube] live lookup failed:', err.message);
-    return null;
+    return none('unknown');
   }
 }
 
@@ -657,7 +675,7 @@ export async function startYouTube(opts = {}) {
   const channelId = opts.channelId || channelIdCfg();
   const onMessage = opts.onMessage || null;
   const tag = onMessage ? 'youtube:relay' : 'youtube';
-  const browser = await chromium.launch({
+  const browser = await launchBrowser({
     headless: true,
     // Latency: YouTube's live-chat client backs off get_live_chat polling when
     // the tab looks hidden. In headless the popout is treated as occluded, so
@@ -750,7 +768,7 @@ export async function startYouTube(opts = {}) {
     try {
       const alert = normalizeYouTubeEvent(data);
       if (alert) {
-        // Ids and amounts only — never the donor's name (review round 5, L14).
+        // Ids and amounts only — never the donor's name.
         console.log(`[youtube] alert ${alert.eventType} event=${alert.eventId ?? '?'} (amount=${alert.amount ?? ''} ${alert.currency ?? ''})`);
         postAlert(alert).catch((e) =>
           console.warn(`[youtube] postAlert FAILED (${alert.eventType} event=${alert.eventId ?? '?'}):`, e.message));
@@ -867,7 +885,7 @@ export async function startYouTube(opts = {}) {
     // ytInitialData-derived boot.token is always anchored to Top chat (see
     // selectLiveChatMode's comment above) and is only a fallback here.
     let token = overrideToken || boot.token;
-    let lastCadenceLog = 0;
+    const cadence = createCadenceReporter();
     let lastTimeoutMs = '?';
     console.log(`[${tag}] api poller started (self-poll ${API_POLL_MS}ms, ignoring server timeoutMs)${overrideToken ? ' [bootstrapped from Live chat switch]' : ' [bootstrapped from ytInitialData — Top chat if a switch was expected]'}`);
     apiPollerFor = pg;
@@ -950,23 +968,25 @@ export async function startYouTube(opts = {}) {
 
         // Heartbeat OUTSIDE the success branch: when chat goes silent this is
         // the line that tells a stalled poller apart from "nobody is chatting".
+        // Judged every 30 s (lib/ytCadence.js); a healthy line is printed every 10 minutes with
+        // the sums since the last one (one per 30 s would be a quarter of the ingest journal).
+        // A window with no successful poll, or with discards, is printed at once.
         const now = Date.now();
-        if (now - lastCadenceLog > 30000) {
-          lastCadenceLog = now;
-          const healthy = cnt.ok > 0;
-          const line =
-            `[${tag}] api cadence: self-poll=${API_POLL_MS}ms serverTimeoutMs=${lastTimeoutMs} seen=${seen.size} ` +
-            `| ok=${cnt.ok} noLcc=${cnt.noLcc} http=${cnt.httpErr} fail=${cnt.fail} rebuilds=${rebuildCount} ` +
+        const due = cadence.check(now, cnt);
+        if (due) {
+          const line = (c, windowS) =>
+            `[${tag}] api cadence (${windowS}s): self-poll=${API_POLL_MS}ms serverTimeoutMs=${lastTimeoutMs} seen=${seen.size} ` +
+            `| ok=${c.ok || 0} noLcc=${c.noLcc || 0} http=${c.httpErr || 0} fail=${c.fail || 0} rebuilds=${rebuildCount} ` +
             // The drain, not the fetch. `txt` is what actually reached the
             // pipeline, so it can be compared straight against chat_log rows
             // for the same window.
-            `| txt=${cnt.txt} ev=${cnt.ev} drop=${cnt.dropText}/${cnt.dropEvent} other=${cnt.other} ` +
+            `| txt=${c.txt || 0} ev=${c.ev || 0} drop=${c.dropText || 0}/${c.dropEvent || 0} other=${c.other || 0} ` +
             `| lastOk=${lastPollOkAt ? Math.round((now - lastPollOkAt) / 1000) + 's ago' : 'never'}`;
-          if (healthy) console.log(line);
-          else console.warn(line + ' — NO SUCCESSFUL POLLS THIS WINDOW');
+          if (due.stalled) console.warn(line(due.stalled, due.windowS) + ' — NO SUCCESSFUL POLLS THIS WINDOW');
+          if (due.healthy) console.log(line(due.healthy.counts, due.healthy.windowS));
           // Loud and greppable: a discard can hide behind a healthy-looking
           // cadence line.
-          if (cnt.dropText || cnt.dropEvent) {
+          if (due.dropped) {
             console.warn(`[${tag}] DISCARDED ${cnt.dropText} text + ${cnt.dropEvent} event item(s) this window — recognised renderers that produced nothing`);
           }
           resetCounts();

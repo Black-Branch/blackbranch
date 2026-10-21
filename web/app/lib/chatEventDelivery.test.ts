@@ -3,7 +3,7 @@
 // The lived bug: streamApiFetch's 10s deadline aborts the WAIT, not
 // stream-api's WORK. A slow DB meant /chat/event went on to credit the
 // ledger, bar and timer while this side saw its abort and refunded the coins
-// — the viewer kept the Qorm AND the bar moved, for every concurrent spend,
+// — the viewer kept the coins AND the bar moved, for every concurrent spend,
 // for the stall's duration. "Never credit both ends" broken by a timeout.
 //
 // Four outcomes, and only two of them may refund:
@@ -224,12 +224,12 @@ test("celebration: an ordinary unclassifiable 5xx is still not retried", async (
   assert.equal(calls, 1);
 });
 
-// ── F2 (review round 5): web's patience covers stream-api's ledger retry window ─────────────
+// ── web's patience covers stream-api's ledger retry window ─────────────
 //
 // stream-api holds a money celebration until its ledger answers, retrying a failed write for
-// ~108 s (alert.js LEDGER_RETRY_MS × LEDGER_MAX_ATTEMPTS). Web gave up after its 10 s deadline and
-// one deduped retry (409 in_flight), and logged "LOST money celebration … NOT credited" for a
-// payment that then landed. A celebration still IN FLIGHT is now followed up in the background
+// ~108 s (alert.js LEDGER_RETRY_MS × LEDGER_MAX_ATTEMPTS). Giving up after a 10 s deadline and
+// one deduped retry (409 in_flight) would log "LOST money celebration … NOT credited" for a
+// payment that then lands. So a celebration still IN FLIGHT is followed up in the background
 // (deduped re-asks on its spendId) for longer than that window, and every log line says what is
 // actually known.
 

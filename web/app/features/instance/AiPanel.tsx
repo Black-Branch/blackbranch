@@ -21,6 +21,7 @@ import { Toggle, Choice } from "@/app/components/SettingsControls";
 import { card, h2, h3, btn, input, chip, ago } from "./parts";
 import { aiSubOf, keyGroupsFor, serviceName, type AiSub } from "./adminLayout";
 import KeyCards from "./KeyCards";
+import HelpdeskPicture, { botMatrixId } from "./HelpdeskPicture";
 import { parseBotBehavior, renderBotBehavior } from "@/app/lib/instanceSchema.generated.mjs";
 
 type Ctx = {
@@ -986,6 +987,7 @@ export default function AiPanel({ sub, inst, reloadInst, note }: {
       {sub === "helpdesk" && (
         <>
           <HelpdeskSwitch />
+          <HelpdeskPicture botId={botMatrixId(inst)} />
           <TasksCard sub="helpdesk" />
           <PromptsCard sub="helpdesk" />
         </>

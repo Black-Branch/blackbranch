@@ -278,10 +278,9 @@ test('frame: the sponsor list is capped at 50 entries, and a capped frame can le
   assert.ok(sum < 99, `a capped frame's weightPct should sum well under 100 (got ${sum})`);
 });
 
-// Review round 2, minor 5a: weightSec ties must sort deterministically, or
-// the 50-cap can select a DIFFERENT set of sponsors across two runs over
-// identical data (the reviewer proved this happens with Map insertion order
-// alone). Two identical insertion orders, reversed, must produce the SAME
+// weightSec ties must sort deterministically, or the 50-cap can select a
+// DIFFERENT set of sponsors across two runs over identical data (Map
+// insertion order alone is enough). Two identical insertion orders, reversed, must produce the SAME
 // sorted output either way.
 test('frame: weightSec ties break deterministically by name, regardless of insertion order', () => {
   const timerA = fakeTimer({ active: true, elapsedSec: 0 });
@@ -346,11 +345,10 @@ test('heartbeatTick: a real state change (elapsed moving the clock) broadcasts i
   assert.equal(broadcasts.length, base + 1);
 });
 
-// Review round 2, IMPORTANT: clockRemainSec ticks down every real second a
-// night runs, so hashing its EXACT value defeated change-detection entirely
-// — the reviewer measured 20/20 broadcasts (every single tick) for a live
-// badge with nothing else changing, instead of the resync-only 5/20. The fix
-// buckets clockRemainSec in the KEY only (buildFrame's own output stays
+// clockRemainSec ticks down every real second a night runs, so hashing its
+// EXACT value defeats change-detection entirely — 20/20 broadcasts (every
+// single tick) for a live badge with nothing else changing, instead of the
+// resync-only 5/20. So clockRemainSec is bucketed in the KEY only (buildFrame's own output stays
 // exact — this is purely about what counts as "changed" for dedup).
 test('heartbeatTick: a live, merely-ticking-down badge with unchanged weights dedups to the resync-only cadence (5 of 20)', () => {
   const broadcasts = [];
@@ -531,19 +529,19 @@ test('init: every support_events fold is NULL-tolerant — a bare `<> ALL` would
 });
 
 test("the exclusion is platform-scoped: an external platform's row sharing a coin-kind event_type is KEPT, not excluded", async () => {
-  // Qorm spends only ever arrive under the site's own platform id (money.js). Before this
-  // fix the SQL excluded on event_type ALONE, so if any external producer
-  // ever wrote event_type='cheer' — not far-fetched: stream-ingest/lib/alerts.js
+  // Currency spends only ever arrive under the site's own platform id (money.js). If the
+  // SQL excluded on event_type ALONE, then once any external producer
+  // wrote event_type='cheer' — not far-fetched: stream-ingest/lib/alerts.js
   // already emits `eventType: 'bits'` with `label: 'cheered'`, and 'sticker' is
   // one rename from 'supersticker' — real platform money would be silently
   // dropped from every fold, the same class of bug as the NULL case above
   // through a different door.
   const events = {
     real: [
-      // Same event_type as a Qorm spend, but a DIFFERENT platform: real
+      // Same event_type as a currency spend, but a DIFFERENT platform: real
       // money, must survive the exclusion.
       { user_id: 'tw1', username: 'TwitchDonor', amount_usd: '7.00', event_type: 'cheer', platform: 'twitch', created_at: new Date('2026-08-22T04:00:00Z') },
-      // The actual Qorm spend this exclusion exists for: same event_type,
+      // The actual currency spend this exclusion exists for: same event_type,
       // the site's own platform — must be excluded.
       { user_id: 'c9', username: 'Sticky', amount_usd: '5.00', event_type: 'cheer', platform: NATIVE_PLATFORM, created_at: new Date('2026-08-22T04:10:00Z') },
     ],
@@ -716,7 +714,7 @@ test('init: previous session replays through the SAME curve as tonight — 0.25x
   const nowStarted = new Date('2026-08-24T00:00:00Z');
 
   // A 2h night with NO seed, priced well above the $24/h floor (a
-  // requiredCentsPerDay-driven price, per the reviewer's scenario) — two
+  // requiredCentsPerDay-driven price) — two
   // hourly blocks with the ramping weight curve actually doing something,
   // not the degenerate single-block flat-rate case the OTHER tests use.
   const durationSec = 2 * 3600;
@@ -767,7 +765,7 @@ test('init: previous session replays through the SAME curve as tonight — 0.25x
 // through sponsors.js from a fixture built off that same timer's own
 // persisted block layout, and assert the post-gold donor's replayed weight
 // equals the live quote exactly (not zero).
-test('init: CRITICAL — a post-gold replay row gets the SAME notional the live path (timer.convertNotional) grants, not zero', async () => {
+test('init: a post-gold replay row gets the SAME notional the live path (timer.convertNotional) grants, not zero', async () => {
   const now = Date.now();
   const liveTimer = createTimer({ broadcast: () => {}, obs: null, pool: null });
   liveTimer.startNight({ endLocal: '+1h', seedSec: 0, priceCents: 3600, now }); // 1h night, flat $0.01/s (rate=1c/s) for hand-checkable numbers
@@ -1046,9 +1044,8 @@ test('replay: a donor whose canonical is linked to a site account is credited un
 });
 
 test('replay: a donor who has NOT chosen to show their links keeps each donation name on its own row — no site name, no aliases', async () => {
-  // Owner decision 2026-10-17: the credit line named a Twitch donation by the site account behind
-  // it and listed the person's other donation names beside it — the cross-platform link, shown to
-  // everyone watching. Without the opt-in neither the site name nor the pairing reaches the wire.
+  // Naming a Twitch donation by the site account behind it, and listing the person's other
+  // donation names beside it, would show the cross-platform link to everyone watching. Without the opt-in neither the site name nor the pairing reaches the wire.
   const events = {
     real: [
       { user_id: 'a605', username: 'CaseyTwitch', amount_usd: '4.00', created_at: new Date('2026-08-22T04:00:00Z') },
@@ -1073,9 +1070,8 @@ test('replay: a donor who has NOT chosen to show their links keeps each donation
     'a live contribution stacks on its own name\'s row, still unpaired');
 });
 
-// Opting OUT must reach the credit line without a restart (security review on this slice): the
-// site name was cached until init(), so a person who switched the link off stayed paired with
-// their donation names on the public frame.
+// Opting OUT must reach the credit line without a restart: a site name cached until init() would
+// keep a person who switched the link off paired with their donation names on the public frame.
 function optInRig() {
   const siteNames = { a605: 'Casey Site' };
   const hiddenSites = {};
@@ -1114,8 +1110,8 @@ test('backstop: without the notice, the periodic re-check sees the opt-out and r
   assert.deepEqual(frames.at(-1).sponsors.map((s) => s.name), ['CaseyTwitch', 'CaseyKick']);
 });
 
-// Overlapping rebuilds (security review): links-changed, a night start and the re-check can all
-// trigger init(); two runs writing into one live pool doubled weights and interleaved names.
+// Overlapping rebuilds: links-changed, a night start and the re-check can all trigger init(); two
+// runs writing into one live pool would double weights and interleave names.
 function countingRig() {
   const seen = [];
   const pool = fakePool({
@@ -1150,7 +1146,7 @@ test('overlapping triggers: one rebuild runs, exactly one more is queued, and th
   assert.equal(sponsors.__test.state.size, 2);
 });
 
-// While a rebuild reads the ledger, the live pool keeps changing (security review): an erasure
+// While a rebuild reads the ledger, the live pool keeps changing: an erasure
 // the swap undid would bring a deleted person back; a credit the swap dropped would lose paid
 // money from the credit line. Both are journaled and replayed onto the rebuilt pool.
 function gatedRig(rows) {
@@ -1221,7 +1217,7 @@ test('the site-name lookup asks only for accounts that show their links', async 
   const q = seen.find((x) => /site\.platform_links/.test(x.sql));
   assert.ok(q, 'vacuity anchor: the lookup ran');
   assert.match(q.sql, /WHERE u\.show_links AND /);
-  // Every account on the canonical must agree (security review): one account's opt-in is not
+  // Every account on the canonical must agree: one account's opt-in is not
   // another's consent. Run against a throwaway Postgres: a canonical carrying an opted-in and a
   // not-opted account gets no site name.
   // The one predicate (pseudonym.js noOptOutSql, both link tables). A canonical whose natively
@@ -1336,7 +1332,7 @@ test('clockFor: a paused night keeps the clock lit (the badge is visible, the pe
   assert.deepEqual(sponsors.clockFor(['c1']), { active: true, remainSec: 300 });
 });
 
-// ── erase: a deleted account leaves the pool (review round 3, P8) ──
+// ── erase: a deleted account leaves the pool ──
 
 test('erase: the deleted person\'s entries leave the pool — by canonical and by every name — and the next frame says so', () => {
   const broadcasts = [];

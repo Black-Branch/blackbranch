@@ -1,10 +1,10 @@
-// webhooks.js: the Streamlabs replay guard (review round 2, R2-3).
+// webhooks.js: the Streamlabs replay guard.
 // Run: node --test webhooks-streamlabs-replay.test.js
 //
-// Streamlabs re-emits its donation history on reconnect, and its handler had
-// no in-memory replay guard (Ko-fi, Patreon and /alert each have one), so a
-// reconnect re-fired the overlay, sound, lights, TTS and chat card for every
-// donation in the replayed history. alert.js now asks the ledger first as the
+// Streamlabs re-emits its donation history on reconnect; without an in-memory
+// replay guard (Ko-fi, Patreon and /alert each have one) a reconnect re-fires
+// the overlay, sound, lights, TTS and chat card for every donation in the
+// replayed history. alert.js asks the ledger first as the
 // durable answer; this guard stops the replay before it gets that far.
 
 'use strict';

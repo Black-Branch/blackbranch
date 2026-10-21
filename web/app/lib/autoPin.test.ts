@@ -3,9 +3,9 @@
 // The threshold scales with active chatters, so a pin at 3 points does not
 // come too cheaply on a busy stream.
 //
-// Pinning costs no Qorm: there is no `pin` row in site.store_prices and no
+// Pinning costs no points: there is no `pin` row in site.store_prices and no
 // /api/points/spend/pin. The threshold is `AUTO_PIN_SCORE`, a NET-UPVOTE
-// count — casting a vote *earns* 1 Qorm, which can make it read like a price.
+// count — casting a vote *earns* 1 point, which can make it read like a price.
 //
 // This file covers the threshold, the 10-minute TTL and tryAutoPin's "never
 // bump a mod's pin" rule; the constant is exported so a change to it has

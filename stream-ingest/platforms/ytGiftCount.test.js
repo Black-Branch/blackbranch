@@ -1,10 +1,9 @@
 // YouTube gifted memberships: the count must survive BOTH scrape paths.
 // Run: node --test platforms/ytGiftCount.test.js
 //
-// Every multi-gift was credited as one membership. Both paths read the count
-// with /gifted\s+(\d+)/ and fell back to 1 in silence, and the banner's wording
-// ("Sent 5 <channel> gift memberships") never matched. The count is now read
-// once, on the Node side, by lib/alerts.js parseGiftCount; each path's job is
+// A /gifted\s+(\d+)/ read with a silent fallback to 1 never matches the banner's
+// wording ("Sent 5 <channel> gift memberships") and credits every multi-gift as
+// one membership. The count is read once, on the Node side, by lib/alerts.js parseGiftCount; each path's job is
 // to deliver the banner's raw text intact. These tests push real-shaped
 // banners through each path end to end — the innertube renderer through
 // ytClassifyItem, the DOM renderer through the in-page observer itself — and

@@ -1,4 +1,4 @@
-// The ONE place web reads the install's owner plugin.
+// The ONE place web reads the install's site plugin.
 //
 // `@owner/plugin` is resolved by the build: app/(owner)/plugin.ts when the owner folder exists,
 // else ./absent/plugin.ts (next.config.ts resolveAlias; tsconfig.json `@owner/*` paths, tried in order). No other
@@ -11,13 +11,13 @@ import { moduleKeyInstalled } from "./moduleKeys.ts";
 
 const plugin: WebPlugin | null = ownerPlugin;
 
-/** Whether a settings key belongs to a module this install has (owner modules need the plugin). */
+/** Whether a settings key belongs to a module this install has (plugin-provided modules need the plugin). */
 export function keyInstalled(key: string): boolean {
   return moduleKeyInstalled(instanceEntry(key)?.module ?? null, MODULES, plugin);
 }
 
-/** Whether this build carries the owner plugin. A build without it is a public install (the
- *  viewer "link YouTube" button exists only on a site with the owner plugin). */
+/** Whether this build carries a site plugin. A build without it is a public install (the
+ *  viewer "link YouTube" button exists only on a site with the plugin). */
 export function ownerPluginInstalled(): boolean {
   return plugin !== null;
 }

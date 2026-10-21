@@ -34,9 +34,9 @@ export const VOTE_COOLING_TITLE =
 // A fixed 3 points is likely too low a bar on a busy stream; scale it with
 // active chatters.
 //
-// Pinning costs no Qorm: there is no `pin` row in site.store_prices and no
+// Pinning costs no points: there is no `pin` row in site.store_prices and no
 // spend route. The "3" is this NET-UPVOTE threshold. Casting a vote *earns* 1
-// Qorm (earnRules), which is easily mistaken for a price.
+// point (earnRules), which is easily mistaken for a price.
 //
 // SCALE SUB-LINEARLY. Measured over 30 days of real votes, joining each voted
 // message to the distinct-author count of its own 15-minute window:

@@ -21,6 +21,9 @@ export const ADMIN_SECTIONS = [
 ] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number]["key"];
 
+/** Where the panel opens when nothing names a place: the site's own settings, not AI. */
+export const ADMIN_HOME: AdminSection = "site";
+
 const AI_SUBS = [
   { key: "models", label: "Models" },
   { key: "bot", label: "Chat Bot" },
@@ -47,6 +50,8 @@ export const SUBS: Record<AdminSection, readonly AdminSub[]> = {
     { key: "bar", label: "Support bar", depth: 1 },
     { key: "effects", label: "Effects", depth: 1 },
     { key: "tts", label: "TTS" },
+    // The stream-api overlay pages and how to add them to OBS (the setup pages do not carry OBS).
+    { key: "overlays", label: "Overlays" },
   ],
   // "Payment history", not "History": no label is in both panels (the mod panel has Mod history).
   payments: [{ key: "history", label: "Payment history" }, { key: "connections", label: "Connections" }],
@@ -137,7 +142,7 @@ const EXTRA_WORDS: Record<string, string> = {
   "ai/scoring": "sentiment temperament intelligence score", "ai/automod": "moderation classify model",
   "ai/helpdesk": "help desk support answers", "ai/embeddings": "memory vectors embed",
   "utility/timer": "subathon clock countdown", "utility/bar": "goal meter colours shape",
-  "utility/effects": "alerts sounds lights scene", "payments/history": "refunds failures totals donations",
+  "utility/effects": "alerts sounds lights scene", "utility/overlays": "obs browser source alert support bar meter bubble poll sticker", "payments/history": "refunds failures totals donations",
   "platforms/player": "embed embeds sources watch page", "site/badges": "badge price unlock", "site/tickets": "help requests bug reports", "site/points": "currency store prices",
   doctor: "health checks logs", updates: "release version upgrade",
 };
@@ -175,7 +180,7 @@ export function isAdminSection(s: string): s is AdminSection {
 }
 
 /** One card of key rows: which section and sub-tab it sits in, its title, its keys in order. */
-/** `ownerOnly`: shown only on an install with an owner plugin (the OBS WebSocket path). */
+/** `ownerOnly`: shown only on an install with a site plugin (the OBS WebSocket path). */
 export type KeyGroup = { section: AdminSection; sub: string | null; title: string; blurb?: string; keys: readonly string[]; ownerOnly?: boolean };
 
 /** Every card, in order — the move table as code.
@@ -189,26 +194,28 @@ export const KEY_GROUPS: readonly KeyGroup[] = [
   { section: "utility", sub: "obs", title: "OBS WebSocket", blurb: "For a server on the same network as OBS: it adds showing and hiding OBS's own sources.", keys: ["obs.url", "obs.password"], ownerOnly: true },
   { section: "utility", sub: "obs", title: "Scenes and sources", blurb: "Used through the OBS WebSocket. OBS finds these by name, so each must match OBS exactly. A name left empty switches off only what it drives.", keys: ["obs.soundSource", "obs.botScene", "obs.botSource", "obs.botShowScene"], ownerOnly: true },
   { section: "utility", sub: "obs", title: "Room lights", blurb: "Used while the room lights module is on (Site → Modules).", keys: ["homeassistant.url", "homeassistant.token"] },
-  { section: "utility", sub: "tts", title: "Voice", keys: ["elevenlabs.apiKey"] },
+  { section: "utility", sub: "tts", title: "Voice", keys: ["tts.enabled", "elevenlabs.apiKey", "tts.voiceCasual", "tts.voiceLoud"] },
   { section: "utility", sub: "tts", title: "Playback", keys: ["tts.sink", "tts.dualVoice", "tts.clipsDir"] },
 
-  { section: "payments", sub: "connections", title: "Stripe", keys: ["stripe.secretKey", "stripe.publishableKey", "stripe.webhookSecret"] },
-  { section: "payments", sub: "connections", title: "PayPal", keys: ["paypal.env", "paypal.clientId", "paypal.clientSecret", "paypal.webhookId"] },
+  { section: "payments", sub: "connections", title: "Stripe", keys: ["stripe.secretKey", "stripe.publishableKey", "stripe.webhookSecret", "stripe.supporterPriceId"] },
+  { section: "payments", sub: "connections", title: "PayPal", keys: ["paypal.env", "paypal.clientId", "paypal.clientSecret", "paypal.webhookId", "paypal.plans"] },
   { section: "payments", sub: "connections", title: "Other", blurb: "Patreon, Ko-fi and Streamlabs.", keys: ["patreon.webhookSecret", "kofi.verificationToken", "streamlabs.socketToken"] },
-  { section: "payments", sub: "connections", title: "Links", blurb: "Where support links point outside the site.", keys: ["money.subscribeUrl", "money.supportLine"] },
+  { section: "payments", sub: "connections", title: "Links", blurb: "Where support links point outside the site.", keys: ["money.subscribeUrl", "money.supportLine", "site.donateUrl"] },
 
   { section: "platforms", sub: "player", title: "Player", blurb: "Which live sources the watch page offers. The Stream tab switches the same setting.", keys: ["player.embedsOff"] },
   { section: "platforms", sub: "youtube", title: "YouTube", keys: ["platform.youtube.channelId", "platform.youtube.vodPlaylist", "youtube.apiKey", "youtube.oauthClientId", "youtube.oauthClientSecret"] },
   { section: "platforms", sub: "twitch", title: "Twitch", keys: ["platform.twitch.channel", "platform.twitch.broadcasterId", "twitch.clientId", "twitch.clientSecret"] },
-  { section: "platforms", sub: "kick", title: "Kick", keys: ["platform.kick.slug", "platform.kick.userId", "kick.clientId", "kick.clientSecret"] },
+  { section: "platforms", sub: "kick", title: "Kick", keys: ["platform.kick.slug", "platform.kick.userId", "kick.clientId", "kick.clientSecret", "kick.chatroomId", "kick.channelId"] },
   { section: "platforms", sub: "streamplace", title: "Streamplace", keys: ["platform.streamplace.did", "platform.streamplace.channel"] },
   { section: "platforms", sub: "discord", title: "Discord", blurb: "The Discord bridge on the community server.", keys: ["discordBridge.usernameTemplate", "discordBridge.displaynameTemplate"] },
 
-  { section: "site", sub: "general", title: "Site", keys: ["site.name", "site.shortName", "site.description", "site.tagline", "site.homeHeading", "site.homeIntro", "site.iconSet", "site.origin", "site.apiOrigin", "site.apiWsOrigin", "site.legacyId"] },
-  { section: "site", sub: "general", title: "Legal", blurb: "Who runs the site, as the Terms, Privacy and About pages name it. Set where the site is built.", keys: ["legal.operator", "legal.contactEmail", "legal.governingLaw", "legal.effectiveDate"] },
+  // The streamer's name first: the one row here a new install edits (the Site card's rows are set
+  // where the site is built).
   { section: "site", sub: "general", title: "Streamer", keys: ["streamer.displayName", "streamer.matrixId", "staff.extraMatrixIds"] },
-  { section: "site", sub: "general", title: "Community server", keys: ["matrix.serverName", "matrix.baseUrl", "matrix.federationServer", "matrix.legacyNamespace", "matrix.federation", "matrix.registration", "matrix.rooms.hub", "matrix.rooms.general", "matrix.oauth.issuer", "matrix.oauth.clientId", "matrix.oauth.clientSecret"] },
-  { section: "site", sub: "general", title: "Sign-in from other servers", blurb: "Who may sign in with an account on another Matrix server. This site's own server always signs in. Server names are matched exactly; a change applies at once, to people already signed in too.", keys: ["auth.federatedSignin", "auth.federatedAllow", "auth.federatedDeny"] },
+  { section: "site", sub: "general", title: "Site", keys: ["site.name", "site.shortName", "site.description", "site.tagline", "site.homeHeading", "site.homeIntro", "site.iconSet", "site.origin", "site.apiOrigin", "site.apiWsOrigin", "site.legacyId"] },
+  { section: "site", sub: "general", title: "Legal", blurb: "Who runs the site, as the Terms, Privacy and About pages name it (set where the site is built), and the liability cap the Terms state (changed here).", keys: ["legal.operator", "legal.contactEmail", "legal.governingLaw", "legal.effectiveDate", "legal.liabilityCapUsd"] },
+  { section: "site", sub: "general", title: "Community server", blurb: "Federation lets other Matrix servers exchange messages with this community's rooms. It does not decide who may sign in here — the next card does.", keys: ["matrix.serverName", "matrix.baseUrl", "matrix.federationServer", "matrix.legacyNamespace", "matrix.federation", "matrix.registration", "matrix.rooms.hub", "matrix.rooms.general", "matrix.oauth.issuer", "matrix.oauth.clientId", "matrix.oauth.clientSecret"] },
+  { section: "site", sub: "general", title: "Sign-in from other servers", blurb: "Who may sign in HERE with an account made on another Matrix server — not federation, which is about servers exchanging messages. This site's own server always signs in. Server names are matched exactly; a change applies at once, to people already signed in too.", keys: ["auth.federatedSignin", "auth.federatedAllow", "auth.federatedDeny"] },
   { section: "site", sub: "general", title: "Health", blurb: "Where alerts for whoever runs the site are pushed.", keys: ["ntfy.wakeUrl", "ntfy.quietUrl"] },
   { section: "site", sub: "general", title: "Running the site", blurb: "Set during setup; change them here.", keys: ["site.timeZone", "site.dataSince", "updates.quietHour", "bugReports.enabled"] },
   { section: "site", sub: "general", title: "Backups", blurb: "Where the nightly backup goes. A change applies at the next backup; run blackbranch backup on the server to try it now.", keys: ["backup.target", "backup.repository", "backup.s3.region", "backup.s3.accessKeyId", "backup.s3.secretAccessKey", "backup.keepDaily", "backup.keepWeekly"] },

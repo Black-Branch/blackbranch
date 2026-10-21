@@ -56,7 +56,7 @@ test("requireMod and isModUser both read the gate row and decide with passesModG
 
 test("a PERMANENT ban of a mod removes the role and logs it; a timeout does not", () => {
   const ban = read("../api/mod/ban/route.ts");
-  // One account's ban (round 5: a ban by canonical runs it for every linked account).
+  // One account's ban (a ban by canonical runs it for every linked account).
   const one = ban.slice(ban.indexOf("async function banAccount"), ban.indexOf("export async function POST"));
   const insert = one.indexOf("INSERT INTO site.bans");
   const revoke = one.indexOf("if (!a.durationMinutes && (await applyModRole(");

@@ -22,19 +22,19 @@ export function publishChatMessage(m: ChatMsg, mentionsMe: boolean): void {
 }
 
 /** Hear every new line while subscribed. Returns the unsubscribe. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function onChatMessage(l: Listener): () => void {
   listeners.add(l);
   return () => { listeners.delete(l); };
 }
 
 /** The last 300 lines published since the page loaded, oldest first, each with its verdict. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export const chatLog = (): readonly { m: ChatMsg; mentionsMe: boolean }[] => recent;
 
 /** The chat list's buffer as it shows it to the viewer (hidden people already left out). */
 export function publishChatBuffer(msgs: readonly ChatMsg[]): void { buffer = msgs; }
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export const liveChatBuffer = (): readonly ChatMsg[] => buffer;
 
 // Your OWN sends from the chat box: published after the send went, with where it went as the
@@ -49,7 +49,7 @@ export function publishOwnSend(text: string, where: string): void {
 }
 
 /** Hear your own chat-box sends while subscribed. Returns the unsubscribe. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function onOwnSend(l: SendListener): () => void {
   sendListeners.add(l);
   return () => { sendListeners.delete(l); };

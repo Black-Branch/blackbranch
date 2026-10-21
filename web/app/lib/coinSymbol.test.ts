@@ -3,13 +3,13 @@
 // Run: node --test --experimental-strip-types app/lib/coinSymbol.test.ts
 //
 // WHY THIS IS A GUARD AND NOT A CODE REVIEW. `¢` is a claim — it says the
-// thing being counted is denominated in US cents — and Qorm is not: it is a
+// thing being counted is denominated in US cents — and points are not: they are a
 // virtual currency spent in the store, never cashed out. A balance chip
 // written "34¢" makes that false claim, so the glyph is not a styling
 // preference that can drift back on the next component someone writes.
 //
 // `¢` REMAINS CORRECT where the number really is dollars: the admin price
-// prompts state the 1 Qorm = 1¢ PURCHASE peg, which is a true statement about
+// prompts state the 1 point = 1¢ PURCHASE peg, which is a true statement about
 // money. Those files are named below. A new file needing `¢` has to be added
 // here deliberately, which is the point — the question "is this number
 // dollars?" gets asked once per site instead of never.
@@ -28,7 +28,7 @@ import { currencySymbol } from "./currency.ts";
 
 const APP = join(import.meta.dirname, "..");
 
-/** Files where `¢` is a true statement about US dollars, not a Qorm quantity.
+/** Files where `¢` is a true statement about US dollars, not a points quantity.
  *  Both are admin-only prompts describing the purchase peg. */
 const USD_SITES = new Set([
   "features/moderation/sections/BadgesSection.tsx",

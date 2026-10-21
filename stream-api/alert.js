@@ -154,7 +154,7 @@ function buildEventCard(kind, body, base, maskFn = (s) => s) {
   if (kind === 'cheer' || kind === 'highlight') {
     // Coin-spend highlighted message. `coins` is the spend amount (1 coin = 1¢);
     // the card carries no dollar take-home field. The accounting (enforced by
-    // money.js KIND_POLICY): Qorm is channel points — a purchase is a private
+    // money.js KIND_POLICY): the currency is channel points — a purchase is a private
     // wallet top-up and a spend is spectacle only, moving nothing (no bar, no
     // timer, no support_events row). A lit sponsor clock pays a 2x
     // participation-earning bonus, which is why a spend must never light one.
@@ -360,7 +360,7 @@ function createAlert({ broadcast, bufferPush, supportBar, obs, tts, lights, logS
         { critical: true },   // money path: this must not wait until morning
       );
     }
-    // R2-2's server half: stream-ingest could not read a gift's count from the
+    // stream-ingest could not read a gift's count from the
     // banner and sent 1. Credit it (a gift happened; economics floors the count
     // at 1, never 0) and say so where a person will see it.
     if (input.countUnverified) {
@@ -439,10 +439,10 @@ function createAlert({ broadcast, bufferPush, supportBar, obs, tts, lights, logS
     // Held refunds took the WHOLE credit back as it landed (money.js, v156): the row and its
     // reversal are written, but money already refunded is not celebrated — no alert, sound,
     // lights, TTS or card (callers skip the card on `refunded`).
-    // The bar and the timer admit the credit's NET of those held refunds (review round 6 D-D, k
-    // 2026-10-18): fully refunded → nothing, partly → the kept part. money.js stores that amount
+    // The bar and the timer admit the credit's NET of those held refunds:
+    // fully refunded → nothing, partly → the kept part. money.js stores that amount
     // on the row (admitted_usd, v159), so the bar's restart rebuild agrees. A refund that arrives
-    // AFTER the credit never takes anything back (unchanged).
+    // AFTER the credit never takes anything back.
     const refunded = !!(rec && rec.refunded);
     const barUsd = rec && rec.admittedUsd != null ? Math.max(0, Number(rec.admittedUsd) || 0) : takeHome;
     if (refunded) {
@@ -485,7 +485,7 @@ function createAlert({ broadcast, bufferPush, supportBar, obs, tts, lights, logS
     }
     // A locked marathon banks the money but buys no time — distinguish that from "too small
     // to move the clock", which is also addedSeconds 0. Only the lock gets the message, and
-    // only for a CONTRIBUTION: a Qorm spend rides this path with takeHome 0.
+    // only for a CONTRIBUTION: a currency spend rides this path with takeHome 0.
     const marathonEnded = barUsd > 0 && addedSeconds === 0 && typeof timerLocked === 'function' && timerLocked();
     return { takeHome, amount, addedSeconds, marathonEnded, ...(refunded ? { refunded: true } : {}) };
   }

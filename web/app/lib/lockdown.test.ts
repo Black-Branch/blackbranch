@@ -227,16 +227,17 @@ test("the mod log records the THRESHOLD, not just that someone touched it", () =
   assert.match(route, /min age off/, "and must distinguish disarmed from a threshold");
 });
 
-test("the panel warns that Kick is held wholesale, at the switch itself", () => {
-  // Unknown-age accounts are withheld, and Kick publishes NO creation
-  // date — so arming this holds every Kick viewer.
-  // That consequence has to be readable where the decision is made; discovered
-  // afterwards it just looks like Kick broke.
+test("the panel says, at the switch itself, which platforms the age lever cannot check — and that it does not hold them", () => {
+  // A platform whose account age cannot be read (all of Kick; Twitch without the app's keys;
+  // YouTube without an API key) is never held (stream-api /lockdown/checkable). Which ones those
+  // are has to be readable where the decision is made — the lever's line comes from the view's
+  // `checkable` through lockdownAge.ts (its own test runs every case).
   const section = stripComments(read("app/features/moderation/sections/LockdownSection.tsx"));
-  assert.match(section, /Kick/, "the age lever must name Kick");
+  assert.match(section, /const age = ageLeverText\(minAge, state\?\.checkable\);/, "the lever's text is built from the checkable answer");
+  assert.match(section, /age\.unknown\.map\(/, "each uncheckable platform gets its own line");
   assert.match(section, /minAccountAgeDays: ageOn \? 0 : DEFAULT_MIN_AGE_DAYS/,
     "the lever must actually toggle the threshold");
-  assert.match(section, /no account age/i, "and must say WHY Kick is affected");
+  assert.match(stripComments(read("app/features/moderation/lockdownAge.ts")), /`Age unknown on \$\{name\} — not held\.`/);
 });
 
 test("lifting the lockdown clears the age lever too", () => {

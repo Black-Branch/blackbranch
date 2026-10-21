@@ -1,7 +1,7 @@
 // One predicate for "this sender is on the account's ignore list", applied by
-// every list that enumerates timeline events. Batch 2 put the rule on the main
-// timeline only; the thread panel, the threads list, the forum list and the
-// typing line each build their own list and used to skip it.
+// every list that enumerates timeline events — not the main timeline only: the
+// thread panel, the threads list, the forum list and the typing line each
+// build their own list, and each must apply it.
 // Run: node --test app/lib/ignoredSender.test.ts
 
 import { test } from "node:test";

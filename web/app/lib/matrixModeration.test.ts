@@ -76,7 +76,7 @@ test("everything succeeded reads as one plain line", () => {
   // ban applied." either (overclaims a platform result the code never
   // observes — fanOutBan is fired after the response and never awaited).
   // Say only what each half actually confirms: the site write, and that the
-  // platform fan-out was SENT, not that it succeeded (re-review defect #1).
+  // platform fan-out was SENT, not that it succeeded.
   assert.deepEqual(lines, ["Banned from 2 channels.", "Site ban applied; platform bans sent."]);
 });
 
@@ -109,10 +109,9 @@ test("a skipped site ban says WHY, and a failed one is its own line", () => {
   assert.equal(refused[1], "Site and platform ban failed: you can't ban the owner.");
 });
 
-// Defect #2: moderationSummary used to take a caller-picked verb string and
-// hardcode the site line to ban vocabulary regardless, so an UNBAN rendered
-// "Unbanned from 20 channels." followed by "Site ban applied." — the opposite
-// of what had just happened. These are the cases that were never exercised.
+// A caller-picked verb string with the site line hardcoded to ban vocabulary
+// would render an UNBAN as "Unbanned from 20 channels." followed by "Site ban
+// applied." — the opposite of what had just happened. These cases pin that.
 test("an unban reads with unban vocabulary on BOTH halves, not ban's", () => {
   const site: SiteOutcome = { attempted: true, ok: true };
   const lines = moderationSummary("unban", [ok("!a", "general"), ok("!b", "politics")], site);

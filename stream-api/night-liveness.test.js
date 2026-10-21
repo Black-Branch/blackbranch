@@ -260,7 +260,7 @@ test('a night ending clears the liveness-paused flag — it does not resume the 
     'a stale liveness-pause flag must not resume a timer once its night has ended');
 });
 
-// ── Fix round 1: the check-then-act race ────────────────────────────────────
+// ── the check-then-act race ─────────────────────────────────────────────────
 //
 // `tick()` reads `timer.snapshot()`, then `await`s `getLive()` — a real DB
 // round trip in production. Anything can happen to the timer during that

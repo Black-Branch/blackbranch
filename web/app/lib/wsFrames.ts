@@ -1,92 +1,48 @@
 import type { ChatMsg } from "./chatMsg";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// stream-api broadcast socket — the WS frame registry (single source of truth).
+// The WS frame registry: every frame the stream-api socket (site.apiWsOrigin)
+// broadcasts, as one variant of `StreamFrame`. Features talk to each other over
+// these typed frames, never by importing one another. The producers are plain JS
+// in stream-api, so this is the contract they are held to (wsFrameContract.test.ts
+// diffs the frame SET against their broadcast() calls) and where typed consumers
+// narrow. Type-only: nothing here runs on the money or broadcast path.
 //
-// Every frame the stream-api WebSocket (site.apiWsOrigin) fans out to
-// connected clients is enumerated here as a variant of the `StreamFrame`
-// discriminated union. This is the decoupling substrate the modular
-// architecture leans on: features talk to each other over these typed frames,
-// never by importing one another. Producers live in stream-api (plain JS, so
-// this type can't yet constrain them at the call site) — this file is the
-// authoritative *contract* the JS side is trusted to honor, and the point where
-// the (typed) consumers get compile-time narrowing.
-//
-// TYPE-ONLY. Nothing here runs on the money/broadcast path. The frames that
-// carry money — `alert` and the /chat/event celebration cards that ride the
-// `message` frame — are DOCUMENTED here but their producers are unchanged.
-//
-// PRODUCER = stream-api file:line that calls `broadcast({ type: … })`.
-// CONSUMER = who branches on the frame. `web` = the Next.js app (narrows on
-//   `data.type`); `overlay` = the OBS browser sources (stream-api/overlay-*.html
-//   plus an install's own rig overlays); `brain` =
-//   stream-ingest's bot (lib/api.js); `none` = nobody, said out loud.
-//   Written as a `+`-joined set with NO spaces, because the `overlay` half of
-//   this column is machine-checked by overlayFrames.test.ts, which parses these
-//   lines.
-// Frames a given consumer doesn't name simply fall through — no consumer runs
-// an exhaustive `assertNever`, so the union may be wider than any one switch.
-//
-// The PRODUCER column below is MODULE:LINE and it goes stale on every edit to
-// stream-api — re-derive it by grepping `type: '<frame>'` across
-// stream-api/*.js rather than trusting a line number. The frame SET is
-// machine-gated by wsFrameContract.test.ts; these locations are NOT.
+// CONSUMER: `web` (the Next.js app), `overlay` (the OBS browser sources),
+// `brain` (stream-ingest's bot), `none`; a `+`-joined set with no spaces, because
+// overlayFrames.test.ts parses that column. PRODUCER names the module only — grep
+// `type: '<frame>'` in stream-api/*.js for the line.
 //
 //  FRAME              PRODUCER (stream-api)              CONSUMER     NOTES
-//  hello              ws-hub.js (first frame on connect) internal     { internal } — the hub's
-//                                                                     verdict on the secret
-//  history            ws-hub.js:98 (on connect)          web          replay of msgBuffer
-//  message            chat.js:372/620, money.js:441/526, web+overlay  full ChatMsg row.
-//                     poll.js:79, alert.js:52                         /chat/event money
-//                                                                     cards ride this frame;
-//                                                                     overlay-poll.html reads it
-//  delete             chat-mod.js:63 / 100               web
-//  purge              chat-mod.js:140 / 176              web          bulk delete, one frame
-//  pin                chat-mod.js:29                     web          forwarded to PinnedBanner
-//  vote               chat-mod.js:18                     web          score correction
-//  chat_settings      chat-mod.js:187                    web          slow-mode (window event)
-//  showSticker        money.js:295 / 306                 overlay
-//  stickerMove        money.js:528                       web          re-sorted ChatMsg row
-//  showSupportBubble  lifecycle.js:50                    overlay      support-bubble.html
-//  resetSupportBar    supportbar.js:59                   overlay      support-bar.html
-//  updateSupportBar   supportbar.js:48                   overlay      (retires with support-bar.html)
-//  meterState         meter.js emit()                    overlay      support meter pill
-//                                                                     (OBS meter.html is the
-//                                                                     only consumer; the site
-//                                                                     bar does not read it)
-//  showAlert          alert.js:34 (built) / 288 (sent)   overlay      alert-overlay.html;
-//                                                                     presentation fields only
-//  timerState         timer.js:88 snapshot()             web+overlay  heartbeat: deltaSec 0
-//  sponsorState       sponsors.js buildFrame()           web+overlay  Fund the Night credit pool;
-//                                                                     overlay = credit.html
-//                                                                     (rotating credit line), web =
-//                                                                     the chat clock badge
-//  badges_changed     chat-mod.js:196                    web          nudge badge refetch
-//  announce           chat-mod.js (/chat/announce)       web          a mod's announcement; never
-//                                                                     buffered
-//  spotlight          chat-mod.js (/chat/spotlight)      web          the streamer's highlighted
-//                                                                     message (null = none);
-//                                                                     replays on connect
-//                                                                     (ws-hub connectFrames)
-//  pollUpdate         poll.js:104 / 245                  web+overlay  live tally, in place
-//  pollEnd            poll.js:230                        web+overlay  final poll state
-//  bot_mode           owner plugin (bot config)          brain
-//  bot_active         owner plugin (bot config)          brain      runtime pause/resume
-//  bot_tools          owner plugin (bot config)          brain      disabled-tool set
-//  config_changed     instance-config.js afterWrite()    web+brain  instance settings written;
-//                                                                     KEY NAMES only — every
-//                                                                     browser hears it. web's
-//                                                                     server + stream-ingest
-//                                                                     re-read their caches
-//  config_test        instance-config.js test()          brain      run a credential's provider
-//                                                                     check in stream-ingest; it
-//                                                                     answers on /config/report
-//  config_ai_probe    ai.js check() via ask()            brain      the AI page's Detect / Test,
-//                                                                     run in stream-ingest; it
-//                                                                     answers on /config/report
-//  config_content_changed content.js after()            brain      a prompt / the facts / the
-//                                                                     behavior file was written;
-//                                                                     stream-ingest re-reads /content
+//  hello              ws-hub.js (first frame)            internal     the hub's verdict on the secret
+//  history            ws-hub.js (on connect)             web          replay of the message buffer
+//  message            chat.js, money.js, poll.js, alert.js web+overlay full ChatMsg row; money cards ride it
+//  delete             chat-mod.js                        web
+//  purge              chat-mod.js                        web          bulk delete, one frame
+//  pin                chat-mod.js                        web          forwarded to PinnedBanner
+//  vote               chat-mod.js                        web          score correction
+//  chat_settings      chat-mod.js                        web          slow mode
+//  showSticker        money.js                           overlay
+//  stickerMove        money.js                           web          re-sorted ChatMsg row
+//  showSupportBubble  lifecycle.js                       overlay      support-bubble.html
+//  resetSupportBar    supportbar.js                      overlay      support-bar.html
+//  updateSupportBar   supportbar.js                      overlay      support-bar.html
+//  meterState         meter.js emit()                    overlay      meter.html only
+//  showAlert          alert.js                           overlay      alert-overlay.html; presentation only
+//  timerState         timer.js snapshot()                web+overlay  heartbeat: deltaSec 0
+//  sponsorState       sponsors.js buildFrame()           web+overlay  credit.html + the chat clock badge
+//  badges_changed     chat-mod.js                        web          nudge a badge refetch
+//  announce           chat-mod.js (/chat/announce)       web          never buffered
+//  spotlight          chat-mod.js (/chat/spotlight)      web          replays on connect
+//  pollUpdate         poll.js                            web+overlay  live tally, in place
+//  pollEnd            poll.js                            web+overlay  final poll state
+//  bot_mode           site plugin (bot config)           brain
+//  bot_active         site plugin (bot config)           brain        runtime pause/resume
+//  bot_tools          site plugin (bot config)           brain        disabled-tool set
+//  config_changed     instance-config.js afterWrite()    web+brain    key NAMES only
+//  config_test        instance-config.js test()          brain        answers on /config/report
+//  config_ai_probe    ai.js check() via ask()            brain        answers on /config/report
+//  config_content_changed content.js after()             brain        stream-ingest re-reads /content
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** A message id on the wire is a platform string id or a numeric native id. */
@@ -235,8 +191,8 @@ export type StreamFrame =
       type: "sponsorState";
       sponsors: {
         /** The name chat shows for this person: the linked site account's
-         *  display_name when there is one (a Streamlabs "GadgetFan" is
-         *  credited as "Gadget Qorm"), else the name the money arrived under. */
+         *  display_name when there is one (a Streamlabs "GadgetFan" is credited
+         *  under their site name), else the name the money arrived under. */
         name: string;
         /** Other names this identity was credited under — the platform
          *  donation names when `name` is a site display name. The chat clock

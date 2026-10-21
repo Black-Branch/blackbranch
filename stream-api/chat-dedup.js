@@ -20,16 +20,16 @@ function capMap(map, max) {
 // Canonical text for dedup matching: decode entities, lowercase, collapse ws,
 // and strip invisible codepoints platforms silently drop — YouTube echoes
 // "㊗️" (U+3297 + U+FE0F emoji variation selector) back as bare "㊗", which
-// leaked cross-post echoes as duplicate lines. Variation selectors (FE00-FE0F),
+// unstripped shows cross-post echoes as duplicate lines. Variation selectors (FE00-FE0F),
 // zero-widths (200B-200D), BOM and the TAG block (E0000-E007F) are
 // presentation-only, so removing them from the KEY (both arm and echo sides)
 // can't over-match visible-different text.
 // The TAG block is ADDED, not incidental: web escapes a leading `.`/`/` with
 // U+E0000 so Twitch stops command-parsing it (web/app/lib/outgoingText.ts).
 // We arm on the unescaped text, so without this the escaped echo comes back
-// unmatched and renders as a duplicate — the exact symptom being fixed.
+// unmatched and renders as a duplicate.
 // URLs collapse to scheme+host: platforms rewrite links in their echo (YouTube
-// truncates the display text — "…/stat..." — which leaked send-to-all link
+// truncates the display text — "…/stat..." — which would show send-to-all link
 // messages as duplicates), so the path can't be trusted to round-trip. Host +
 // surrounding text + the expected-platform scoping keeps the match safe.
 function normText(s) {

@@ -17,6 +17,8 @@ type LinkedAccount = {
   scopes: string | null;
   /** Config scopes this link was granted WITHOUT — non-empty ⇒ relink upgrades it. */
   missingScopes: string[];
+  /** The platform refused this link's refresh (v160, platformTokens.ts): it needs reconnecting. */
+  expired: boolean;
 };
 
 export async function GET() {
@@ -30,8 +32,9 @@ export async function GET() {
       account_display_name: string | null;
       linked_at: Date;
       scope: string | null;
+      refresh_failed_at: Date | null;
     }>(
-      `SELECT provider, provider_account_id, account_display_name, linked_at, scope
+      `SELECT provider, provider_account_id, account_display_name, linked_at, scope, refresh_failed_at
        FROM site.accounts
        WHERE matrix_id = $1 AND type IN ('oauth', 'atproto')
        ORDER BY linked_at DESC`,
@@ -49,24 +52,21 @@ export async function GET() {
     linkedAt: r.linked_at.toISOString(),
     scopes: r.scope,
     missingScopes: missingScopes(r.provider, r.scope, isMod),
+    expired: r.refresh_failed_at !== null,
   }));
 
   // The env-derived platform availability, so the profile card's Linked
   // Accounts panel can render without its own server page.
   const configured: string[] = getConfiguredPlatforms().filter((p) => viewerMayLink(p));
   if (process.env.ATPROTO_PRIVATE_JWK) configured.push("streamplace");
-  // Platforms shown greyed-out as "coming soon" (currently none).
-  const pendingPlatforms: string[] = [];
-  const configuredPlatforms = configured.filter(p => !pendingPlatforms.includes(p));
-
-  return Response.json({ accounts, configuredPlatforms, pendingPlatforms, showLinks });
+  return Response.json({ accounts, configuredPlatforms: configured, showLinks });
 }
 
 // One switch per person per few seconds: each save rebuilds stream-api's sponsor pool.
 const showLinksCooldown = createCooldown(3_000);
 
 // PATCH { showLinks: boolean } — the person's own "show my linked platforms on my profile" switch
-// (site.users.show_links, v153; owner decision 2026-10-17). Off by default: nobody else sees which
+// (site.users.show_links, v153). Off by default: nobody else sees which
 // platforms a person is on, or which site account a platform name is, until they turn this on.
 // Mods see the link either way. Saving it tells stream-api, so the credit line follows at once.
 export async function PATCH(req: Request) {

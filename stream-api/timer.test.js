@@ -483,13 +483,12 @@ test('a failed load RETRIES — it never carries on with a fresh night', async (
     'the startup line must state the night it came up holding');
 });
 
-// ── Fix round 1 ─────────────────────────────────────────────────────────────
+// ── reset mid-night ─────────────────────────────────────────────────────────
 
 test('reset mid-night banks the ember and cannot overhang the end of the night', () => {
-  // `reset()` was the last writer of the anchor that did not go through
-  // reanchor(). During a night that lost every streamed second since the last
-  // anchor, and — because it also skipped clampRemaining — it could plant the
-  // frontier past `durationSec`, which is territory nobody bought and which
+  // `reset()` writes the anchor through reanchor() and clampRemaining. Without
+  // reanchor() a night loses every streamed second since the last anchor, and
+  // without clampRemaining it can plant the frontier past `durationSec`, which is territory nobody bought and which
   // night-math refuses to price.
   const t = nightTimer({ gapSec: 600, elapsedSec: 3600, durationSec: 25200 });
   t.setConfig({ baseSec: 86400 }); // a base far past the end of the night
@@ -515,8 +514,8 @@ test('reset on the LEGACY path still ignores the cap, exactly as before', () => 
 });
 
 test('ending a night must not erase the night that just ran', async () => {
-  // `liveElapsed()` returned 0 whenever `night.active` was false, and both
-  // reanchor() and persist() write that return value — so the next mutation or
+  // If `liveElapsed()` returned 0 whenever `night.active` is false, then — since
+  // both reanchor() and persist() write that return value — the next mutation or
   // heartbeat after a night ended would zero the ember in memory AND in the
   // row. The night's own record of how long it ran is not something a
   // deactivation may destroy; frozen, not zeroed.
@@ -1017,7 +1016,7 @@ test('lockAtZero is RETIRED during a night — the revival donation is never ref
   assert.ok(t.adjust('5m', 1) > 0, 'a mod could not add time either');
 });
 
-// ── Fix round 1 ─────────────────────────────────────────────────────────────
+// ── endNight and the marathon cap ───────────────────────────────────────────
 
 test('endNight hands the clock back INSIDE the marathon cap, never above it', () => {
   // A night can legitimately end with a gap larger than `cap_sec` — a 9h night
@@ -1240,7 +1239,7 @@ test('pauseRetroactive clips the refund at the elapsed FLOOR, keeping the fronti
   assert.equal(frontierAfter, frontierBefore, 'clipping the refund must still conserve the frontier');
 });
 
-// ── Fix round 1 (reviewer): defense in depth against night-liveness's own
+// ── defense in depth against night-liveness's own
 // check-then-act race, and matching the sibling mutators' return contract ──
 
 test('pauseRetroactive on a night that is already NOT RUNNING is a no-op — a frozen clock owes no refund', () => {

@@ -5,6 +5,7 @@
 // good answer, and before the first one each fact falls back to web's own reading.
 
 import { headers } from "next/headers";
+import pool from "@/lib/db";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { instanceBool, instanceResolve, instanceString } from "@/app/lib/instanceConfigServer";
 import { servingSnapshot, modulesShown } from "@/app/lib/moduleRunningServer";
@@ -15,6 +16,9 @@ import { paypalConfigured } from "@/app/lib/paypalClient";
 import { TIERS } from "@/app/lib/tiers";
 import { currencyName } from "@/app/lib/currency";
 import { hostFile, hostRequestsAvailable } from "@/app/lib/hostRequests";
+import { chatPlatformsSetUp } from "@/app/lib/streamPlatformsServer";
+import { vodPlaylist } from "@/app/lib/vodPlaylist";
+import { INSTANCE_KEYS } from "@/app/lib/instanceSchema.generated.mjs";
 import type { AiRoutesSnapshot } from "@/app/lib/aiAdminView";
 import { PRUNE_AFTER_DAYS } from "@/app/api/client-error/route";
 import { HOMESERVER_DEFAULT_RETENTION_DAYS, HOMESERVER_GENERAL_RETENTION_DAYS } from "./homeserverRetention";
@@ -61,9 +65,23 @@ async function throughCloudflare(): Promise<boolean> {
   return host?.mode === "tunnel";
 }
 
+/** Is a news feed switched on? Its items' pictures load from the publisher. A failed read says
+ *  yes: naming a service the page does not use is the smaller error. */
+async function newsFeedOn(): Promise<boolean> {
+  return pool
+    .query<{ on: boolean }>(`SELECT EXISTS (SELECT 1 FROM site.rss_feeds WHERE enabled) AS on`)
+    .then((r) => r.rows[0]?.on === true, () => true);
+}
+
+/** legal.liabilityCapUsd as saved, else the schema's default (its bounds keep it whole dollars). */
+function liabilityCapUsd(): number {
+  const v = instanceResolve("legal.liabilityCapUsd").value;
+  return typeof v === "number" && Number.isFinite(v) ? v : Number(INSTANCE_KEYS.find((k) => k.key === "legal.liabilityCapUsd")?.default);
+}
+
 export async function legalFacts(): Promise<LegalFacts> {
-  const [cfg, routes, youtube, cloudflare] = await Promise.all([
-    servingSnapshot(), aiRoutes(), youtubeUse(), throughCloudflare(),
+  const [cfg, routes, youtube, cloudflare, news] = await Promise.all([
+    servingSnapshot(), aiRoutes(), youtubeUse(), throughCloudflare(), newsFeedOn(),
   ]);
   return legalFactsFrom({
     cfg, routes,
@@ -75,6 +93,9 @@ export async function legalFacts(): Promise<LegalFacts> {
     paypal: paypalConfigured(),
     pointsPurchase: instanceBool("currency.purchasable"),
     currencyName: currencyName(),
+    twitch: chatPlatformsSetUp().twitch,
+    liabilityCapUsd: liabilityCapUsd(),
+    thirdPartyImages: { vods: !!vodPlaylist(), news },
     cloudflare,
     homeserverRetention: hostRequestsAvailable()
       ? { dms: HOMESERVER_DEFAULT_RETENTION_DAYS, general: HOMESERVER_GENERAL_RETENTION_DAYS }

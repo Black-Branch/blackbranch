@@ -245,7 +245,7 @@ test("the setup lists are well-formed, and a bad shape fails check:instance-sche
       "a step with nothing to do": withStep({ links: [], paste: [], fields: [], test: null }),
       "a duplicate step id": MODULES.map((m) => (m.id === "obs" ? { ...m, setup: [step0, step0] } : m)),
       "an empty list": MODULES.map((m) => (m.id === "obs" ? { ...m, setup: [] } : m)),
-      "setup on an owner plugin": MODULES.map((m) => (m.id === "radio" ? { ...m, setup: obs.setup } : m)),
+      "setup on a site-plugin module": MODULES.map((m) => (m.id === "radio" ? { ...m, setup: obs.setup } : m)),
     };
     for (const [what, modules] of Object.entries(broken)) {
       assert.ok(setupProblems({ modules, core: SETUP_CORE, keys: INSTANCE_KEYS }).length > 0, `${what}: no problem reported`);

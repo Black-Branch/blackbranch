@@ -45,7 +45,7 @@ export default function PollComposer({ onClose }: { onClose: () => void }) {
       onClose();
     } catch (e) {
       if (e instanceof HttpError && e.status === 403) {
-        setError("Polls are a subscriber perk — subscribe to start one!");
+        setError("Polls are a Supporter perk — subscribe to start one!");
       } else if (e instanceof HttpError && e.status === 409) {
         setError("A poll is already running — wait for it to finish.");
       } else {

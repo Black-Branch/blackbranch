@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { lsGet, lsSet } from "./safeLocalStorage.ts";
 import { Q_TOUCH_PRIMARY } from "./deviceQueries.ts";
 import { raisesKeyboard } from "./keyboardEditable.ts";
+import { DEBUG_FLAGS_ON } from "./debugFlags.ts";
 
 // Keep the app shell above the on-screen keyboard.
 //
@@ -564,13 +565,13 @@ export function useViewportHeightVar(): void {
     }
 
     // ── Diagnostics: add ?kbdebug=1 to the URL for a live readout ───────────
-    // Three phone/browser combinations have now failed in three different ways
+    // Three phone/browser combinations have failed in three different ways
     // (Firefox revert, Firefox back-button close, Chrome-tab under-keyboard),
     // and a screenshot with numbers beats any description. Overlay-only, no
     // behaviour change; pointer-events none so it cannot swallow taps.
     let dbgTimer: ReturnType<typeof setInterval> | null = null;
     let liftListener: ((e: Event) => void) | null = null;
-    if (/[?&]kbdebug/.test(location.search)) {
+    if (DEBUG_FLAGS_ON && /[?&]kbdebug/.test(location.search)) {
       const box = document.createElement("div");
       box.style.cssText =
         "position:fixed;top:4px;left:4px;z-index:2147483647;background:rgba(0,0,0,.85);" +
@@ -708,10 +709,9 @@ export function useViewportHeightVar(): void {
           winLine = `win FALLBACK(${fb.className.includes("sheet") ? "sheet" : "page"}) h ${Math.round(fr.height)} top ${Math.round(fr.top)} act ${document.activeElement?.tagName ?? "-"}`;
         }
         box.textContent =
-          // One path now. `vkApi` says whether this browser even HAS the
+          // One path. `vkApi` says whether this browser even HAS the
           // VirtualKeyboard API, and `standalone` whether this is the installed
-          // app — the two facts that used to select a different code path, kept
-          // visible so "which path am I on" can never be a mystery again.
+          // app — both kept visible so "which path am I on" is never a mystery.
           `path measure  vkApi ${vk ? "yes" : "no"}  standalone ${!!window.matchMedia?.("(display-mode: standalone)")?.matches}\n` +
           `vv.h ${vv.height.toFixed(1)}  off ${vv.offsetTop.toFixed(1)}\n` +
           `innerH ${window.innerHeight}  dvh ${dvhProbe.offsetHeight}\n` +

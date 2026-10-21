@@ -688,7 +688,7 @@ test("the keyboard law reaches the window-opening triggers: avatar button and Li
     "the avatar button lost keepFocus — tapping it mid-typing closes the keyboard and rides the account card down");
   // vacuity anchor — the END of the file, so a truncated read cannot pass
   assert.match(menu, /<\/>\s*\);\s*\}\s*$/, "vacuity anchor: UserMenu's real tail");
-  // The radio's Library triggers are the owner plugin's (app/(owner)/), in a tree that has it.
+  // The radio's Library triggers are a site plugin's (app/(owner)/), in a tree that has it.
   if (!existsSync(join(WEB, "(owner)"))) return;
   const np = readFileSync(join(WEB, "(owner)", "_radio", "RadioPlayer", "NowPlaying.tsx"), "utf8");
   const libButtons = np.match(/onClick=\{p\.onOpenPlaylist\} onMouseDown=\{keepFocus\}/g) ?? [];
@@ -1086,8 +1086,8 @@ test("a baseline taken mid-entry does not carry panel-seam-in's slide — the Re
   // The effect baselines one frame after mount, while the entry is still
   // sliding on `transform`; the observer's initial delivery lands a frame or
   // two later, further along the slide. A top read that carried the slide
-  // read that progress as growth and fired a follow on every open (final
-  // review). layoutTop subtracts the panel's own transform.
+  // read that progress as growth and fired a follow on every open.
+  // layoutTop subtracts the panel's own transform.
   const f = liftFixture();
   try {
     const setH = stubHeight(f.dlg, 380);

@@ -50,8 +50,8 @@ export function useStreamStatusPoll(
 
   // The tab title carries the one fact a backgrounded viewer wants — is the
   // stream on. Owned here because this hook owns live state,
-  // and nothing else in the app writes document.title (verified in the
-  // review, and the reason a plain assignment is safe).
+  // and nothing else in the app writes document.title (the reason a plain
+  // assignment is safe).
   useEffect(() => {
     document.title = live ? `🔴 LIVE — ${siteName()}` : siteName();
   }, [live]);
@@ -102,8 +102,8 @@ export function useStreamStatusPoll(
         })
         .catch(() => {});
     poll();
-    // A backgrounded tab USED to skip the poll ("nothing it learns is
-    // visible") — the LIVE tab title (above) killed that premise: the title is
+    // A backgrounded tab does NOT skip the poll: "nothing it learns is
+    // visible" is false because of the LIVE tab title (above) — the title is
     // exactly what a hidden tab shows. One tiny status GET per 30s is the
     // price of the going-live signal reaching pinned tabs. The
     // visibility-return poll below stays: the tab auto-switch is

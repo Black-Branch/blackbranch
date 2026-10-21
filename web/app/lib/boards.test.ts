@@ -99,14 +99,14 @@ test("rankOf: the caller's first matching key, by any of their identities", () =
 
 test("END anchor", () => { assert.match(src, /\}\s*$/); });
 
-// ── Owner decision 2026-10-17: a board never shows the cross-platform link ──────────────────
+// ── A board never shows the cross-platform link ─────────────────────────────────────────────
 // The SQL below was run against a throwaway Postgres with the baseline schema: a person linked to
 // a site account that has NOT opted in ranks as two rows (their site lines under the site
 // account, their Twitch lines under 'c:<canonical>|twitch'); an opted-in person ranks as one; the
 // erased-person row never appears.
 
 test("a platform line counts for the site account only when that account shows its links", () => {
-  // EVERY account on the canonical must agree (security review): two accounts on one canonical,
+  // EVERY account on the canonical must agree: two accounts on one canonical,
   // one opted in, ranks the platform line apart — run on the throwaway Postgres too.
   // The one consent predicate (linkConsent.ts — both link tables), for the row and the avatar.
   assert.match(src, /\(MIN\(i\.matrix_id\) IS NOT NULL AND \$\{noOptOutSql\("i\.canonical"\)\}\) AS show_links/);

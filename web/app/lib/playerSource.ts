@@ -49,7 +49,7 @@ export function parseLiveSource(stored: string | null): LiveSource | null {
 }
 
 /**
- * The pre-slice-6 pair, read once when the new key is absent. `embed_source`
+ * The legacy pair, read once when the new key is absent. `embed_source`
  * was sp|yt|tw (anything else meant sp) and `chatStyle_spThinPlayer` was "1"
  * for the in-house opt-in — which only ever applied on sp.
  */
@@ -103,14 +103,32 @@ export function availableSources(opts: { live: boolean; hasCommunity: boolean; f
 }
 
 /**
- * The live sources the watch page offers, in the Live row's order: every one but those the
- * `player.embedsOff` setting switches off (the Stream tab's embed switches). Unknown names are
- * ignored. FAIL OPEN: a setting that switches every source off is ignored — a player with no
- * source is a dark site.
+ * The live sources this install has a channel for: the site's player and the
+ * stream.place embed need the stream.place channel, YouTube a channel id (and its module shown),
+ * Twitch a channel. A source without one would play an empty embed (`channel=`) — and could be
+ * the first-time viewer's default.
  */
-export function liveSourcesOn(embedsOff: readonly string[]): LiveSource[] {
-  const on = LIVE_SOURCES.filter((s) => !embedsOff.includes(s));
-  return on.length ? on : [...LIVE_SOURCES];
+export function liveSourcesSetUp(c: { streamplaceChannel: string; youtubeChannelId: string; youtubeShown: boolean; twitchChannel: string }): LiveSource[] {
+  const has: Record<LiveSource, boolean> = {
+    native: !!c.streamplaceChannel.trim(),
+    streamplace: !!c.streamplaceChannel.trim(),
+    youtube: !!c.youtubeChannelId.trim() && c.youtubeShown,
+    twitch: !!c.twitchChannel.trim(),
+  };
+  return LIVE_SOURCES.filter((s) => has[s]);
+}
+
+/**
+ * The live sources the watch page offers, in the Live row's order: every one set up (`setUp`,
+ * liveSourcesSetUp — default: all) but those the `player.embedsOff` setting switches off (the
+ * Stream tab's embed switches). Unknown names are ignored. FAIL OPEN among the set-up ones: a
+ * setting that switches every one of them off is ignored — a player with no source is a dark
+ * site. With NONE set up the answer is empty, and the player says so (StreamPlayerArea).
+ */
+export function liveSourcesOn(embedsOff: readonly string[], setUp: readonly LiveSource[] = LIVE_SOURCES): LiveSource[] {
+  const ready = LIVE_SOURCES.filter((s) => setUp.includes(s));
+  const on = ready.filter((s) => !embedsOff.includes(s));
+  return on.length ? on : ready;
 }
 
 /** A remembered live source that is switched off plays the first one still on. Nothing stored is
@@ -151,7 +169,7 @@ export function sourceFromState(s: PlayerState): PlayerSource | null {
 /** Icon + tooltip for a source. `platform` keys into PlatformIcon's PATHS. */
 export const SOURCE_META: Record<LiveSource | "community", { label: string; platform: string | null }> = {
   native:      { label: `${siteName()} player`, platform: "native" },
-  streamplace: { label: "stream.place",     platform: "streamplace" },
+  streamplace: { label: "Streamplace",      platform: "streamplace" },
   youtube:     { label: "YouTube",          platform: "youtube" },
   twitch:      { label: "Twitch",           platform: "twitch" },
   community:   { label: "Community",        platform: "community" },

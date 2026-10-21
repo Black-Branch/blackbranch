@@ -5,8 +5,8 @@
 // operations.
 //
 // THE INVARIANT under test everywhere: the split sums to the balance, and no
-// bucket ever goes negative. If either breaks, the module is claiming Qorm
-// exists that does not, or losing Qorm that does.
+// bucket ever goes negative. If either breaks, the module is claiming coins
+// exist that do not, or losing coins that do.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -188,7 +188,7 @@ test("a losing market position leaves its provenance at risk, not in the balance
   // Pro-rata: the 500 staked was 40% earned / 60% purchased, like the wallet.
   assert.equal(atRiskInMarkets.earned, 200);
   assert.equal(atRiskInMarkets.purchased, 300);
-  // This is the number an "only earned Qorm may be at risk" rule constrains,
+  // This is the number an "only earned coins may be at risk" rule constrains,
   // and it is NOT the same as the balance's split — which is the whole reason
   // atRiskInMarkets is tracked separately rather than inferred.
 });
@@ -331,7 +331,7 @@ test("an ordinary participant is never classified as an owner", () => {
 test("PRODUCT_DRAIN holds the invariant over 300 random ledgers", () => {
   // The non-uniform policy is where the invariant is most at risk: a debit and
   // the credit that reverses it now resolve their policy separately, so a
-  // mismatch would silently lose or invent Qorm rather than throwing.
+  // mismatch would silently lose or invent coins rather than throwing.
   for (let seed = 1; seed <= 300; seed++) {
     const entries = randomLedger(seed, 60);
     const { split, atRiskInMarkets, spentOnSinks, debt } = attribute(entries, PRODUCT_DRAIN);
@@ -352,7 +352,7 @@ test("PRODUCT_DRAIN holds the invariant over 300 random ledgers", () => {
 
 test("a store spend drains PURCHASED first, leaving the earned pool intact", () => {
   // The half of the rule that makes the other half generous rather than
-  // punitive: bought Qorm leaves through the store, so earned Qorm stays earned.
+  // punitive: bought coins leave through the store, so earned coins stay earned.
   const { split } = attribute([
     { kind: "purchase", delta: 500 },
     { kind: "earn_chat", delta: 300 },
@@ -365,7 +365,7 @@ test("a store spend drains PURCHASED first, leaving the earned pool intact", () 
 
 test("(legacy) a market buy took only earned Qorm, never the purchased pool", () => {
   // THE POINT OF THE PHASE. A wallet holding both could stake only what it
-  // had earned; the purchased Qorm stayed untouched and spendable in the store.
+  // had earned; the purchased coins stayed untouched and spendable in the store.
   const { split, atRiskInMarkets } = attribute([
     { kind: "purchase", delta: 500 },
     { kind: "earn_chat", delta: 300 },
@@ -378,7 +378,7 @@ test("(legacy) a market buy took only earned Qorm, never the purchased pool", ()
 });
 
 test("(legacy) winnings were staked BEFORE earned, and count as earned again after a win", () => {
-  // Winnings had to be re-stakeable or winning would have locked that Qorm out
+  // Winnings had to be re-stakeable or winning would have locked those coins out
   // of the market forever. And they went first because they were the most
   // restricted pool.
   const { split } = attribute([
@@ -408,7 +408,7 @@ test("STAKE_TAIL_IS_NOT_DEAD — a pre-Phase-3 commingled trade still folds", ()
   // code" breaks exactly the wallets that traded earliest.
   const entries: LedgerEntry[] = [
     { kind: "purchase", delta: 500 },
-    { kind: "market_buy", delta: -400 },  // no earned Qorm at all
+    { kind: "market_buy", delta: -400 },  // no earned coins at all
   ];
   const { split, atRiskInMarkets } = attribute(entries, PRODUCT_DRAIN);
   assert.equal(splitTotal(split), balanceOf(entries), "the invariant must survive history");
@@ -439,9 +439,9 @@ test("(legacy) a PARTIAL exit from a commingled position cannot inflate the earn
   // old ones unchanged.
   const entries: LedgerEntry[] = [
     { kind: "purchase", delta: 500 },
-    { kind: "market_buy", delta: -400 },  // before the earned-only rule: staked purchased Qorm
+    { kind: "market_buy", delta: -400 },  // before the earned-only rule: staked purchased coins
     { kind: "earn_chat", delta: 300 },
-    { kind: "market_buy", delta: -300 },  // and later, earned Qorm
+    { kind: "market_buy", delta: -300 },  // and later, earned coins
     { kind: "market_sell", delta: 300 },  // a PARTIAL exit
   ];
   const { split, atRiskInMarkets } = attribute(entries, PRODUCT_DRAIN);
@@ -472,7 +472,7 @@ test("earnedBalance is the parenthetical's number: earned + winnings, nothing pu
   assert.equal(earnedBalance(split), 47);
 });
 
-// ── Money-bought Qorm: tip / clawback / clawback_reversed ──
+// ── Money-bought coins: tip / clawback / clawback_reversed ──
 
 test("a tip is money-backed Qorm", () => {
   const a = attribute([{ kind: "tip", delta: 500 }], PRODUCT_DRAIN);
@@ -522,12 +522,12 @@ test("a won dispute restores money-backed Qorm (and pays debt first)", () => {
   assert.equal(a.split.purchased, 0); // 500 restored, all of it paid the 500 debt
 });
 
-// ── fix round 1: grantsReceived must count a grant even when debt eats it ──
+// ── grantsReceived must count a grant even when debt eats it ──
 
 test("grantsReceived counts an admin_adjust FULLY absorbed by debt repayment", () => {
-  // Reviewer-reproduced regression: the debt-payoff `continue` used to exit
-  // before grantsReceived was incremented, so a grant that arrived while the
-  // wallet owed money vanished from the lifetime count entirely.
+  // The regression this pins: a debt-payoff `continue` that exits before
+  // grantsReceived is incremented makes a grant that arrived while the wallet
+  // owed money vanish from the lifetime count entirely.
   const a = attribute([
     { kind: "clawback", delta: -100 },
     { kind: "admin_adjust", delta: 50 },

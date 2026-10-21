@@ -231,7 +231,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Word blocklist: severity decides the outcome (v84) ────────────────────
-  // Was a flat reject with no record, which taught a mod nothing about who kept
+  // A flat reject with no record would teach a mod nothing about who keeps
   // trying. `classify` is pure and in-memory (µs); the review row is written
   // fire-and-forget, and only for a message that is not being delivered anyway —
   // so a clean send pays nothing new.
@@ -302,7 +302,7 @@ export async function POST(req: NextRequest) {
     if (!tier) {
       return Response.json({ error: "supporter_only" }, { status: 403 });
     }
-    // Social credit ≥ 1. The right currency BECAUSE IT CANNOT BE BOUGHT — Qorm
+    // Social credit ≥ 1. The right currency BECAUSE IT CANNOT BE BOUGHT — points
     // can, and a purchasable anti-abuse gate is one a bad actor buys through.
     // A threshold only; nothing is spent.
     // reads.link is awaited here as well as further down; a settled promise
@@ -323,7 +323,7 @@ export async function POST(req: NextRequest) {
   // pronouns on the canonical identity and are not posted as chat. stream-api's
   // /identity/pronoun-command is the ONE parser — platform chat asks it too — so
   // every `!` line is offered to it; anything it does not claim posts as normal.
-  // One it cannot read answers with the usage line (it used to post silently).
+  // One it cannot read answers with the usage line rather than posting silently.
   if (message.trimStart().startsWith("!")) {
     const r = await askPronounCommand({ text: message, matrixId });
     if (r?.matched) {

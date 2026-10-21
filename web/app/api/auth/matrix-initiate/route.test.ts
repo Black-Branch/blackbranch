@@ -1,6 +1,6 @@
 // Source scan: matrix-initiate re-checks the endpoints the browser sends (federatedSignIn.ts
 // initiateEndpointsProblem — tested there), SIGNS the state cookie, and logs at most 2 KiB of an
-// outside server's error body. A `javascript:` authorize endpoint used to be turned into the URL
+// outside server's error body, so a `javascript:` authorize endpoint is never turned into the URL
 // the sign-in page navigates to.
 import { test } from "node:test";
 import assert from "node:assert/strict";

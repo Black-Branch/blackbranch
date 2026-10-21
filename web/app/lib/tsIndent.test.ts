@@ -40,7 +40,7 @@ test("applyWrap measures the time and sets the width vars — once per frame", (
   assert.match(body, /"--chat-ts-shown-w"/);
   assert.match(body, /tsIndentWidth\(fmt\)/, "the ch table stays as the fallback (and the pre-paint's first frame)");
   // A full settings apply calls applyWrap from ~8 effects; each measurement
-  // forces a whole-page layout. They coalesce into ONE per frame (final review).
+  // forces a whole-page layout. They coalesce into ONE per frame.
   const sched = reg.match(/function applyWrap\(ctx: ApplyCtx\)\s*\{([\s\S]*?)\n\}/);
   assert.match(sched?.[1] ?? "", /if \(!wrapRaf\) wrapRaf = requestAnimationFrame\(/);
   assert.doesNotMatch(sched?.[1] ?? "", /measureTsWidth/, "no measurement inside the per-effect call");

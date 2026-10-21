@@ -59,7 +59,7 @@ test('the route clamps with the QUEUE\'s rule, not a second copy of it', () => {
 
 // The real route, through the real factory — the same harness shape alert-validation.test.js
 // uses, so this asserts the wiring and not a mirror of it.
-function routeHarness({ ALERT_TTS_ENABLED = true } = {}) {
+function routeHarness({ ttsOn = true } = {}) {
   const spoken = [];
   const routes = new Map();
   const app = {};
@@ -80,7 +80,7 @@ function routeHarness({ ALERT_TTS_ENABLED = true } = {}) {
     persistEventCard: async () => null,
     maskBlacklist: (s) => s,
     broadcast: noop, bufferPush: noop, bufferReplace: noop,
-    ALERT_TTS_ENABLED,
+    ttsEnabled: () => ttsOn,
   });
   // The invocation shape is copied verbatim from alert-validation.test.js — `wrap` has no
   // default in registerMoneyRoutes, so it is not optional here.
@@ -145,7 +145,7 @@ function routeHarnessWith(speak) {
     persistEventCard: async () => null,
     maskBlacklist: (s) => s,
     broadcast: noop, bufferPush: noop, bufferReplace: noop,
-    ALERT_TTS_ENABLED: true,
+    ttsEnabled: () => true,
   }).registerMoneyRoutes(app, { requireInternal: (_q, _s, n) => n && n(), wrap: (fn) => fn });
   return routes.get('POST /speak');
 }

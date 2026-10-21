@@ -1,8 +1,8 @@
-// webhooks.js: Ko-fi privacy (review round 2, R2-9).
+// webhooks.js: Ko-fi privacy.
 // Run: node --test webhooks-kofi-privacy.test.js
 //
 // Ko-fi sends `is_public: false` when the supporter asked to stay private.
-// Nothing read it: their name and message went to TTS, the overlay, the
+// Ignored, their name and message would go to TTS, the overlay, the
 // persisted chat card, the sponsor credit line and the ledger's username.
 // Money is still credited — privacy changes who is named, not what was paid.
 

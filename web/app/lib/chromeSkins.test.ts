@@ -25,7 +25,7 @@ test("useTabList is built on the pure keyboard model, not a second one", () => {
   // focus === selection, so this is still "the active tab" as before)
   assert.match(src, /tabIndex: i === focused \? 0 : -1/);
   // ids are built from the INDEX, never the key — a label with a space
-  // ("Mode & tools") must not leak into an HTML id (F1)
+  // ("Mode & tools") must not leak into an HTML id
   assert.match(src, /id: `\$\{id\}-tab-\$\{i\}`/);
   assert.match(src, /id: `\$\{id\}-panel-\$\{i\}`/);
   // aria-controls is opt-in via `panels`, not emitted by default
@@ -116,7 +116,7 @@ test("Segmented, Chips and Rail each render through useTabList and own no keyboa
     ["Segmented", /className="chrome-thumb"/],
     ["Chips", /onMouseDown=\{onItemMouseDown\}/],
     // Rail uses manual activation — its panels (Gadget's nine) fetch on
-    // mount, so arrowing through them must move focus without selecting (F4)
+    // mount, so arrowing through them must move focus without selecting
     ["Rail", /orientation: "vertical", activation: "manual"/],
   ] as const) {
     const src = read(`components/chrome/${name}.tsx`);
@@ -136,7 +136,7 @@ test("Segmented, Chips and Rail each render through useTabList and own no keyboa
 
 test("Segmented drives its thumb with custom properties, so the move is transform-only", () => {
   const src = read("components/chrome/Segmented.tsx");
-  // Math.max(1, …) — zero items must not divide the track width by zero (F7)
+  // Math.max(1, …) — zero items must not divide the track width by zero
   assert.match(src, /"--chrome-n": Math\.max\(1, items\.length\)/);
   assert.match(src, /"--chrome-i": active/);
 });
@@ -211,7 +211,7 @@ test("the chrome grid is two HEIGHT tokens, defined once and registered as <leng
   // Registered, so getComputedStyle() hands JS the RESOLVED px (readChromePx)
   assert.match(css, /@property --chrome-top-h \{\s*syntax:\s*"<length>";\s*inherits:\s*true;\s*initial-value:\s*36px;\s*\}/);
   assert.match(css, /@property --chrome-bottom-h \{\s*syntax:\s*"<length>";\s*inherits:\s*true;\s*initial-value:\s*48px;\s*\}/);
-  // CHROME_INITIAL_PX (readChromePx's fallback, R11) must mirror these two
+  // CHROME_INITIAL_PX (readChromePx's fallback) must mirror these two
   // initial-value lines exactly — it is what a browser with no @property
   // support falls back to, and a drift here is a silent wrong dock height.
   assert.equal(CHROME_INITIAL_PX[CHROME_TOP_H], 36);
@@ -282,9 +282,9 @@ test("Bar is ONE in-flow strip of token height: hides by its own margin, overlay
   // with hysteresis) — pinned by bar.render.test.ts, a real mount, since a
   // source scan cannot see a listener's behaviour.
   assert.doesNotMatch(css, /chrome-bar-zone/, "the zone's rules are gone with the element");
-  // Vacuity anchor for the negative assertion above: this commit DELETED the
-  // two positive `.chrome-bar-zone` assertions that used to sit late in the
-  // file, so nothing else here proves `css` reaches anywhere near the actual
+  // Vacuity anchor for the negative assertion above: with no positive
+  // `.chrome-bar-zone` assertion late in the
+  // file, nothing else here proves `css` reaches anywhere near the actual
   // end of chrome.css rather than a read truncated partway through (where
   // "contains no chrome-bar-zone" would be true for the empty reason). Match
   // all the way to the file's own last rule.

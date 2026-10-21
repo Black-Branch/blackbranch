@@ -58,7 +58,7 @@ export const REPORTER_FOR_MODS = "a member";
 type ReportRow = { reported_id: unknown; reported_canonical_id: unknown; reporter: unknown };
 
 /**
- * The Reports list a viewer may see — THE RULE (round 5):
+ * The Reports list a viewer may see — THE RULE:
  *   • an admin sees every pending report, with the reporter's name;
  *   • a mod never sees a report ABOUT themselves — named by their site account or by a platform
  *     identity linked to it (canonicalIdentity.ts linkedMatrixIds): it would name who reported

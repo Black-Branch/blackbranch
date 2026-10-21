@@ -63,7 +63,7 @@ test("the panel's OAuth banner uses it, with the chat box's real stored destinat
   assert.match(panel, /msg: linkedBanner\(linkedParam, \{\s*crossPost: canCrossPost\(linkedParam\),\s*storedDest: wsGet\("chatTargetDest"\),/);
 });
 
-// ── Refusal notes (U1 rework) ───────────────────────────────────────────────
+// ── Refusal notes ───────────────────────────────────────────────────────
 // A persistent refusal is explained ONCE, with the fix in the same sentence.
 
 test("refusalNote: the platform's state and the fix, in one calm sentence", () => {

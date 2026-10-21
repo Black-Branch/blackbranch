@@ -22,7 +22,7 @@ const MODULES = ALL_MODULES.filter((m) => m.packages.includes('stream-api'));
  * @param {object} o
  * @param {{ get(key: string): any, loaded: Promise<unknown> }} o.instanceConfig
  * @param {Record<string, (ctx: { router: import('express').Router }) => void>} o.starters  the product's, by manifest id
- * @param {Record<string, (ctx: { router: import('express').Router }) => void>} [o.ownerStarters]  the owner plugin's
+ * @param {Record<string, (ctx: { router: import('express').Router }) => void>} [o.ownerStarters]  the site plugin's
  *
  * Every product module ('module' kind) needs a product starter. An owner-only module ('owner'
  * kind) is started by whichever side provides it; with no starter at all it is NOT INSTALLED —

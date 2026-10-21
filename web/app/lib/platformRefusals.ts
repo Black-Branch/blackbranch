@@ -1,7 +1,7 @@
 // What a platform refusing the sender's lines leaves behind in THIS tab: the one
 // note, the platforms skipped for the session, and when a transient failure was
-// last shown. (U1 rework, k 2026-10-18: a note per refused message made people
-// unlink Kick rather than follow it.)
+// last shown. (A note per refused message makes people unlink the platform
+// rather than follow it.)
 //
 //   • PERSISTENT refusal (followers-only, banned there… — `deliveryFailureKind`):
 //     explained ONCE per platform+reason per session, then that platform is
@@ -12,7 +12,7 @@
 //     platform per TRANSIENT_WINDOW_MS, never once per message; the line carries
 //     the zero-height marker (undeliveredLines.ts).
 //   • INFRASTRUCTURE (quota, rate limit, 5xx, timeout — nothing the viewer can
-//     act on; ticket #184): silent — no note, no marker, no skip — unless the
+//     act on): silent — no note, no marker, no skip — unless the
 //     viewer picked that platform ALONE in Send to; then ONE plain line per
 //     platform per session ("Couldn't reach YouTube chat right now."). Never
 //     skipped: the next send tries again.

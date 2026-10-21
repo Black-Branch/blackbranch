@@ -6,14 +6,14 @@ import { useNarrowViewport } from "@/app/lib/useNarrowViewport";
 import { useWindowDock } from "@/app/lib/chrome/windowDock";
 import { PRODUCT_MARK } from "@/app/lib/siteIcons";
 import AdminPanel from "./AdminPanel";
-import { adminHref, adminPlaceParts, type AdminSection } from "./adminLayout";
+import { ADMIN_HOME, adminHref, adminPlaceParts, type AdminSection } from "./adminLayout";
 
 // The Admin Panel as a tool window, the same shape as the mod window and the
 // account windows: the product's mark + "Admin panel" in the band, the rail of places with a search
 // in the body. Opened from the profile card's row and from the mod window's band (admins only),
 // hosted where the mod window is. The /admin/<section> pages render this same window as a page
 // (`popout`), keeping each place's URL in the address bar.
-export default function AdminWindow({ onClose, section: sectionProp = "ai", sub: subProp, place, onOpenMod, popout = false }: {
+export default function AdminWindow({ onClose, section: sectionProp = ADMIN_HOME, sub: subProp, place, onOpenMod, popout = false }: {
   onClose: () => void;
   /** A place id (`ai/bot`) to open on — another panel's search asked for it. Wins over section/sub. */
   place?: string;

@@ -6,6 +6,11 @@
 // `--delete` erases the previous build's chunks, so a tab held open across a
 // deploy 404s the moment it opens anything loaded on demand.
 //
+// The same holds for a SERVER ACTION: an action id is a hash of the build, so a tab held
+// open across the nightly self-update calls an action the new server does not have — "Server
+// Action … was not found on the server" / "Failed to find Server Action" / "Server Reference ID
+// did not match" (10 rows in 14 days, all on deploy days). Same remedy, same one-reload latch.
+//
 // A reload costs the viewer their scroll position and an unsent draft. That is
 // worth it against a panel that never renders — and it is the only remedy the
 // client can apply alone, because the bytes it needs no longer exist.
@@ -27,6 +32,11 @@ const CHUNK_MESSAGES = [
   /ChunkLoadError/i,
   /error loading dynamically imported module/i,
   /Importing a module script failed/i,
+  // A server action from the previous build.
+  /Server Action "?[^"]*"? was not found on the server/i,
+  /Failed to find Server Action/i,
+  /Server Reference ID did not match/i,
+  /UnrecognizedActionError/i,
 ];
 
 function isChunkLoadError(err: unknown): boolean {

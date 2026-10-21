@@ -66,7 +66,7 @@ test("streamStatus.ts: a failed scrape is remembered briefly, a good one for the
 
 test("streamStatus.ts: the rotation is scanned in parallel, priority still decides", () => {
   const src = read(STATUS, /statusCache\.get\(\);\s*$/);
-  assert.match(src, /await Promise\.all\(rows\.map\(\(row\) => checkYouTubeLive\(row\.youtube_channel_id\)\)\)/);
+  assert.match(src, /await Promise\.all\(\[\s+Promise\.all\(rows\.map\(\(row\) => \(row\.youtube_channel_id \? checkYouTubeLive\(row\.youtube_channel_id\) : null\)\)\),\s+twitchLiveLogins\(/);
 });
 
 test("vods.ts: all three fetches carry a deadline", () => {

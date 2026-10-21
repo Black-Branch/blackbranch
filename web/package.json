@@ -2,6 +2,12 @@
   "name": "web",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Black-Branch/blackbranch.git",
+    "directory": "web"
+  },
   "//browserslist": "Modern targets (browsers from ~2022 that natively support Array.at/flat/flatMap, Object.fromEntries/hasOwn, String.trimStart/End) so Next stops shipping legacy polyfills for them. Safari 15.4 is the binding constraint (Object.hasOwn). This audience is on current devices. — these are the JS targets; the CSS baseline is Tailwind 4's (Chrome 111 / Safari 16.4 / Firefox 128), which the @property registrations in app/globals.css rely on.",
   "browserslist": [
     "chrome >= 100",

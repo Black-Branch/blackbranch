@@ -8,7 +8,7 @@ import { publicProfileFields } from "./publicProfile.ts";
 import { stripComments } from "./testSource.ts";
 import { profileExtras as noPlugin } from "./plugins/absent/profile.ts";
 
-// The shape stream-api /user/lookup answers with (profiles.js), plus an owner-plugin extra (a made-up name: the real field is dropped the same way, as anything unlisted is).
+// The shape stream-api /user/lookup answers with (profiles.js), plus a site-plugin extra (a made-up name: the real field is dropped the same way, as anything unlisted is).
 const lookup = {
   canonicalId: "0123456789ab", name: "casey", karma: 12.5, activity: 40, streams: 9,
   support: 1234.56, isMember: true, subTier: "t1", camp: "Gadget", temperamentLabel: "Gadget",
@@ -29,7 +29,7 @@ test("a field stream-api or a plugin adds later stays private until it is listed
 });
 
 test("exactly the fields the card renders go out — no scoring read on the person", () => {
-  // The owner decided the AI scoring fields (camp, temperament, label rank, intelligence / word
+  // The AI scoring fields (camp, temperament, label rank, intelligence / word
   // count / regularity tiers, average words) stay off the public card, like the bot's impression.
   assert.deepEqual(Object.keys(publicProfileFields(lookup)).sort(), [
     "activity", "isMember", "karma", "name", "streams", "subTier", "supportTier",
@@ -41,7 +41,7 @@ test("exactly the fields the card renders go out — no scoring read on the pers
   assert.deepEqual(publicProfileFields({}), {});
 });
 
-// An installed owner plugin may forward extra lookup fields its own pill needs (ProfileExtras
+// An installed site plugin may forward extra lookup fields its own pill needs (ProfileExtras
 // publicFields, read through the @owner/profile seam). The public product carries no plugin.
 test("no plugin (the public product): exactly the product's fields go out", () => {
   const fields = noPlugin.publicFields ?? [];

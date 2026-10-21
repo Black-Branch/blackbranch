@@ -42,9 +42,10 @@ import { decToken } from "./tokenCrypto.ts";
 import { oauthRevoke } from "./matrixOAuthClient.ts";
 import { revokePlatformGrant } from "./platformRevoke.ts";
 import { NATIVE_SQL } from "./nativePlatform.ts";
+import { BILLED_PROVIDERS, stillBills } from "./subscriptions/entitlement.ts";
+import { cancelPaypalForDeletion, PaypalCancelError } from "./subscriptions/paypal.ts";
 
 export const FRESH_MS = 15 * 60_000;
-const ACTIVE_SUB = ["active", "trialing", "past_due", "unpaid", "incomplete"];
 
 /** The name a person types to confirm: their account's local name (the part before ':'). Pure.
  *  @test-only exported so the confirm rule is tested directly; this module is its caller. */
@@ -76,12 +77,13 @@ export type DeletionCheck = {
 };
 
 export async function deletionCheck(matrixId: string, sessionId: string | null, now = Date.now()): Promise<DeletionCheck> {
-  const [sess, sub, ban] = await Promise.all([
+  const [sess, active, ban] = await Promise.all([
     sessionId
       ? pool.query<{ signed_in_at: Date }>(`SELECT signed_in_at FROM site.user_sessions WHERE session_id = $1 AND matrix_id = $2`, [sessionId, matrixId])
       : Promise.resolve({ rows: [] as { signed_in_at: Date }[] }),
-    pool.query<{ status: string; cancel_at_period_end: boolean | null }>(
-      `SELECT status, cancel_at_period_end FROM site.subscriptions WHERE matrix_id = $1`, [matrixId]),
+    // A subscription the SITE bills that will still charge them (subscription records, §9 of the
+    // subscription-sources design): a deleted account must not keep being charged by us.
+    stillBills(pool, matrixId),
     pool.query<{ active: boolean; permanent: boolean; ends: Date | null }>(
       `SELECT COUNT(*) > 0 AS active, COALESCE(bool_or(expires_at IS NULL), false) AS permanent, MAX(expires_at) AS ends
          FROM site.bans WHERE matrix_id = $1 AND (expires_at IS NULL OR expires_at > NOW())`, [matrixId]),
@@ -93,7 +95,6 @@ export async function deletionCheck(matrixId: string, sessionId: string | null, 
             EXISTS (SELECT 1 FROM site.automod_held WHERE matrix_id = $1 AND status IN ('pending', 'blocked', 'flagged')) AS held,
             EXISTS (SELECT 1 FROM site.reports WHERE reported_id = $1 AND status <> 'resolved') AS report`, [matrixId])).rows[0];
   const signedIn = sess.rows[0]?.signed_in_at ? new Date(sess.rows[0].signed_in_at) : null;
-  const active = sub.rows.some((s) => ACTIVE_SUB.includes(s.status) && s.cancel_at_period_end !== true);
   const local = localpartOf(matrixId);
   return {
     accountName: accountNameOf(matrixId),
@@ -142,6 +143,22 @@ export async function eraseSiteData(client: { query: typeof pool.query }, matrix
   // Payment records stay; the name and the message on them go.
   await run("donations", `UPDATE site.donations SET display_name = NULL, message = NULL, anonymous = true WHERE matrix_id = $1`);
   n.pointsForfeited = await forfeitCoinsForDeletion(client, matrixId);
+  // Subscription records of services the site does NOT bill (Patreon, Ko-fi, Twitch, Kick): the
+  // service is the merchant and keeps its own record, and ours carry ids that lead back to the
+  // person there — deleted, with their payments and events (bodies included). The site-billed
+  // ones (Stripe, PayPal) are payment records and stay on the tombstone (DELETION_DECLARATION).
+  const notBilled = `SELECT provider, external_id FROM site.subscription_records WHERE matrix_id = $1 AND provider <> ALL($2::text[])`;
+  n.subscriptionEvents = (await client.query(
+    `DELETE FROM site.subscription_events WHERE (provider, external_id) IN (${notBilled})`, [matrixId, BILLED_PROVIDERS])).rowCount ?? 0;
+  n.subscriptionPayments = (await client.query(
+    `DELETE FROM site.subscription_payments WHERE record_id IN (SELECT id FROM site.subscription_records WHERE matrix_id = $1 AND provider <> ALL($2::text[]))`,
+    [matrixId, BILLED_PROVIDERS])).rowCount ?? 0;
+  n.subscriptionRecords = (await client.query(
+    `DELETE FROM site.subscription_records WHERE matrix_id = $1 AND provider <> ALL($2::text[])`, [matrixId, BILLED_PROVIDERS])).rowCount ?? 0;
+  // PayPal: every subscription of theirs that could still charge — a live record, or one an approval
+  // popup created and no webhook has reported yet — is cancelled AT PAYPAL before the intents that
+  // name them are erased. A refusal there throws and refuses the deletion, so it is retried whole.
+  n.paypalCancelled = (await cancelPaypalForDeletion(matrixId, client)).cancelled;
   for (const [label, sql] of [
     ["atprotoSessions", `DELETE FROM site.atproto_sessions WHERE did IN (SELECT a.provider_account_id FROM site.accounts a WHERE a.matrix_id = $1 AND a.provider = 'streamplace'
        AND NOT EXISTS (SELECT 1 FROM site.accounts o WHERE o.provider = 'streamplace' AND o.provider_account_id = a.provider_account_id AND o.matrix_id <> $1))`],
@@ -171,6 +188,11 @@ export async function eraseSiteData(client: { query: typeof pool.query }, matrix
     ["deviceHealth", "DELETE FROM site.device_health WHERE matrix_id = $1"],
     ["pendingSignIns", "DELETE FROM site.federated_pending WHERE matrix_id = $1"],
     ["memoryOptOut", "DELETE FROM site.memory_opt_outs WHERE matrix_id = $1"],
+    // Membership links, PayPal subscribe intents, and Ko-fi claims open or closed (a typed email
+    // goes with its claim).
+    ["subscriptionAccounts", "DELETE FROM site.subscription_accounts WHERE matrix_id = $1"],
+    ["subscriptionIntents", "DELETE FROM site.subscription_intents WHERE matrix_id = $1"],
+    ["subscriptionClaims", "DELETE FROM site.subscription_claims WHERE matrix_id = $1"],
     ["clientErrors", "UPDATE site.client_errors SET matrix_id = NULL WHERE matrix_id = $1"],
   ] as const) await run(label, sql);
   // Platform links: removed — unless a ban is active, when they stay on the tombstone so the ban
@@ -205,6 +227,7 @@ export const DELETION_DECLARATION = {
     "message_votes.voter_matrix_id", "forum_votes.voter_matrix_id", "coin_earn_upvotes.voter", "coin_earn_upvotes.recipient",
     "support_tickets.matrix_id", "coin_earn_stream.matrix_id", "device_health.matrix_id", "federated_pending.matrix_id",
     "memory_opt_outs.matrix_id", "client_errors.matrix_id",
+    "subscription_accounts.matrix_id", "subscription_intents.matrix_id", "subscription_claims.matrix_id",
     // Rows kept so threads stay intact; text, hidden text, emotes and quotes blanked (evidence of an
     // open case is kept for moderators only).
     "chat_messages.matrix_id",
@@ -219,6 +242,7 @@ export const DELETION_DECLARATION = {
     "paypal_coin_orders.matrix_id": "a payment record the law requires (amount, date, processor ids)",
     "stripe_customers.matrix_id": "the payment processor's customer id, kept with the payment records",
     "subscriptions.matrix_id": "a billing record; a deletion is refused while one is active",
+    "subscription_records.matrix_id": "a billing record of a service the site bills (Stripe, PayPal); a deletion is refused while one still renews. The records of services it does not bill are deleted by the erase",
     "gift_pending.gifter_matrix_id": "a paid gift: a payment record",
     "gift_subscriptions.gifter_matrix_id": "a paid gift: a payment record",
     "gift_subscriptions.recipient_matrix_id": "a gift someone else paid for: their payment record",
@@ -340,6 +364,9 @@ export async function deleteAccount(matrixId: string, sessionId: string | null, 
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("[account] site erase failed:", (e as Error).message);
+    if (e instanceof PaypalCancelError) {
+      return { ok: false, status: 502, error: "PayPal could not be reached to cancel your PayPal subscription, so nothing else was deleted (your AI memory is already gone). Try again in a few minutes; it picks up where it stopped." };
+    }
     return { ok: false, status: 500, error: "Deleting stopped partway — your AI memory is gone, the rest is not. Try again; it picks up where it stopped." };
   } finally {
     client.release();

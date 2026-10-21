@@ -112,8 +112,8 @@ export async function deliverChatEvent(payload: SpendEventPayload): Promise<Chat
 //
 // Still IN FLIGHT (a deadline, or 409 in_flight): stream-api holds a money event until its ledger
 // answers and retries a failed write for ~108 s (alert.js LEDGER_RETRY_MS × LEDGER_MAX_ATTEMPTS),
-// far past this side's 10 s deadline. Review round 5, F2: web used to log "LOST" there for payments
-// that then landed. The webhook is not held for that: a background follow-up re-asks with the same
+// far past this side's 10 s deadline, so "LOST" there would be wrong for payments
+// that then land. The webhook is not held for that: a background follow-up re-asks with the same
 // spendId (deduped: 409 while it works, the original outcome once it is done) on the
 // CELEBRATION_FOLLOW_UP_MS schedule, which outlasts that window (chatEventDelivery.test.ts derives
 // the bound from alert.js). A crash of THIS process during the follow-up loses only the log line —

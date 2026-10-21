@@ -16,7 +16,8 @@ test("the first paint is already the visit's shape: nothing stored seeds from is
   assert.match(view, /const \[storedModeRaw, setStoredMode\] = useLocalStorageString\(PLAYER_MODE_KEY\);/);
   assert.match(view, /const storedMode = storedModeRaw \?\? \(isLive \? null : "none"\);/);
   assert.match(view, /const folded = parsePlayerMode\(storedMode\) === "none";/);
-  assert.match(view, /usePanelResize\(\{ rootRef, narrow, defaultMode: isLive \? "normal" : "chatFolded" \}\)/);
+  // The chat (side panel) is shown on a first visit, live or not; after that it is what was stored.
+  assert.match(view, /usePanelResize\(\{ rootRef, narrow, defaultMode: "normal" \}\)/);
 });
 
 test("the visit rule runs once, BEFORE paint, from the server's isLive and the seeded modes, and applies every part", () => {
@@ -25,16 +26,17 @@ test("the visit rule runs once, BEFORE paint, from the server's isLive and the s
   // commit useSyncExternalStore still answers with the server snapshot (null →
   // the seeded "none"), so a hook-read rule would see "already folded" and leave
   // a stored unfolded player open on an offline desktop visit.
-  assert.match(view, /const v = foldForVisit\(\{ live: isLive, narrow: narrowViewportNow\(\), storedPlayerMode: lsGet\(PLAYER_MODE_KEY\) \?\? storedMode, storedPanelMode: lsGet\("panelMode"\) \?\? \(isLive \? null : "chatFolded"\) \}\);/);
+  assert.match(view, /const communityOn = !isLive && !!homeInitial\?\.status\?\.community;/);
+  assert.match(view, /const v = foldForVisit\(\{ live: isLive, community: communityOn, narrow: narrowViewportNow\(\), storedPlayerMode: lsGet\(PLAYER_MODE_KEY\) \?\? storedMode, storedPanelMode: lsGet\("panelMode"\) \}\);/);
   // A fold applied before paint has nothing to animate, so no armFold: the player is simply never mounted.
   assert.match(view, /if \(v\.player === "fold"\) setStoredMode\("none"\);/);
   assert.doesNotMatch(view, /if \(v\.player === "fold"\) \{ armFold\(\);/);
-  assert.match(view, /else if \(v\.player === "unfold"\) setStoredMode\(modeForTab\(isLive \? "live" : offlineTab\)\);/);
+  assert.match(view, /else if \(v\.player === "unfold"\) setStoredMode\(modeForTab\(isLive \? "live" : communityOn \? "community" : offlineTab\)\);/);
   assert.match(view, /if \(v\.chat !== null\) applyMode\(v\.chat\);/);
   assert.match(view, /if \(v\.openHome\) \{\s*if \(!narrowViewportNow\(\)\) setDockTabRaw\(writeDockTab\("home"\)\);\s*window\.dispatchEvent\(new Event\(OPEN_HOME_EVENT\)\);\s*\}/);
   // Once: a ref guard at the top and honest deps at the bottom; the pinned live-edge line untouched.
-  assert.match(view, /if \(visitRan\.current\) return;\s*visitRan\.current = true;\s*const v = foldForVisit\(/);
-  assert.match(view, /\}, \[isLive, storedMode, setStoredMode, applyMode, setDockTabRaw, offlineTab\]\);/);
+  assert.match(view, /if \(visitRan\.current\) return;\s*visitRan\.current = true;\s*const communityOn = [^\n]*\n\s*const v = foldForVisit\(/);
+  assert.match(view, /\}, \[isLive, storedMode, setStoredMode, applyMode, setDockTabRaw, offlineTab, homeInitial\]\);/);
   assert.match(view, /if \(folded && live && !prevLiveRef\.current\) setStoredMode\(modeForTab\(tab\)\);/);
 });
 

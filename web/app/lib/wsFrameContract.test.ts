@@ -96,7 +96,7 @@ test("every frame stream-api broadcasts is in the registry", () => {
   );
 });
 
-// Frames only an install's owner plugin sends (stream-api/owner/): registered for the clients that
+// Frames only an install's site plugin sends (stream-api/owner/): registered for the clients that
 // read them, and absent from a tree with no owner folder. Exact — checked against the owner folder
 // wherever it exists.
 const OWNER_FRAMES = ["meterState", "bot_mode", "bot_active", "bot_tools"];

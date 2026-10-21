@@ -14,7 +14,7 @@ export function provideChatSender(s: Sender): () => void {
 }
 
 /** Send a line as a chat message. Null when it went; otherwise why not. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export async function sendToChat(text: string, opts?: { redact?: boolean }): Promise<string | null> {
   if (!sender) return "there's no chat on this page to send to";
   try {
@@ -39,11 +39,11 @@ export function setChatDest(d: string | null): void {
 }
 
 /** The chat box's destination now. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export const chatDest = (): string | null => dest;
 
 /** Told when the destination changes. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function onChatDest(fn: () => void): () => void {
   destListeners.add(fn);
   return () => { destListeners.delete(fn); };

@@ -1,9 +1,8 @@
 'use strict';
-// The Postgres pool's options and the API's last error handler (review round 5, F2).
+// The Postgres pool's options and the API's last error handler.
 //
-// The pool used to carry no connection or statement timeout, so a hung database — a socket that
-// accepts and never answers, a lock nobody releases — held every request open forever, and every
-// money hold with it (alert.js retries a ledger write for ~108 s, but only if each attempt RETURNS).
+// Without a connection and statement timeout, a hung database — a socket that accepts and never
+// answers, a lock nobody releases — holds every request open forever, and every money hold with it (alert.js retries a ledger write for ~108 s, but only if each attempt RETURNS).
 // Each bound below turns that into an error the caller can act on: the ledger retries it as
 // transient (alert.js isTransientDbError — no SQLSTATE, or 57014), and a request answers 503
 // "database unavailable" instead of hanging.

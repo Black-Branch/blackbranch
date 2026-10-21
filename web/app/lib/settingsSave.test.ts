@@ -1,6 +1,6 @@
-// Closing Appearance inside the 800 ms debounce used to CANCEL the account save
-// (the effect's cleanup cleared the timer on unmount), so the change never
-// reached the account. The saver now flushes on close and keeps a failed save
+// Closing Appearance inside the 800 ms debounce must not CANCEL the account save
+// (an effect cleanup that clears the timer on unmount would), or the change never
+// reaches the account. The saver flushes on close and keeps a failed save
 // retryable. Behavioural for the saver (mock timers); a source scan for the
 // panel's wiring, anchored at the END of the file.
 //

@@ -25,7 +25,7 @@ Copy into the provider's page:
 
 This step fills:
 
-- **stream.place account**. The streamer's stream.place DID (did:plc:…) — the player and its chat.
-- **stream.place handle**. The handle the stream.place player opens.
+- **Streamplace account**. The streamer's stream.place DID (did:plc:…) — the player and its chat.
+- **Streamplace handle**. The handle the Streamplace player opens.
 
 Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.

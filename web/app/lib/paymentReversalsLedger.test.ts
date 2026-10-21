@@ -105,7 +105,7 @@ test("a held reversal (202) is success; 404 unknown_event and any other refusal 
     await held.onStripeEvent(ev("refund.created", { id: "re_h", payment_intent: "pi_1", amount: 100 }));
   } finally { console.warn = quiet; }
   assert.equal(warned.length, 1, "a held reversal must say so");
-  // PB2: answering success here dropped the refund, and a later reconcile credited it in full.
+  // Answering success here would drop the refund, and a later reconcile would credit it in full.
   const lost = rig({ session: DONATION, answer: { status: 404, body: { error: "unknown_event" } } });
   await assert.rejects(lost.onStripeEvent(ev("refund.created", { id: "re_x", payment_intent: "pi_1", amount: 100 })), /answered 404/);
   const bad = rig({ session: DONATION, answer: { status: 503, body: { error: "x" } } });

@@ -165,7 +165,7 @@ export async function PATCH(req: NextRequest) {
   if (exists.rowCount === 0) return new Response("No such badge", { status: 404 });
 
   // { coinPrice: N } prices the badge in the coin store (unlock_criteria, v67);
-  // { coinPrice: null } takes it off sale. Subscriber/mod badges can't be sold.
+  // { coinPrice: null } takes it off sale. Supporter and mod badges can't be sold.
   if (body && "coinPrice" in body) {
     const raw = (body as { coinPrice: unknown }).coinPrice;
     const price = raw == null ? null : Math.round(Number(raw));
@@ -176,7 +176,7 @@ export async function PATCH(req: NextRequest) {
       const special = await pool.query(
         `SELECT 1 FROM site.badges WHERE id = $1 AND (is_subscriber OR is_mod)`, [id]
       );
-      if ((special.rowCount ?? 0) > 0) return new Response("Subscriber/mod badges can't be sold", { status: 400 });
+      if ((special.rowCount ?? 0) > 0) return new Response("Supporter and mod badges can't be sold", { status: 400 });
     }
     await pool.query(
       `UPDATE site.badges SET unlock_criteria = $2 WHERE id = $1`,

@@ -31,8 +31,8 @@ test('a dead client (no pong) is terminated, as before', () => {
 });
 
 test('a slow-reading-but-ponging client over the cap is terminated', () => {
-  // isAlive: true is the point — this client answers every ping. Before this
-  // fix it survived the sweep forever while its buffer grew.
+  // isAlive: true is the point — this client answers every ping. Without the
+  // backpressure verdict it survives the sweep forever while its buffer grows.
   assert.equal(sweepVerdict({ isAlive: true, bufferedAmount: 1025 }, 1024), 'backpressure');
 });
 

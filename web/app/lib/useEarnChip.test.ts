@@ -39,7 +39,7 @@ test("the first chip shows immediately, not after a delay", (t) => {
 });
 
 test("a window of awards COALESCES into one chip, not a run of them", (t) => {
-  // The chip does not name what earned the Qorm, so "+5q" then "+1q" then "+2q"
+  // The chip does not name what earned the points, so "+5q" then "+1q" then "+2q"
   // carries exactly the information of "+8q" — split across three restarts of
   // the same animation, which reads as stuttering, and three chances to
   // overflow a narrow composer.
@@ -73,7 +73,7 @@ test("nothing is LOST when awards land while a chip is showing", (t) => {
 test("the visible number never changes under the viewer", (t) => {
   // Adding to the chip on screen would be the obvious way to coalesce and is
   // wrong: a value that ticks up mid-animation reads as a rendering glitch
-  // rather than as more Qorm.
+  // rather than as more points.
   t.mock.timers.enable({ apis: ["setTimeout"] });
   pushEarnChips([{ kind: "earn_chat", points: 1 }]);
   const shown = peekEarnChip();

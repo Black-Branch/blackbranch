@@ -1,6 +1,6 @@
-// The REAL poller with no platform configured (the other side of external-review finding A).
+// The REAL poller with no platform configured (the other side of pollerKickOnly.test.js).
 //
-// The poller now always runs and decides each tick which platforms vote. With none configured it
+// The poller always runs and decides each tick which platforms vote. With none configured it
 // must stay out of the way: no provider request, no stream-api read, and above all no end of a
 // session someone opened by hand (YouTube's empty watcher id would read as "offline" if YouTube
 // were allowed to vote without a channel).

@@ -1,6 +1,6 @@
 // One label for "this message is a media attachment" — the reply quote, the
-// thread chip and the threads list all used to hand-roll "📷 Image", and batch
-// 1 showed a new renderer silently breaking a name-scanned invariant. The scan
+// thread chip and the threads list all share it rather than hand-rolling "📷 Image",
+// since a new renderer can silently break a name-scanned invariant. The scan
 // below makes "every preview site uses the helper" a fact.
 //
 // Run: node --test app/lib/mediaKind.test.ts

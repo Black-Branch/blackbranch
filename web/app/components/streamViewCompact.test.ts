@@ -25,7 +25,7 @@ test("the dock's tab row becomes an overlay Bar and stops counting against the c
   assert.match(dock, /const visible = dockShown\(openTab, leftoverPx, rowPx, view === "hidden"\);/);
   assert.match(dock, /<Bar\s+slot="top"\s+name="dock"\s+band\s+overlay=\{barsOverlay\}\s+background=\{barsOverlay \? "var\(--glass-bg\)" : undefined\}/);
   // The drag handle stays ABOVE the overlay bar (z-30), or the revealed row
-  // covers it and the video/dock split can no longer be dragged (final review, Important 3).
+  // covers it and the video/dock split can no longer be dragged.
   assert.match(dock, /className="group\/fdrag absolute top-0 inset-x-0 h-3 z-40 /);
   assert.ok(dock.trimEnd().endsWith("}"), "END anchor");
 });

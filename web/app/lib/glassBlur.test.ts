@@ -25,7 +25,7 @@ import { join } from "node:path";
 
 const read = (...p: string[]) => readFileSync(join(process.cwd(), ...p), "utf8");
 
-// The five files that used to compose glass inline. After P4 they carry the
+// The five files that once composed glass inline. They carry the
 // FILL only — glassSurface.test.ts is what bans a blur from coming back.
 const EX_GLASS_SURFACES = [
   ["app", "components", "StreamEmbedBar.tsx"],
@@ -45,7 +45,7 @@ test("nothing hardcodes the blur radius", () => {
 
 test("the one blur reads the radius property, with the cold-profile fallback", () => {
   const css = read("app", "globals.css");
-  // Post-P4 the radius is composed once, into --glass-filter, and `.glass` reads
+  // The radius is composed once, into --glass-filter, and `.glass` reads
   // THAT — so the Blur slider and the Glass switch land on the same declaration.
   assert.match(css, /--glass-filter: blur\(var\(--glass-blur, 14px\)\)/);
   // No hand-written -webkit-backdrop-filter here. Lightning CSS (Tailwind 4's

@@ -4,10 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
 import { useStripe, useBillingAvailability } from "@/app/lib/useStripe";
 import StripeUnavailable from "./StripeUnavailable";
-import { GIFT_MONTHS, MAX_COMMUNITY, giftAmountCents } from "@/app/lib/giftPricing";
+import { GIFT_MONTHS, MAX_COMMUNITY, giftAmountMinor } from "@/app/lib/giftPricing";
+import { formatPrice } from "@/app/lib/moneyFormat";
 import { postJson, getJson, HttpError } from "@/app/lib/http";
 import { LoadingState } from "./Spinner";
-import { TipForm, type TipDraft, checkoutRequestFor } from "@/app/features/support";
+import {
+  TipForm, type TipDraft, checkoutRequestFor,
+  PayPalSubscribeButton, recordLine, isLiveRecord, elsewhereWarning, type SubscriptionRecordView,
+} from "@/app/features/support";
 import { pointsForCents } from "@/app/lib/coins";
 import { currencyOnItsWay } from "@/app/lib/currency";
 import { subscriptionStatusLine, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView } from "@/app/lib/supportStatus";
@@ -21,9 +25,18 @@ import { usePaymentResult } from "@/app/lib/usePaymentResult";
 // Money is never granted by this UI — the webhook is the source of truth. On
 // `onComplete` we just show a thank-you; the badge/tier/ledger land via webhook.
 
-// Exactly what subscriptionStatusLine reads — the /api/me fields it needs,
-// nothing else (the Me shape is the copy module's input type).
-type Me = SubscriptionView;
+// What subscriptionStatusLine reads — the /api/me fields it needs (the copy
+// module's input type) — plus every subscription record the viewer holds, one
+// per service (subscription sources): the PayPal lines and their Cancel.
+type Me = SubscriptionView & { subscriptions: SubscriptionRecordView[] };
+
+// The PayPal subscribe offer (GET /api/billing/paypal/subscription): shown only
+// with the PayPal module on, a plan for the tier, and that plan priced at PayPal.
+type PaypalSubOffer = { offered: boolean; price: { amount: number; currency: string } | null };
+
+// How long "Confirming with PayPal…" watches /api/me for the webhook's record.
+const CONFIRM_MS = 30_000;
+const CONFIRM_EVERY_MS = 2_000;
 
 // The gifter's ledger: what the viewer has given and
 // received. Loaded with the gift section; null until it answers.
@@ -65,7 +78,10 @@ export default function SupportContent({
   // Either provider opens the panel (k, 2026-10-19). Subscriptions and gifts are
   // Stripe checkouts, so with Stripe off they give way to one plain line; the tip
   // form stays, with PayPal/Venmo as its pay button.
-  const { stripe: stripeOn, paypalClientId } = useBillingAvailability();
+  const { stripe: stripeOn, paypalClientId, supporter } = useBillingAvailability();
+  // Subscriptions and gifts need a usable Supporter price at Stripe (R1.10): without one they are
+  // not offered at all — never a button that answers "not set up".
+  const subsOn = stripeOn && supporter !== null;
   const configured = stripeOn || paypalClientId !== null;
   // Observed, not handed straight to EmbeddedCheckoutProvider — see useStripe.ts:
   // a failed script load would otherwise render a silent empty box.
@@ -76,14 +92,37 @@ export default function SupportContent({
     const want = sections && sections.length ? sections : ALL_SECTIONS;
     return ALL_SECTIONS.filter((s) => want.includes(s));
   }, [sections]);
-  const show = (s: Mode) => shown.includes(s) && (s === "donation" || stripeOn);
-  // Asked for (the whole panel, or a Subscribe/Gift entry point) but Stripe is off.
-  const stripeOnlyAsked = !stripeOn && shown.some((s) => s !== "donation");
+  // PayPal subscriptions (S3): asked of the server only when PayPal is on at all.
+  const [paypalSub, setPaypalSub] = useState<PaypalSubOffer | null>(null);
+  useEffect(() => {
+    if (!paypalClientId || !shown.includes("subscription")) return;
+    let alive = true;
+    getJson<Partial<PaypalSubOffer>>("/api/billing/paypal/subscription", { cache: "no-store" })
+      .then((d) => { if (alive) setPaypalSub({ offered: d.offered === true, price: d.price ?? null }); })
+      .catch(() => { /* not offered */ });
+    return () => { alive = false; };
+  }, [paypalClientId, shown]);
+  const paypalSubOn = Boolean(paypalClientId && paypalSub?.offered && paypalSub.price);
+  // A subscription is offered by a card (Stripe) or by PayPal; gifts are Stripe checkouts only.
+  const subscribeOn = subsOn || paypalSubOn;
+  const show = (s: Mode) => shown.includes(s) && (s === "donation" || (s === "subscription" ? subscribeOn : subsOn));
+  // Asked for (the whole panel, or a Subscribe/Gift entry point) but not offered here.
+  const subsMissing = shown.includes("subscription") && !subscribeOn;
+  const giftsMissing = shown.includes("gift") && !subsOn;
+  const stripeOnlyAsked = subsMissing || giftsMissing;
 
   const [me, setMe] = useState<Me | null>(null);
   const [loadingMe, setLoadingMe] = useState(true);
 
-  const [view, setView] = useState<"home" | "checkout" | "done">("home");
+  const [view, setView] = useState<"home" | "checkout" | "confirming" | "done">("home");
+  // PayPal approved, but its webhook had not made the record by the time we stopped watching.
+  const [confirmLate, setConfirmLate] = useState(false);
+  // The viewer read "you'd be paying twice" and chose to subscribe anyway.
+  const [elsewhereAck, setElsewhereAck] = useState(false);
+  const [elsewhereDismissed, setElsewhereDismissed] = useState(false);
+  // A Supporter elsewhere that the SERVER reported (a page older than the record).
+  const [serverElsewhere, setServerElsewhere] = useState<{ provider: string; periodEnd: string | null } | null>(null);
+  const [cancelNote, setCancelNote] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>(shown[0] ?? "subscription");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -105,7 +144,9 @@ export default function SupportContent({
   const [giftCount, setGiftCount] = useState(5);
   const [giftAnon, setGiftAnon] = useState(false);
   const giftUnits = giftType === "direct" ? 1 : giftCount;
-  const giftDollars = giftAmountCents(giftMonths, giftUnits) / 100;
+  // What the gift button says it charges — the same sum the gift route charges (giftAmountMinor).
+  const giftTotal = supporter ? formatPrice(giftAmountMinor(supporter.amount, giftMonths, giftUnits), supporter.currency) : "";
+  const monthlyPrice = supporter ? formatPrice(supporter.amount, supporter.currency) : "";
 
   // Validate a typed recipient against /resolve so the gifter gets feedback.
   async function checkRecipient(value?: string) {
@@ -170,7 +211,9 @@ export default function SupportContent({
         giftActive: d.giftActive ?? false,
         giftExpiresAt: d.giftExpiresAt ?? null,
         giftFrom: d.giftFrom ?? null,
+        subscriptions: Array.isArray(d.subscriptions) ? d.subscriptions : [],
       });
+      return d;
     } catch {
       /* leave me as-is */
     } finally {
@@ -215,6 +258,56 @@ export default function SupportContent({
   // One sentence about where the viewer stands: renews / renewal off / via a
   // gift / ended — or nothing (supportStatus.test.ts pins the wording).
   const status = me ? subscriptionStatusLine(me) : null;
+  // Subscription sources: every live record, and the PayPal ones this panel manages.
+  const liveRecords = (me?.subscriptions ?? []).filter((r) => isLiveRecord(r));
+  const paypalRecords = liveRecords.filter((r) => r.provider === "paypal");
+  const subscribedHere = subActive || paypalRecords.length > 0;
+  // Not subscribed by card or PayPal, yet a Supporter through another service: warn before any payment.
+  const entitlingElsewhere = liveRecords.find((r) => r.status === "active" || r.status === "past_due") ?? null;
+  const elsewhere = serverElsewhere ?? (entitlingElsewhere ? { provider: entitlingElsewhere.provider, periodEnd: entitlingElsewhere.periodEnd } : null);
+  const warnElsewhere = Boolean(elsewhere) && !elsewhereAck;
+
+  // After PayPal's approval: watch /api/me until the webhook's record shows (display only — the
+  // webhook is what makes the viewer a Supporter), for up to CONFIRM_MS.
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (confirmTimer.current) clearTimeout(confirmTimer.current); }, []);
+  function confirmPaypal() {
+    setMode("subscription");
+    setView("confirming");
+    setConfirmLate(false);
+    const until = Date.now() + CONFIRM_MS;
+    const tick = async () => {
+      const d = await refreshMe();
+      const done = (d?.subscriptions ?? []).some((r) => r.provider === "paypal" && (r.status === "active" || r.status === "past_due"));
+      if (done || Date.now() >= until) {
+        setConfirmLate(!done);
+        setView("done");
+        return;
+      }
+      confirmTimer.current = setTimeout(() => void tick(), CONFIRM_EVERY_MS);
+    };
+    confirmTimer.current = setTimeout(() => void tick(), CONFIRM_EVERY_MS);
+  }
+
+  // The on-site Cancel (PayPal's merchant cancel). Writes nothing here: PayPal's CANCELLED webhook
+  // updates the record, and access runs to the end of the period already paid for.
+  async function cancelPaypal() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await postJson("/api/billing/paypal/subscription/cancel");
+      if (!res.ok) {
+        setErr(res.status === 429 ? "Too many attempts — try again in a minute." : "Couldn’t reach PayPal. Try again.");
+        return;
+      }
+      setCancelNote("Cancelled. PayPal confirms it in a moment; you stay a Supporter until the end of the month you paid for.");
+      confirmTimer.current = setTimeout(() => void refreshMe(), 4_000);
+    } catch {
+      setErr("Network error. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // Create a Checkout Session on our server and mount Embedded Checkout with the
   // returned client secret. Errors are handled here so the iframe only mounts on
@@ -224,6 +317,18 @@ export default function SupportContent({
     setErr(null);
     try {
       const res = await postJson(endpoint, body);
+      if (res.status === 409) {
+        // The server says the viewer is already a Supporter elsewhere (a page older than the
+        // record): bring the paying-twice warning back rather than an error line.
+        const c = (await res.json().catch(() => null)) as { error?: string; provider?: string; periodEnd?: string | null } | null;
+        if (c?.error === "subscribed_elsewhere" && c.provider) {
+          setServerElsewhere({ provider: c.provider, periodEnd: c.periodEnd ?? null });
+          setElsewhereAck(false);
+          return;
+        }
+        setErr("You already have a subscription here — manage it below.");
+        return;
+      }
       if (!res.ok) {
         // A 400 here is a rejection the route wrote FOR the person reading it
         // (e.g. donate's "A $25.00 donation carries a message of up to 500
@@ -261,7 +366,7 @@ export default function SupportContent({
   }
 
   function startSubscriptionCheckout() {
-    return mountCheckout("subscription", "/api/billing/checkout", { tier: "supporter" });
+    return mountCheckout("subscription", "/api/billing/checkout", { tier: "supporter", alsoElsewhere: elsewhereAck });
   }
 
   function startGift() {
@@ -354,6 +459,11 @@ export default function SupportContent({
     );
   }
 
+  // ── Confirming view: PayPal approved; its webhook has not landed yet ───────
+  if (view === "confirming") {
+    return <LoadingState className="py-8" label="Confirming with PayPal…" />;
+  }
+
   // ── Done view ──────────────────────────────────────────────────────────────
   if (view === "done") {
     return (
@@ -366,7 +476,9 @@ export default function SupportContent({
               everyone "gets Supporter right away" sets up a "my gift didn't
               work" report the first time they check. */}
           {mode === "subscription"
-            ? "You’re a Supporter now — thank you! Your badge will appear shortly."
+            ? confirmLate
+              ? "PayPal approved it — thank you! You become a Supporter as soon as PayPal confirms the first payment."
+              : "You’re a Supporter now — thank you! Your badge will appear shortly."
             : mode === "gift"
               ? giftType === "direct"
                 ? "Gift sent — thank you! The recipient gets Supporter right away."
@@ -410,28 +522,52 @@ export default function SupportContent({
         <div className="flex items-center gap-2">
           <span className="text-amber-400">★</span>
           <h3 className="text-sm font-semibold text-heading">Supporter</h3>
-          {subActive && (
+          {subscribedHere && (
             <span className="ml-auto rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-medium text-amber-300">
-              {me?.subStatus === "past_due" ? "Payment due" : "Active"}
+              {me?.subStatus === "past_due" || paypalRecords.some((r) => r.status === "past_due") ? "Payment due" : "Active"}
             </span>
           )}
         </div>
         <p className="mt-2 text-sm text-secondary">
-          Support the stream for <span className="text-body">$5/month</span> — a Supporter badge in chat
+          Support the stream for <span className="text-body">{monthlyPrice || (paypalSub?.price ? formatPrice(paypalSub.price.amount, paypalSub.price.currency) : "")}/month</span> — a Supporter badge in chat
           and a faster chat rate limit.
         </p>
         {loadingMe ? (
           <LoadingState className="mt-3" />
-        ) : subActive ? (
+        ) : subscribedHere ? (
           <div className="mt-3">
-            {status && <p className={`text-xs ${TONE_CLASS[status.tone]}`}>{status.text}</p>}
-            <button
-              onClick={manage}
-              disabled={busy}
-              className="mt-2 rounded-lg bg-raised px-4 py-2 text-sm font-medium text-heading hover:bg-control disabled:opacity-50 transition-colors"
-            >
-              {busy ? "Opening…" : "Manage subscription"}
-            </button>
+            {subActive && status && <p className={`text-xs ${TONE_CLASS[status.tone]}`}>{status.text}</p>}
+            {/* One line per PayPal subscription, with the on-site Cancel (spec §10.2). */}
+            {paypalRecords.map((r, i) => {
+              const line = recordLine(r);
+              if (!line) return null;
+              return (
+                <div key={`paypal-${i}`} className="mt-1 flex flex-wrap items-center gap-2">
+                  <p className={`text-xs ${line.ending ? TONE_CLASS.ending : TONE_CLASS.renews}`}>
+                    <span className="text-body">{line.service}</span> · {line.text}
+                  </p>
+                  {r.renews && r.status !== "pending" && !cancelNote && (
+                    <button
+                      onClick={cancelPaypal}
+                      disabled={busy}
+                      className="rounded-lg bg-raised px-3 py-1 text-xs font-medium text-heading hover:bg-control disabled:opacity-50 transition-colors"
+                    >
+                      {busy ? "Cancelling…" : "Cancel"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {cancelNote && <p className="mt-1 text-xs text-secondary">{cancelNote}</p>}
+            {subActive && (
+              <button
+                onClick={manage}
+                disabled={busy}
+                className="mt-2 rounded-lg bg-raised px-4 py-2 text-sm font-medium text-heading hover:bg-control disabled:opacity-50 transition-colors"
+              >
+                {busy ? "Opening…" : "Manage subscription"}
+              </button>
+            )}
           </div>
         ) : (
           <div className="mt-3">
@@ -440,13 +576,51 @@ export default function SupportContent({
                 {status.tone === "gift" ? "🎁 " : ""}{status.text}
               </p>
             )}
-            <button
-              onClick={startSubscriptionCheckout}
-              disabled={busy}
-              className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-on-accent hover:bg-amber-400 disabled:opacity-50 transition-colors"
-            >
-              {busy ? "Starting…" : "Become a Supporter"}
-            </button>
+            {warnElsewhere && elsewhere ? (
+              // Before any payment: a Supporter through another service would pay twice (§10.1, D24).
+              elsewhereDismissed ? null : (
+                <div className="flex flex-col gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+                  <p className="text-xs text-body">{elsewhereWarning(elsewhere)}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => { setElsewhereAck(true); setServerElsewhere(null); }}
+                      className="rounded-lg bg-raised px-3 py-1.5 text-xs font-medium text-heading hover:bg-control transition-colors"
+                    >
+                      Subscribe anyway
+                    </button>
+                    <button
+                      onClick={() => { if (onClose) onClose(); else setElsewhereDismissed(true); }}
+                      className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-on-accent hover:bg-amber-400 transition-colors"
+                    >
+                      Keep what I have
+                    </button>
+                  </div>
+                </div>
+              )
+            ) : (
+              <div className="flex flex-col items-start gap-2">
+                {subsOn && (
+                  <button
+                    onClick={startSubscriptionCheckout}
+                    disabled={busy}
+                    className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-on-accent hover:bg-amber-400 disabled:opacity-50 transition-colors"
+                  >
+                    {busy ? "Starting…" : "Become a Supporter"}
+                  </button>
+                )}
+                {paypalSubOn && paypalClientId && paypalSub?.price && signedIn && (
+                  <div className="w-full max-w-xs">
+                    <PayPalSubscribeButton
+                      clientId={paypalClientId}
+                      currency={paypalSub.price.currency}
+                      alsoElsewhere={elsewhereAck}
+                      onApproved={confirmPaypal}
+                      onElsewhere={(e) => { setServerElsewhere(e); setElsewhereAck(false); }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -607,7 +781,7 @@ export default function SupportContent({
           disabled={busy || (giftType === "direct" ? !recipient.trim() : giftCount < 1)}
           className="mt-3 rounded-lg bg-violet-500 px-4 py-2 text-sm font-semibold text-on-accent hover:bg-violet-400 disabled:opacity-50 transition-colors"
         >
-          {busy ? "Starting…" : `Gift $${giftDollars}`}
+          {busy ? "Starting…" : `Gift ${giftTotal}`}
         </button>
 
         {/* The ledger: what this viewer has given, one row per purchase,
@@ -650,7 +824,13 @@ export default function SupportContent({
       {/* One line, not empty sections: a Subscribe or Gift entry point must not
           open to a blank panel on a PayPal-only site. */}
       {stripeOnlyAsked && (
-        <p className="text-xs text-secondary">Subscriptions and gifts aren’t available on this site.</p>
+        <p className="text-xs text-secondary">
+          {subsMissing && giftsMissing
+            ? "Subscriptions and gifts aren’t available on this site."
+            : subsMissing
+              ? "Subscriptions aren’t available on this site."
+              : "Gifts aren’t available on this site."}
+        </p>
       )}
 
       {err && <p role="alert" className="text-xs text-red-400">{err}</p>}

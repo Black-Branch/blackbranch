@@ -121,8 +121,7 @@ test("a CommonJS tag is found at the DEFINITION, not just the export list", () =
 });
 
 test("a tag one blank line up does NOT reach the definition", () => {
-  // The drift web's gate found in coins.ts: a real, reasoned tag that had
-  // floated out of its window and was enforcing nothing. One blank line ends
+  // A real, reasoned tag that floats out of its window enforces nothing. One blank line ends
   // the docblock, so a tag above the wrong symbol cannot leak onto this one.
   const { dead } = findOrphans({
     "a.js":

@@ -78,8 +78,8 @@ test("the load-time effect is the ONLY auto-open path (reminders never interrupt
 
 test("support state can never reach storage — structurally, not by a skip", () => {
   const hook = read("../../../lib/useSendDestination.ts");
-  // Support mode is a boolean of its own now, so the persist effect cannot see
-  // it at all — strictly stronger than the skip it used to need there.
+  // Support mode is a boolean of its own, so the persist effect cannot see
+  // it at all — strictly stronger than a skip there.
   assert.match(hook, /const \[supportArmed, setSupportArmed\] = useState\(false\)/,
     "support mode is no longer its own state — it has moved back into forcedDest");
   const persist = hook.slice(hook.indexOf("Persist the chosen target"));
@@ -154,8 +154,8 @@ test("the Gadget button exists ONLY while support is live", () => {
 });
 
 test("the support indicator sits with the composer's other icon controls, not apart on the left", () => {
-  // Reported from a support ticket: the indicator sat on the left beside the avatar, apart from
-  // the composer's icons on the right (tools, send). It now renders in that group, after the field.
+  // The indicator renders with the composer's icons on the right (tools, send), after the field —
+  // not on the left beside the avatar, apart from them.
   const input = read("../ChatInput.tsx");
   const field = input.indexOf("<ChatComposerField");
   const button = input.indexOf("<SupportButton");

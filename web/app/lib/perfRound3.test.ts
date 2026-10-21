@@ -1,4 +1,4 @@
-// Round-3 perf batch E scans: 27a (chat pfp img is lazy), 27c (emote cache is
+// Perf scans: 27a (chat pfp img is lazy), 27c (emote cache is
 // capped), 30 (home page reads chain off their own dependency, one merged
 // signed-in query).
 //
@@ -77,7 +77,7 @@ test("30: the two signed-in reads are one round-trip", () => {
   }
 });
 
-// ── Round-3 polish picks (33/34/35/36) — pinned here rather than a new file ──
+// ── Polish picks (33/34/35/36) — pinned here rather than a new file ─────────
 
 test("33: the gift done copy branches on giftType — community gifts are not 'right away'", () => {
   const src = readFileSync(new URL("../components/SupportContent.tsx", import.meta.url), "utf8");

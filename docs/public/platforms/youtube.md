@@ -24,13 +24,3 @@ This step fills:
 - **YouTube Data API key** (kept encrypted). Live detection, VODs, the channel avatar and account-age checks.
 
 Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.
-
-## 2. Posting into YouTube chat (a later release) (optional)
-
-Your viewers are never asked to sign in with Google here. Posting site chat into YouTube chat arrives in a later release: it will need one account (the bot or you) signed in with Google each stream. Google will then show "Google hasn't verified this app" on that sign-in, and an unverified app may sign in at most 100 accounts, ever — that is why viewers are never asked. The token is cleared every day at the quiet hour. Nothing to do now.
-
-Links:
-
-- [Google: unverified apps](https://support.google.com/cloud/answer/7454865)
-
-You can skip this step and come back to it from the Admin Panel.

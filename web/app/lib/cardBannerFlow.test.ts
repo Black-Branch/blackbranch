@@ -1,4 +1,4 @@
-// Public-card banner data flow (feedback round 2, issue 1).
+// Public-card banner data flow.
 //
 // The bug: both combined-history routes emitted `NULL AS canonical_id` for
 // native rows, so every native message restored from scroll-back — which is

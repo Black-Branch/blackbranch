@@ -3,8 +3,11 @@ import { requireUser } from "@/app/lib/authGuard";
 import { supportBranding, SAVED_PM_OPTIONS, CUSTOMER_UPDATE } from "@/app/lib/billingServer";
 import { ensureStripeCustomerOrBusy } from "@/app/lib/stripeCustomer";
 import { TIERS, type TierSlug } from "@/app/lib/tiers";
+import { supporterPrice } from "@/app/lib/supporterPrice";
 import { NextRequest } from "next/server";
 import { createSlidingWindowLimiter } from "@/app/lib/rateLimit";
+import pool from "@/lib/db";
+import { entitledElsewhere, subscriptionSources } from "@/app/lib/subscriptions/entitlement";
 
 export const runtime = "nodejs";
 
@@ -25,14 +28,26 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => null);
   const slug = body?.tier as TierSlug | undefined;
-  const tier = slug && TIERS[slug];
+  // Own properties only: `tier: "toString"` must not find Object.prototype's.
+  const tier = slug && Object.hasOwn(TIERS, slug) ? TIERS[slug] : undefined;
   if (!tier) return new Response("Bad tier", { status: 400 });
-  if (!tier.priceId) return new Response("Tier price not configured", { status: 503 });
+  // No usable price (unset, archived, not monthly) = this site does not offer subscriptions: the
+  // panel hides the button, and a stale tab that still posts gets words, not a 503 (R1.10).
+  const price = await supporterPrice();
+  if (!price) return new Response("Subscriptions aren’t offered on this site.", { status: 404 });
 
   // Throttle AFTER every input refusal above (a typo is not a hit) and BEFORE
   // anything reaches Stripe — the customer lookup included.
   if (isCheckoutLimited(matrixId)) {
     return new Response("Too many checkout attempts — try again in a minute.", { status: 429, headers: { "Retry-After": "60" } });
+  }
+
+  // Already a Supporter through another service (PayPal, later Patreon/Ko-fi): a second, separate
+  // subscription — paying twice. Refused unless the viewer saw the warning and chose it
+  // (`alsoElsewhere: true`), so a stale page cannot skip it (subscription sources D24, §10.1).
+  if (body?.alsoElsewhere !== true) {
+    const other = await entitledElsewhere(pool, matrixId, "stripe", subscriptionSources());
+    if (other) return Response.json({ error: "subscribed_elsewhere", provider: other.provider, periodEnd: other.periodEnd }, { status: 409 });
   }
 
   const stripe = getStripe();
@@ -73,7 +88,7 @@ export async function POST(req: NextRequest) {
     return_url: `${publicOrigin(req.nextUrl.origin)}/billing/return?session_id={CHECKOUT_SESSION_ID}`,
     mode: "subscription",
     customer: customerId,
-    line_items: [{ price: tier.priceId, quantity: 1 }],
+    line_items: [{ price: price.id, quantity: 1 }],
     // Stamp our identity on both the session and the subscription so the webhook
     // can resolve the user even if the customer record ever drifts.
     metadata: { matrix_id: matrixId, tier: tier.slug },

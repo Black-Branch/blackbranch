@@ -6,10 +6,9 @@
 // stream.users must first be repointed to the survivor or deleted, or Postgres raises
 // an FK violation and the ENTIRE merge transaction rolls back.
 //
-// stream.support_events was missed. Because it is NOT NULL REFERENCES stream.users(id),
-// identity merge failed for every user who had ever paid — silently, since the caller
-// sees a thrown error rather than a wrong result. The repoint had existed in
-// migrate-v5.sql:36 and was lost when the runtime path was written.
+// Missing one (stream.support_events is NOT NULL REFERENCES stream.users(id)) fails
+// the merge for every user who has ever paid — silently, since the caller sees a
+// thrown error rather than a wrong result.
 //
 // The FK-COMPLETENESS check stays a source scan on purpose, even now that
 // identity.js is importable: it cross-references every `REFERENCES

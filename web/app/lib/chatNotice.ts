@@ -7,6 +7,16 @@
 // through it — this module is just the wire between the two, because the
 // handlers live in the panel and the line lives in the composer.
 
+/**
+ * A notice too long for the one-line slot (/help's list on an install with no console):
+ * more than 3 lines or 240 characters. It is shown in a bounded, scrollable box with a close
+ * button and stays until closed, rather than running off the page with no scroll or vanishing
+ * after five seconds, before anyone could read it.
+ */
+export function isLongNotice(text: string): boolean {
+  return text.length > 240 || text.split("\n").length > 3;
+}
+
 type Listener = (text: string) => void;
 const listeners = new Set<Listener>();
 

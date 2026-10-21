@@ -36,8 +36,7 @@ export type PaneDef<K extends string> = {
 
 /** A CSS length the first cell can bear: a px/percent literal, a var() or a
  *  calc(). Narrowed so the raw-number mistake (`firstWidth={liveColW}`) fails
- *  the compile instead of painting a unitless width (split-band final review,
- *  parked item). */
+ *  the compile instead of painting a unitless width. */
 type PaneWidth = `${number}px` | `${number}%` | `var(--${string})` | `calc(${string})`;
 
 export type PanesProps<K extends string> = {

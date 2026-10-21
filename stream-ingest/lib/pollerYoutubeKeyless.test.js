@@ -1,8 +1,8 @@
-// The REAL poller on a YouTube install with no Data API key (external review, finding A).
+// The REAL poller on a YouTube install with no Data API key.
 //
 // A key is optional for YouTube: liveness comes from the chat watcher's verified video id and the
-// count from the zero-quota InnerTube "watching now". startPoller() used to refuse to run without
-// a key (or a Twitch bot token), so such an install never opened a session. This drives the
+// count from the zero-quota InnerTube "watching now", so startPoller() must run without a key (or
+// a Twitch bot token) or such an install never opens a session. This drives the
 // actual timer loop with the watcher's id and a fake InnerTube, and asserts start once, snapshots
 // carrying the count and the verified id, and an end only after two consecutive offline readings.
 // No request may go to the paid Data API: there is no key to send.

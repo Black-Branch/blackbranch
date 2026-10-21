@@ -137,8 +137,8 @@ test("the approval UI links the account page and retries the SAME flow", () => {
 });
 
 test("the reset is reachable WITHOUT a recovery key (otherwise a lost key is a dead end)", () => {
-  // The restore branch used to offer only "Enter recovery key", with Start
-  // fresh appearing solely after a typed key failed with a mismatch error —
+  // A restore branch offering only "Enter recovery key", with Start
+  // fresh appearing solely after a typed key failed with a mismatch error, is
   // unreachable for the person who LOST the key, which is who a reset is for.
   const text = stripComments(sectionSrc());
   assert.match(text, /Lost your recovery key\? Start fresh/,

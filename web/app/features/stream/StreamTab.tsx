@@ -1,8 +1,8 @@
 "use client";
 // The Stream tab: admin-only, in the lower dock on a computer and the chat panel's row on a phone.
 // The live stream — or a past one picked from a drop-down — with its graphs; the platforms with
-// their embed switches and titles; income behind a switch that is off by default; the doctor's
-// health in one strip.
+// their embed switches and titles; each platform's chat reader (running, starting, failed and why);
+// income behind a switch that is off by default; the doctor's health in one strip.
 //
 // Only an admin's host mounts this (tabRegistry readiness), and every route it reads is admin-only
 // on the server. Nothing polls unless the tab is the open one and the page is visible.
@@ -20,6 +20,7 @@ import { ChatCurve, CompositionBar, EarnedChart, VelocityChart, ViewerCurve, car
 import { IncomeCard, SupportEventsList } from "./StreamIncome";
 import { StreamPlatforms } from "./StreamPlatforms";
 import { StreamHealth } from "./StreamHealth";
+import { StreamReaders } from "./StreamReaders";
 
 /** Remembered per browser, off by default. */
 const INCOME_KEY = "bb_stream_income";
@@ -129,6 +130,7 @@ export function StreamTab({ active }: { active: boolean }) {
         )}
 
         <StreamPlatforms active={active} />
+        <StreamReaders active={active} />
         <StreamHealth active={active} />
       </div>
     </div>

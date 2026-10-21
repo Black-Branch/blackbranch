@@ -1,0 +1,145 @@
+<!doctype html>
+<!-- Support bar overlay — OBS browser source, 1920×1080 (add http://<stream-api host>:3001/overlay/support-bar).
+     A bar along the bottom that fills as this stream's support comes in (take-home, the same number
+     the site's support bar shows). Its frames, all on the public WS:
+       timerState       — on connect and every heartbeat: barTotal (the running total), fillUsd
+                          (a full bar) and usdPerHour (one segment), so a reloaded source paints at once;
+       updateSupportBar — each contribution: the new total and the amount it added (a "+" popup);
+       resetSupportBar  — a new stream: back to empty.
+     Every value from the socket is a number or written as text. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Support bar</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; }
+  * { box-sizing: border-box; }
+  #wrap {
+    position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%);
+    width: 1100px; max-width: calc(100vw - 32px);
+    font-family: "Segoe UI", system-ui, sans-serif; color: #fff;
+  }
+  #track {
+    position: relative; height: 26px; border-radius: 13px; overflow: hidden;
+    background: rgba(12, 12, 16, 0.80); border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  #fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+    background: linear-gradient(90deg, rgba(165, 200, 247, 0.55), rgba(165, 200, 247, 0.85));
+    transition: width 700ms cubic-bezier(.2, .9, .3, 1);
+  }
+  #fill.pulse { animation: pulse 900ms ease; }
+  @keyframes pulse { 0% { filter: brightness(1); } 35% { filter: brightness(1.6); } 100% { filter: brightness(1); } }
+  #dividers { position: absolute; inset: 0; display: flex; pointer-events: none; }
+  #dividers .seg { flex: 1; border-right: 1px solid rgba(255, 255, 255, 0.18); }
+  #dividers .seg:last-child { border-right: 0; }
+  #label {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  }
+  #delta {
+    position: absolute; bottom: 34px; left: 0; opacity: 0;
+    padding: 3px 10px; border-radius: 999px; background: rgba(12, 12, 16, 0.88);
+    border: 1px solid rgba(165, 200, 247, 0.5); color: #a5c8f7;
+    font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums;
+    transition: opacity 400ms ease, transform 400ms ease;
+  }
+  #delta.show { opacity: 1; transform: translateY(-6px); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="delta"></div>
+  <div id="track">
+    <div id="fill"></div>
+    <div id="dividers"></div>
+    <div id="label"></div>
+  </div>
+</div>
+<script>
+(function () {
+  var fill = document.getElementById('fill');
+  var dividers = document.getElementById('dividers');
+  var label = document.getElementById('label');
+  var delta = document.getElementById('delta');
+
+  var total = 0;
+  var fillUsd = 0;
+  var perHour = 0;
+  var segments = 0;
+  var deltaTimer = null;
+
+  function num(v) { var n = Number(v); return isFinite(n) && n >= 0 ? n : 0; }
+  function money(n) { return '$' + n.toFixed(2); }
+
+  function buildDividers(n) {
+    if (n === segments) return;
+    segments = n;
+    dividers.textContent = '';
+    for (var i = 0; i < n; i++) {
+      var d = document.createElement('div');
+      d.className = 'seg';
+      dividers.appendChild(d);
+    }
+  }
+
+  function paint() {
+    var pct = fillUsd > 0 ? Math.min(total / fillUsd, 1) * 100 : 0;
+    fill.style.width = pct + '%';
+    label.textContent = fillUsd > 0 ? money(total) + ' / ' + money(fillUsd) : money(total);
+  }
+
+  function pop(amount) {
+    if (!(amount > 0)) return;
+    fill.className = '';
+    void fill.offsetWidth; // restart the pulse
+    fill.className = 'pulse';
+    var pct = fillUsd > 0 ? Math.min(total / fillUsd, 1) * 100 : 0;
+    delta.style.left = 'calc(' + Math.min(Math.max(pct, 4), 92) + '% - 30px)';
+    delta.textContent = '+' + money(amount);
+    delta.className = 'show';
+    if (deltaTimer) clearTimeout(deltaTimer);
+    deltaTimer = setTimeout(function () { delta.className = ''; }, 2400);
+  }
+
+  function onTimerState(f) {
+    var f2 = num(f.fillUsd);
+    var p = num(f.usdPerHour);
+    if (f2 > 0) fillUsd = f2;
+    if (f2 > 0 && p > 0) perHour = p;
+    buildDividers(fillUsd > 0 && perHour > 0 ? Math.min(Math.max(1, Math.ceil(fillUsd / perHour)), 48) : 1);
+    if (f.barTotal != null) total = num(f.barTotal);
+    paint();
+  }
+
+  function onUpdate(f) {
+    total = num(f.total);
+    paint();
+    pop(num(f.delta));
+  }
+
+  function onReset() {
+    total = 0;
+    paint();
+  }
+
+  function connect() {
+    var ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+    ws.onmessage = function (ev) {
+      var f; try { f = JSON.parse(ev.data); } catch (e) { return; }
+      if (!f) return;
+      if (f.type === 'timerState') onTimerState(f);
+      else if (f.type === 'updateSupportBar') onUpdate(f);
+      else if (f.type === 'resetSupportBar') onReset();
+    };
+    ws.onclose = function () { setTimeout(connect, 3000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) { /* noop */ } };
+  }
+
+  buildDividers(1);
+  paint();
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -33,7 +33,7 @@ const SETTINGS_KEY_SET = new Set(SETTINGS_KEYS);
 export function sanitizeSettingsBlob(incoming: Record<string, unknown>): Record<string, string> {
   // Convert BEFORE whitelisting: a tab still running pre-deploy code sends v1
   // keys, and the v2 whitelist would drop them — silently resetting that
-  // viewer's panel colours (Review Focus 1).
+  // viewer's panel colours.
   const migrated = migrateSettingsBlob(incoming);
   const clean: Record<string, string> = {};
   for (const [k, s] of Object.entries(migrated)) {

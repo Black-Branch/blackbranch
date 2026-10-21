@@ -165,7 +165,7 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
         )}
         {managedOutside && (
           <span className="min-w-0 text-xs text-secondary" data-managed-outside>
-            <span aria-hidden="true">🔒 </span>Managed outside Blackbranch
+            <span aria-hidden="true">🔒 </span>Managed outside Black Branch
           </span>
         )}
         {k.tier === "install" && (

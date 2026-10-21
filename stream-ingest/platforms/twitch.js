@@ -184,7 +184,7 @@ export async function startTwitch(opts = {}) {
     const why = err?.message || String(err);
     console.warn(`[twitch] first login failed (${why}) — the .env access token is probably stale; reconnecting with a refreshed token`);
   }
-  // Expose the sender for the home (non-relay) connection so the owner plugin's bot
+  // Expose the sender for the home (non-relay) connection so the site plugin's bot
   // can reply on Twitch. Relay connections are anonymous/read-only — never expose a sender.
   return { stop: () => client.destroy(), sendMessage: onMessage ? null : reply, channel };
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The release-candidate rehearsal (spec 2026-10-10-black-branch-phase-6-fresh-install-design.md §7.5):
+# The release-candidate rehearsal:
 # on a fresh machine, cut real signed releases from one tree with a throwaway key, install the first
 # with the published one-line form, update to the second, and prove that a third whose health check
 # fails is rolled back. The workflow .github/workflows/release-candidate.yml calls one step at a

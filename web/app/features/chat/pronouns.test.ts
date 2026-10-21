@@ -53,12 +53,12 @@ test("the OBS source renders chat through the same row, so it gets the mark and 
   assert.match(overlay, /<ChatMessage\b/);
 });
 
-test("shown by default; the setting hides them with a root class, mirrored before paint", () => {
+test("hidden by default (a viewer switches them on); the setting hides them with a root class, mirrored before paint — absent key = hidden", () => {
   const reg = read("../../lib/settingsRegistry.ts");
-  assert.match(reg, /\n  pronounsOn:\s+true,/);
+  assert.match(reg, /\n  pronounsOn:\s+false,/);
   assert.match(reg, /pronounsOn: E\(\{ ls: "chatStyle_pronouns", prePaint: true,\s*serialize: ser1, parse: bool1, effect: \(v\) => cls\("chat-pron-off", !\(v as boolean\)\),/);
   assert.match(read("../../lib/settingsMenu.ts"), /s\("pronounsOn"\)/);
-  assert.match(read("../../layout.tsx"), /if \(localStorage\.getItem\('chatStyle_pronouns'\) === '0'\) document\.documentElement\.classList\.add\('chat-pron-off'\);/);
+  assert.match(read("../../layout.tsx"), /if \(localStorage\.getItem\('chatStyle_pronouns'\) !== '1'\) document\.documentElement\.classList\.add\('chat-pron-off'\);/);
   assert.match(read("../../globals.css"), /\.chat-pron-off \.chat-pron \{ display: none !important; \}/);
 });
 

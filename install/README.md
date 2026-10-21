@@ -18,14 +18,19 @@ sudo ./install/install.sh --domain example.com --mode tunnel   # or answer them 
 ```
 
 The one-line form: `tools/release.mjs cut` writes the release's `install.sh` stamped with that release
-(version, size, sha256, `--base-url`); piped into bash it fetches the tarball, checks it, unpacks it as
+(version, size, sha256, `--base-url`, channel), published as `install.sh` for the stable channel and
+`install-<channel>.sh` for another; piped into bash it fetches the tarball, checks it, unpacks it as
 `/opt/blackbranch/releases/<version>` and runs the installer inside it, with `--update-feed` set to where
-it came from:
+it came from and the box following that channel. Every release so far is a preview on the beta
+channel, so today's one-line form is:
 
 ```bash
-curl -fsSL https://blackbranch.app/install.sh | sudo bash
-curl -fsSL https://blackbranch.app/install.sh | sudo bash -s -- --domain example.com --mode tunnel
+curl -fsSL https://blackbranch.app/install-beta.sh | sudo bash
+curl -fsSL https://blackbranch.app/install-beta.sh | sudo bash -s -- --domain example.com --mode tunnel
 ```
+
+A checkout follows the stable channel, which has no release yet; `blackbranch update --channel beta`
+moves it to the previews.
 
 The two questions:
 
@@ -81,7 +86,7 @@ The setup pages, in order — each saves as you go, so a closed browser comes ba
 4. **Points** — what the community's points are called.
 5. **Modules** — one switch per optional part. A module you switch on gets its own page next, made
    from its manifest's `setup` steps (explanation, links, values to paste, fields, a Test button).
-6. **Community** — makes the community space and `#general` as your account, and the federation
+6. **Community** — makes the community space, `#general` and `#forum` as your account, and the federation
    switch (off by default).
 7. **Finish** — the quiet hour, opt-in bug reports (off), and where backups go (this server, an
    S3-compatible bucket or an SFTP server). **Finish waits for a test backup**: one backup, then a
@@ -152,7 +157,7 @@ service at `https://matrix.example.com/auth/`.
 - **The sign-in service's admin API is not on the internet.** It answers only on the service's
   internal listener (port 8081 inside the bundle's network), which the router never routes; the site
   reaches it there (`MAS_ADMIN_URL`).
-- **The community space and `#general`** are created by `blackbranch matrix bootstrap`, as the
+- **The community space, `#general` and `#forum`** are created by `blackbranch matrix bootstrap`, as the
   streamer's own account, so the rooms are theirs. It looks before it creates, so running it again
   changes nothing, and it records the two room ids in the site's settings. The streamer's account is
   made by the setup pages' first page, and their Community page runs the bootstrap. Both rooms are
@@ -200,7 +205,7 @@ blackbranch render                 regenerate the router, Synapse and sign-in co
 blackbranch set <KEY> <value>      change one display value (SITE_NAME, LEGAL_*, CURRENCY_*, …); the site restarts with it
 blackbranch migrate                apply database migrations now
 blackbranch up                     bring everything to its configured state
-blackbranch matrix bootstrap [--as <name>]   create the community space and #general (safe to repeat)
+blackbranch matrix bootstrap [--as <name>]   create the community space, #general and #forum (safe to repeat)
 blackbranch federation [on|off]    show or switch federation
 blackbranch setup-link [--new]     print the setup link while no admin exists (--new: a fresh one)
 blackbranch apply-install          write the setup pages' display values into .env and restart the site once
@@ -258,6 +263,10 @@ for three days says so on the doctor page and in `blackbranch doctor`.
    affect, a WebSocket frame from stream-api, and a sign-in round trip (the site starts a sign-in the
    sign-in service accepts; a token it issues for the streamer works on the homeserver, then ends);
    then the apps are restarted twice and checked again.
+   The front door is checked at this box's own router: direct and lab mode ask caddy on port 443 by
+   each of the three names (direct mode with the real certificate), so a box behind a home router
+   that cannot reach its own public address (no NAT loopback) still passes. Reaching the site from
+   outside is the doctor's `door.outside` row — a warning, never part of an update's verdict.
 
 If the health check passes, the release is recorded and the release from two updates ago is removed
 (its images and folder). If anything after step 6 fails, the box **goes back**: the previous release's

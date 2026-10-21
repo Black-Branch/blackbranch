@@ -188,7 +188,7 @@ export default function TimerSection({ note }: { note: (m: string) => void }) {
       </div>
 
       {/* Fund the Night. The night is opened as an END TIME in the
-          broadcaster's own words ("4am") and converted to a streamed duration
+          broadcaster's own words ("11pm") and converted to a streamed duration
           once, at start — so this is a free-text field, not a duration picker:
           stream-api owns the parse and says what it could not read. Seed = the
           free hours the clock OPENS with (a night ignores the marathon's
@@ -199,9 +199,9 @@ export default function TimerSection({ note }: { note: (m: string) => void }) {
           and a big donation would otherwise add insultingly little time. */}
       <div className="flex flex-wrap gap-2 items-center mt-3">
         <span className="text-sm text-secondary w-24 shrink-0">Night</span>
-        <input className={input} value={nightEnd} placeholder="4am"
+        <input className={input} value={nightEnd} placeholder="end time, e.g. 11pm"
           onChange={(e) => setNightEnd(e.target.value)} aria-label="Time the night ends" />
-        <input className={input} value={nightSeed} type="number" min="0" step="0.5" placeholder="seed h (2)"
+        <input className={input} value={nightSeed} type="number" min="0" step="0.5" placeholder="free hours (2)"
           onChange={(e) => setNightSeed(e.target.value)} aria-label="Free opening hours (seed)" />
         <button type="button" className={btn} disabled={busy || !nightEnd}
           onClick={() => callNight({
@@ -215,7 +215,7 @@ export default function TimerSection({ note }: { note: (m: string) => void }) {
 
       <div className="flex flex-wrap gap-2 items-center mt-2">
         <span className="text-sm text-secondary w-24 shrink-0">Target $</span>
-        <input className={input} value={nightTarget} type="number" min="1" step="1" placeholder="362"
+        <input className={input} value={nightTarget} type="number" min="1" step="1" placeholder="income goal"
           onChange={(e) => setNightTarget(e.target.value)} aria-label="Night target income in dollars" />
         <button type="button" className={btn} disabled={busy || !nightTarget}
           onClick={() => callNight({ action: "target", targetUsd: Number(nightTarget) },
@@ -225,8 +225,8 @@ export default function TimerSection({ note }: { note: (m: string) => void }) {
       </div>
 
       <div className="flex flex-wrap gap-2 items-center mt-2">
-        <span className="text-sm text-secondary w-24 shrink-0">Encore</span>
-        <input className={input} value={nightHours} type="number" min="0.25" step="0.5" placeholder="1"
+        <span className="text-sm text-secondary w-24 shrink-0">Extend by</span>
+        <input className={input} value={nightHours} type="number" min="0.25" step="0.5" placeholder="hours"
           onChange={(e) => setNightHours(e.target.value)} aria-label="Hours to extend the night by" />
         <button type="button" className={btn} disabled={busy || !nightHours}
           onClick={() => callNight({ action: "extend", hours: Number(nightHours) }, `Night extended by ${nightHours}h.`)}>

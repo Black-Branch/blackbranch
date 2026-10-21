@@ -29,9 +29,10 @@ const HOME_WIDGETS: readonly HomeWidgetDef[] = [
 
 /** The widgets this install shows: the VODs card exists only when the install has a VOD
  *  playlist (platform.youtube.vodPlaylist) — otherwise neither "Latest VODs" nor, on a phone,
- *  "Last stream" appears. */
-export function homeWidgets({ vods }: { vods: boolean }): readonly HomeWidgetDef[] {
-  return vods ? HOME_WIDGETS : HOME_WIDGETS.filter((w) => w.id !== "vods");
+ *  "Last stream" appears. The News card exists only once a feed has given it something to show
+ *  (`news`): an install with no feed has no News card at all, never an empty one. */
+export function homeWidgets({ vods, news = true }: { vods: boolean; news?: boolean }): readonly HomeWidgetDef[] {
+  return HOME_WIDGETS.filter((w) => (w.id !== "vods" || vods) && (w.id !== "news" || news));
 }
 
 /** The signed-out header's two lines: the install's own (site.homeHeading / site.homeIntro,

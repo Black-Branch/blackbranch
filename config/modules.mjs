@@ -104,17 +104,11 @@ export const MODULES = [
         ],
         paste: [], fields: ['platform.youtube.channelId', 'youtube.apiKey'], test: 'youtube.apiKey',
       },
-      {
-        id: 'posting', title: 'Posting into YouTube chat (a later release)', need: 'optional',
-        explain: 'Your viewers are never asked to sign in with Google here. Posting site chat into YouTube chat arrives in a later release: it will need one account (the bot or you) signed in with Google each stream. Google will then show "Google hasn\'t verified this app" on that sign-in, and an unverified app may sign in at most 100 accounts, ever — that is why viewers are never asked. The token is cleared every day at the quiet hour. Nothing to do now.',
-        links: [{ label: 'Google: unverified apps', url: 'https://support.google.com/cloud/answer/7454865' }],
-        paste: [], fields: [], test: null,
-      },
     ],
   },
   {
     id: 'stripe', label: 'Card payments (Stripe)', kind: 'module', defaultOn: false, packages: ['web'], legacyOn: true,
-    description: 'Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, and Stripe\'s webhook address answers "not found", so Stripe keeps its events and retries them for about three days.',
+    description: 'Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe\'s webhook address answers "not found" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them — cancel their subscriptions in Stripe first, or switch back on.',
     api: { files: [] }, settings: ['stripe.secretKey', 'stripe.publishableKey', 'stripe.webhookSecret'], doneTest: [],
     setup: [
       {
@@ -123,7 +117,7 @@ export const MODULES = [
         links: [{ label: 'Stripe: API keys', url: 'https://dashboard.stripe.com/apikeys' }, { label: 'Stripe: restricted keys', url: 'https://docs.stripe.com/keys/restricted-api-keys' }],
         paste: [
           { label: 'Permissions: Write', value: 'Checkout Sessions · Customers · Customer portal' },
-          { label: 'Permissions: Read', value: 'Subscriptions · Invoices · PaymentIntents · Webhook Endpoints · Account' },
+          { label: 'Permissions: Read', value: 'Subscriptions · Invoices · PaymentIntents · Webhook Endpoints · Account · Prices' },
         ],
         fields: ['stripe.secretKey', 'stripe.publishableKey'], test: 'stripe.secretKey',
       },
@@ -159,12 +153,12 @@ export const MODULES = [
   },
   {
     id: 'paypal', label: 'PayPal and Venmo', kind: 'module', defaultOn: false, packages: ['web'], legacyOn: true,
-    description: 'Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. One-time payments only: subscriptions and gifts are card payments (Stripe). Off: no PayPal button, and PayPal\'s webhook address answers "not found", so PayPal keeps its events and retries them for about three days.',
-    api: { files: [] }, settings: ['paypal.env', 'paypal.clientId', 'paypal.clientSecret', 'paypal.webhookId'], doneTest: [],
+    description: 'Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal\'s webhook address answers "not found", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them — cancel their subscriptions in PayPal first, or switch back on.',
+    api: { files: [] }, settings: ['paypal.env', 'paypal.clientId', 'paypal.clientSecret', 'paypal.webhookId', 'paypal.plans'], doneTest: [],
     setup: [
       {
         id: 'app', title: 'Your PayPal app', need: 'required',
-        explain: 'In the PayPal Developer Dashboard → Apps & Credentials, pick Live (or Sandbox to try it first) and create an app of type Merchant. Paste its client id and secret, and say which of the two it is. PayPal decides when to offer Venmo: only to a buyer it finds eligible, which in practice means a US business account and a US buyer paying in US dollars. Everyone else sees only PayPal.',
+        explain: 'In the PayPal Developer Dashboard → Apps & Credentials, pick Live (or Sandbox to try it first) and create an app of type Merchant. Paste its client id and secret, and say which of the two it is. PayPal decides when to offer Venmo: only to a buyer it finds eligible, which in practice means a US business account and a US buyer paying in US dollars. Everyone else sees only PayPal. Subscription plans: monthly, a fixed price, and a payment failure threshold (3) set on the plan in PayPal — any other plan is refused credit and flagged; without the threshold PayPal keeps retrying and the perks last only a month past the last payment.',
         links: [{ label: 'PayPal: Apps & Credentials', url: 'https://developer.paypal.com/dashboard/applications/live' }],
         paste: [], fields: ['paypal.env', 'paypal.clientId', 'paypal.clientSecret'], test: 'paypal.clientSecret',
       },
@@ -174,7 +168,7 @@ export const MODULES = [
         links: [{ label: 'PayPal: webhooks', url: 'https://developer.paypal.com/api/rest/webhooks/' }],
         paste: [
           { label: 'Webhook URL', value: '{origin}/api/billing/paypal/webhook' },
-          { label: 'Events', value: 'PAYMENT.CAPTURE.COMPLETED · PAYMENT.CAPTURE.REFUNDED · PAYMENT.CAPTURE.REVERSED · CUSTOMER.DISPUTE.RESOLVED' },
+          { label: 'Events', value: 'PAYMENT.CAPTURE.COMPLETED · PAYMENT.CAPTURE.REFUNDED · PAYMENT.CAPTURE.REVERSED · CUSTOMER.DISPUTE.RESOLVED · BILLING.SUBSCRIPTION.CREATED · BILLING.SUBSCRIPTION.ACTIVATED · BILLING.SUBSCRIPTION.UPDATED · BILLING.SUBSCRIPTION.EXPIRED · BILLING.SUBSCRIPTION.CANCELLED · BILLING.SUBSCRIPTION.SUSPENDED · BILLING.SUBSCRIPTION.PAYMENT.FAILED · PAYMENT.SALE.COMPLETED · PAYMENT.SALE.REFUNDED · PAYMENT.SALE.REVERSED' },
         ],
         fields: ['paypal.webhookId'], test: 'paypal.webhookId',
       },

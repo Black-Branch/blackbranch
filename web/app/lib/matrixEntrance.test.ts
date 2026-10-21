@@ -67,13 +67,12 @@ test("content is VISIBLE at rest — the animation only moves it, and only while
 });
 
 test("exactly the two REACHABLE contents-depths are covered, at all five rule-sites — a third would be dead code", () => {
-  // Round 3 ruling: a `> .contents > .contents > *` rule WOULD select the
+  // A `> .contents > .contents > *` rule WOULD select the
   // timeline pane's real box (it sits exactly two contents-hops down off the
   // pager), but could never actually animate it — that box carries
   // `.panel-slide-in`, unlayered (globals.css), which always beats a layered
   // chrome.css rule on the same `animation` property regardless of selector.
-  // Round 2 shipped that third selector; round 3 removed it as dead code
-  // that looks load-bearing. It must not come back — the timeline pane
+  // Such a third selector is dead code that looks load-bearing. It must not come back — the timeline pane
   // already animates via `.panel-slide-in`'s own `panel-in`, on purpose.
   const css = stripCssComments(readFileSync(cssPath, "utf8"));
   const block = css.slice(css.indexOf(".matrix-entrance"));
@@ -81,9 +80,8 @@ test("exactly the two REACHABLE contents-depths are covered, at all five rule-si
   // the three `:nth-child` delay rules, and the reduced-motion override) —
   // `assert.match` alone is vacuous here: with five sites sharing the same
   // selector text, dropping it from any ONE of them still leaves it
-  // findable in the other four. Counting occurrences is what a break-verify
-  // caught this round (round 2's test used a bare `assert.match` and did not
-  // go red when the base rule's one-hop selector was removed).
+  // findable in the other four. Counting occurrences goes red when the base
+  // rule's one-hop selector is removed; a bare `assert.match` does not.
   const RULE_SITES = 5;
   const oneHop = block.match(/\.matrix-entrance\[data-entered\]\s*>\s*\*:not\(\.contents\)/g) ?? [];
   const twoHop = block.match(/\.matrix-entrance\[data-entered\]\s*>\s*\.contents\s*>\s*\*/g) ?? [];

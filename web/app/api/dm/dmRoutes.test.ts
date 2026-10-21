@@ -27,7 +27,7 @@ test("/api/mod/announce: mods only, checked FIRST; bounded; one per 30 s; logged
 });
 
 // What a nudge must NOT reveal (no public frame, no per-recipient tag) is pinned in
-// app/lib/dm/nudgeBox.test.ts, with the adversarial case (external review S5).
+// app/lib/dm/nudgeBox.test.ts, with the adversarial case.
 test("/api/dm/ping POST: signed in, never yourself, rate-limited, only a live site account", () => {
   const post = PING.slice(PING.indexOf("export async function POST"));
   assert.match(post, /if \(!me\) return Response\.json\(\{ error: "Sign in first\." \}, \{ status: 401 \}\);/);

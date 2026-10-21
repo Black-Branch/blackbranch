@@ -35,7 +35,7 @@ const tts = require('./tts');                       // ElevenLabs dual-voice
 const { createSupportBar } = require('./supportbar');
 const { createSponsors } = require('./sponsors');    // Fund-the-Night credit pool + clock badges (leaf)
 const { createMoney, makeRecordSupport, makeRecordUnpriced, makePersistEventCard, COIN_KINDS } = require('./money');
-// Qorm spends are spectacle, not support: their
+// Currency spends are spectacle, not support: their
 // historical support_events rows are excluded
 // from EVERY fold of the table. One list, derived from the policy, handed down
 // by this composition root so the leaves never learn the policy themselves.
@@ -48,10 +48,11 @@ const { registerPaymentWebhooks, startStreamlabs } = require('./webhooks');
 const { createModules } = require('./modules');
 const { createSounds } = require('./sounds');          // coin-store sound alerts (gated)
 
-// This install's owner plugin (plugins.js — the one seam to owner/): the parts that are the
-// owner's own. Absent in the public export; a broken one fails here, at boot.
+// This install's site plugin (plugins.js — the one seam to owner/): the parts that are the
+// install's own. Absent in the public export; a broken one fails here, at boot.
 const owner = require('./plugins').loadOwnerPlugin();
-console.log(`[plugins] owner plugin ${owner ? `loaded (${owner.id})` : 'not present'}`);
+// One plain line either way: no plugin is the normal state of an install, not an alarm.
+console.log(`[plugins] site plugin: ${owner ? owner.id : 'none'}`);
 // Room lights (the owner's `lights` module): alert.js and timer.js flash them when present and
 // started; null in the public build, which both already treat as "no lights".
 const lights = owner?.lights ?? null;
@@ -71,6 +72,10 @@ const { poolOptions, apiErrorHandler } = require('./db-pool');
 const pool = new Pool(poolOptions(process.env));
 
 pool.on('error', (err) => console.error('[DB] Unexpected pool error:', err.message));
+// The boot-time first reads (content, timer → sponsors, support bar, poll), each already caught.
+// Held so the drain can let them finish before ending the pool: without that, a stop in the first second
+// prints "[sponsors] init failed: Cannot use a pool after calling end on the pool".
+const bootLoads = [];
 
 // ── App ───────────────────────────────────────────────────────────────────
 const app    = express();
@@ -91,8 +96,8 @@ const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch
 // ── Aggregate refresh (aggregates.js) — single-flight + coalesced.
 //    The interval drives the wrapper, never the raw rebuild.
 const { createAggregates } = require('./aggregates');
-// The owner plugin's step after each rebuild (its scoring labels); none without a plugin.
-const { requestAggregateRefresh, start: startAggregates } = createAggregates({
+// The site plugin's step after each rebuild (its scoring labels); none without a plugin.
+const { requestAggregateRefresh, start: startAggregates, stop: stopAggregates } = createAggregates({
   pool, excludeEventTypes: SPEND_EVENT_TYPES, afterAggregates: owner?.afterAggregates ?? null,
 });
 startAggregates();
@@ -150,7 +155,7 @@ routeUpgrade(rig.PATH, rig.handleUpgrade);
 // after the pool and the socket exist — is early enough; until its first load lands they
 // answer from env and defaults, exactly as process.env did.
 const { instanceConfig } = require('./instance-config');
-// The AI wrapper (ai.js): the slot registry, routing and usage. The owner plugin's radio
+// The AI wrapper (ai.js): the slot registry, routing and usage. The site plugin's radio
 // DJ registered its slot when the plugin loaded (above), so it is listed from boot.
 const { ai } = require('./ai');
 instanceConfig.init({
@@ -175,7 +180,7 @@ const content = createContent({
   validators: { 'bot.behavior': (body) => { const r = parseBotBehavior(body); return r.ok ? null : r.error; } },
 });
 content.registerContentRoutes(app, { requireSecret, wrap });
-content.load().catch((e) => console.warn(`[content] first load failed: ${e.message} — read again on the first request`));
+bootLoads.push(content.load().catch((e) => console.warn(`[content] first load failed: ${e.message} — read again on the first request`)));
 // `memory` is built further down; the stats hook is late-bound and runs only on a /ai/routes read.
 instanceConfig.ready.then(() => ai.start({ pool, memoryStats: () => memory.stats() })).catch((e) => console.warn(`[ai] start failed: ${e.message}`));
 
@@ -188,7 +193,7 @@ const lifecycle = createLifecycle({
   // Same guard as money.js's rebuildSponsorPool; `sponsors` is built below.
   onStreamStart: () => Promise.resolve(sponsors.reset())
     .catch((e) => console.warn('[sponsors] reset on stream start:', e.message)),
-  // The owner plugin's stream-end hook (e.g. a bot forced 'on' goes back to following the
+  // The site plugin's stream-end hook (e.g. a bot forced 'on' goes back to following the
   // stream); no plugin = nothing to do.
   onStreamEnd: () => owner?.onStreamEnd?.(),
 });
@@ -200,12 +205,13 @@ lifecycle.registerLifecycleRoutes(app, { requireInternal, wrap });
 // `onReversed`: a late credit that took back a refund held for it (money.js, v156) rebuilds the
 // sponsor pool from the ledger — same guard as money.js's rebuildSponsorPool; `sponsors` is built below.
 const recordSupport = makeRecordSupport({ pool, resolveOrCreate, liveState, onReversed: () => sponsors.reset() });
-const recordUnpriced = makeRecordUnpriced({ pool, liveState }); // R2-1: payments the ledger cannot price
+const recordUnpriced = makeRecordUnpriced({ pool, liveState }); // payments the ledger cannot price
 const persistEventCard = makePersistEventCard(pool);
 
-// TTS auto-fire on alerts stays OFF until the qpwgraph routing + an audible test
-// are confirmed (avoids blasting audio). Flip ALERT_TTS_ENABLED=1 in .env then.
-const ALERT_TTS_ENABLED = process.env.ALERT_TTS_ENABLED === '1';
+// Speech is off until the install switches it on (instance key tts.enabled, Admin Panel → Voice;
+// env ALERT_TTS_ENABLED still overrides). tts.enabled() is the one reading of it: alerts get a
+// speaker that asks it per line, money.js asks it for paid read-aloud and /speak.
+const spokenAlerts = { speak: (turn) => (tts.enabled() ? tts.speak(turn) : undefined) };
 
 // Stream timer — server-authoritative + persistent (stream.timer_state). Created
 // before the support bar so take-home $ can credit time via earnTime→addMoney.
@@ -279,9 +285,9 @@ const sponsors = createSponsors({
 // usdPerHour) and through `stream.timer_state` — and until timer.init()
 // resolves, the timer is still holding its coded DEFAULTS, so a race here
 // prices an active night's whole cohort against a night that isn't loaded yet.
-timerReady
+bootLoads.push(timerReady
   .then(() => sponsors.init())
-  .catch((e) => console.warn('[sponsors] init:', e.message));
+  .catch((e) => console.warn('[sponsors] init:', e.message)));
 sponsors.startHeartbeat();
 
 // The money bus (money-bus.js): the bar banks, broadcasts and credits time, THEN publishes to
@@ -295,12 +301,12 @@ const supportBar = createSupportBar({
   notionalFor: (usd) => timer.convertNotional(usd),  // $ → NOTIONAL seconds (uncapped curve value)
   onAdd: moneyBus.publish,
 });
-supportBar.init().catch((e) => console.warn('[supportbar] init:', e.message));
+bootLoads.push(supportBar.init().catch((e) => console.warn('[supportbar] init:', e.message)));
 subscribeSponsors(moneyBus, sponsors);
 
 const alert = createAlert({
   broadcast, bufferPush, supportBar, obs, lights,
-  tts: ALERT_TTS_ENABLED ? tts : null,
+  tts: spokenAlerts,
   logSupport: recordSupport,
   logUnpriced: recordUnpriced,
   persistCard: persistEventCard,
@@ -318,7 +324,7 @@ const sounds = createSounds();
 // Cross-platform polls (poll.js): web card taps + platform
 // number-votes tally into one poll; card + updates ride the public WS.
 const pollEngine = createPoll({ broadcast, bufferPush, pool, persistCard: persistEventCard });
-pollEngine.init().catch((e) => console.warn('[poll] init:', e.message));
+bootLoads.push(pollEngine.init().catch((e) => console.warn('[poll] init:', e.message)));
 
 // ── Money routes (money.js): /support, /alert, /speak, /support-bar/reset,
 //    /timer/*, /chat/event (KIND_POLICY accounting), /tts/status,
@@ -329,7 +335,7 @@ const money = createMoney({
   // /timer/night's price floor: the owner's meter when it is on, else null — the route reads null as 0.
   meter: { requiredCentsPerDay: () => owner?.requiredCentsPerDay?.() ?? null },
   persistEventCard, maskBlacklist,
-  broadcast, bufferPush, bufferReplace, ALERT_TTS_ENABLED,
+  broadcast, bufferPush, bufferReplace, ttsEnabled: tts.enabled,
   // /timer/night's `start` and /support-bar/reset rebuild the credit pool —
   // it is night-scoped state, not stream-lifetime state (sponsors.reset).
   sponsors,
@@ -343,10 +349,18 @@ money.registerMoneyRoutes(app, { requireInternal, requireSecret, wrap });
 // ── Chat ingest + native chat (chat.js): /chat, /chat/native (shared
 //    send-to-all dedup state), scoring patches. The hot path.
 const { createChat } = require('./chat');
-createChat({ pool, resolveOrCreate, resolveCanonical, pronouns, pollEngine,
+// Banned chatters at the chat door (ban-hold.js): pushed by web on every ban/unban, rebuilt from
+// site.bans + site.mod_log at boot and every minute.
+const banHold = require('./ban-hold').createBanHold({ pool });
+banHold.registerBanHoldRoutes(app, { requireInternal, wrap });
+banHold.start();
+createChat({ pool, resolveOrCreate, resolveCanonical, pronouns, banHold, pollEngine,
              msgBuffer, broadcast, bufferPush,
              getStreamId: async () => (await liveState()).streamId || null })
   .registerChatRoutes(app, { requireInternal, wrap });
+// The lockdown age lever's per-platform reach (account-age.js): which platforms' ages this install
+// can check — the rest are never held.
+require('./account-age').registerLockdownRoutes(app, { requireInternal });
 
 // Automod (automod.js, product): hold + flag + suspicious marks; off until switched on.
 const { createAutomod } = require('./automod');
@@ -376,6 +390,8 @@ const chatMod = registerChatMod(app, { pool, msgBuffer, broadcast, redactBuffere
 
 // Poll HTTP surface (poll.js): /poll/current|start|vote|end|creator + /overlay/poll.
 registerPollRoutes(app, { pollEngine, pool, resolveCanonical, requireInternal, wrap });
+// The generic OBS overlays (overlays.js): alert, support bar, support meter, support reminder bubble.
+require('./overlays').registerOverlayRoutes(app);
 
 // ── Operator-notification relay (notify.js): POST /ops/notify.
 //    This process holds the notifier, so it is the one that can reach a human.
@@ -383,10 +399,10 @@ registerPollRoutes(app, { pollEngine, pool, resolveCanonical, requireInternal, w
 //    credential and a second, unbatchable rate limiter.
 require('./notify.js').registerNotifyRoutes(app, { requireInternal, wrap });
 
-// ── The owner plugin's bot config surface (botRoutes.config): output mode + scene
+// ── The site plugin's bot config surface (botRoutes.config): output mode + scene
 //    auto-switch, runtime active gate, tool toggles, exemplars, Dials tuning, emote legend,
-//    prompt overrides, and the size-capped behavior-file editor (M33/M68). Mounted HERE, where
-//    it always sat — route order is part of the surface contract. No plugin = not mounted.
+//    prompt overrides, and the size-capped behavior-file editor. Mounted HERE, because
+//    route order is part of the surface contract. No plugin = not mounted.
 owner?.botRoutes?.config?.(app, { obs, broadcast, requireInternal, wrap });
 
 // ── Help-desk relay (helpdesk-relay.js): the site support panel's
@@ -399,7 +415,7 @@ const supportRelay = createSupportRelay();
 registerHelpdeskRoutes(app, { requireInternal, wrap, relay: supportRelay });
 
 // ── Memory (memory.js, product): the opt-out, the embedding writer's check, forget.
-//    Created before the owner plugin's bot data surface, which registers its forget handler on it.
+//    Created before the site plugin's bot data surface, which registers its forget handler on it.
 const { createMemory } = require('./memory');
 const memory = createMemory({ pool, ai, notify: (...a) => require('./notify.js').notify(...a) });
 instanceConfig.onWrite((keys) => memory.onSettingsWritten(keys));
@@ -416,7 +432,7 @@ memory.startRetention();
 // platform lines, support-event names, the site link. web runs the site half.
 require('./account-erase').createAccountErase({ pool, memory, identity, sponsors, msgBuffer, broadcast, redactBuffered }).registerAccountEraseRoutes(app, { requireSecret, wrap });
 
-// ── The owner plugin's bot data surface (botRoutes.data): stream-state, retrieval
+// ── The site plugin's bot data surface (botRoutes.data): stream-state, retrieval
 //    + search/lookup/top tools, impressions, narrative memory, response log, brain trace
 //    (+ its 14-day retention sweep), social credit, and the bot's forget handler on memory.
 owner?.botRoutes?.data?.(app, { pool, liveState, resolveCanonical, pronounsFor, personLocalTime, memory, requireInternal, wrap });
@@ -446,7 +462,7 @@ const modules = createModules({
       });
     },
   },
-  // The owner plugin's modules (lights, meter, radio); absent in the public build = not installed.
+  // The site plugin's modules (lights, meter, radio); absent in the public build = not installed.
   ownerStarters: owner?.moduleStarters?.({ pool, broadcast, supportBar, timer, liveState, moneyBus, requireInternal, wrap }) ?? {},
 });
 app.use(modules.router);
@@ -485,7 +501,10 @@ server.listen(listenAt.port, listenAt.host, () => {
 // rather than an unhandled rejection: lifecycle, radio ×2, aggregates (hold the loop open) + the owner bot data surface, timer ×2,
 // blacklist (already unref'd) + ws-hub (cleared by its own 'close' handler).
 
-const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS || 10_000);
+// 30 s: inside the bundle's 40 s stop_grace_period (install/compose.yaml) and systemd's 90 s, so a
+// drain that overruns prints its "drain exceeded" diagnostic before the container is killed. At
+// 10 s, Docker's own 10 s default killed the process at the same moment and the line never printed.
+const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS || 30_000);
 let shuttingDown = false;
 
 async function shutdown(signal) {
@@ -522,9 +541,8 @@ async function shutdown(signal) {
     //     between internal calls. closeIdleConnections() drops exactly those and
     //     leaves sockets with a request in flight alone, which is the whole point.
     //   • the help desk's parked long-poll on /bot/support/next, held up to
-    //     25s — LONGER than this grace, and an ACTIVE request, so
-    //     closeIdleConnections() will not touch it; without supportRelay.release()
-    //     every restart runs the full grace and exits 1 (status=1/FAILURE).
+    //     25s and an ACTIVE request, so closeIdleConnections() will not touch it;
+    //     without supportRelay.release() every restart waits out that poll.
     // A client that already vanished throws; that is the outcome we wanted anyway.
     //
     // Deliberately no inline block comment here, and none anywhere below. The
@@ -548,6 +566,13 @@ async function shutdown(signal) {
     server.closeIdleConnections();
 
     await closed;
+
+    // The aggregate rebuild runs on its own interval, outside any request: stop it FIRST — the
+    // statement it is running finishes, the rest of the pass is dropped. Ending the pool under it
+    // printed "[aggregates] refresh failed: Cannot use a pool after calling end on the pool".
+    await stopAggregates();
+    await banHold.stop();   // its minute rebuild reads the pool too
+    await Promise.allSettled(bootLoads);
 
     // No new queries can arrive now. end() waits for checked-out clients, which
     // is what lets an in-flight merge transaction reach its COMMIT.

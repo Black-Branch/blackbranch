@@ -18,10 +18,10 @@ export type FlowNode = {
   module?: string;
 };
 
-import { currencyName, currencyTitle, currencyIsMass } from "../currency.ts";
+import { currencyName, currencyTitle, currencyIsMass, scoreName } from "../currency.ts";
 
-// The currency's own word (currency.ts). A mass noun ("Qorm") takes is / it — the copy below reads
-// exactly as k wrote it; a counted plural ("points") takes are / them.
+// The currency's own word (currency.ts). A mass noun takes is / it; a counted plural ("points")
+// takes are / them.
 const MASS = currencyIsMass();
 const IT = MASS ? "it" : "them";
 
@@ -46,67 +46,103 @@ export const GREETINGS = [
   "Front desk's open. What do you need?",
 ];
 
-// Every answer, including the ones about modules this install may not show. SUPPORT_ROOT below is
-// what is offered.
-const ALL_NODES: FlowNode[] = [
-  {
-    key: "faq", label: "Quick answers",
-    children: [
-      {
-        key: "faq-points", label: MASS ? `What's ${currencyName()}?` : `What are ${currencyName()}?`,
-        action: { kind: "answer", text:
-          `${currencyTitle()} ${MASS ? "is" : "are"} the site currency. You buy ${IT} in the coin store (the coin icon by the composer) and spend ${IT} on cheers, stickers and sticker boosts, sounds, badges, and username styles. Buying coins fills your wallet; the stream timer only moves when you actually spend them.` },
-      },
-      {
-        key: "faq-supporter", label: "What does Supporter get me?", module: "stripe",
-        action: { kind: "answer", text:
-          "Supporter is the subscription tier: you get the badge, redacted messages (/r for a whole message, or ||hide part|| of one), and my grudging respect. Subscribe from the support bar or your profile card. Gift subs count too — the perks follow the gift." },
-      },
-      {
-        key: "faq-linking", label: "Linking my Twitch/Kick/etc.",
-        action: { kind: "answer", text: LINKING_ANSWER },
-      },
-      {
-        key: "faq-radio", label: "The radio", module: "radio",
-        action: { kind: "answer", text:
-          "The Radio tab is the station — I pick the order, you don't get a skip button, that's the bit. The Library shows the whole pool by album: download songs or whole albums, and heart the ones you like so you can find them again (sign-in required for hearts)." },
-      },
-      {
-        key: "faq-encrypted", label: "Redacted messages",
-        action: { kind: "answer", text:
-          "Supporter-only. Wrap part of a message in two bars — like ||this|| — and that part shows as a blacked-out bar; only Supporters can tap it open. The platforms it is posted to see [REDACTED] there instead. To redact a whole message, type /r before it; to keep redacting, pick Redacted message in the + menu, which stays on until you turn it off. Whole redacted messages stay on the site." },
-      },
-    ],
-  },
-  { key: "report-user", label: "Report a user", action: { kind: "report-user" } },
-  { key: "report-bug", label: "Report a bug", action: { kind: "report-bug" } },
-  {
-    key: "howto", label: "How do I…?",
-    children: [
-      {
-        key: "howto-namestyle", label: "Change my name style",
-        action: { kind: "answer", text:
-          "Open your profile card → Appearance. Colours, fonts and effects live there; some of the flashier ones are Supporter or achievement perks. Changes show up in chat immediately." },
-      },
-      {
-        key: "howto-cheer", label: "Send a cheer",
-        action: { kind: "answer", text:
-          `Tap the coin chip above the composer, pick an amount, type your message, send. It posts highlighted, spends ${currencyName()}, and moves the stream timer. Big cheers get read out loud — there's a toggle on the chip if you'd rather they weren't.` },
-      },
-      {
-        key: "howto-music", label: "Download the music", module: "radio",
-        action: { kind: "answer", text:
-          "Radio tab → Library. Every song has a download button, and each album has one that zips the whole thing. Free to keep — the station's whole catalogue is in-house." },
-      },
-      {
-        key: "howto-popout", label: "Pop out the chat",
-        action: { kind: "answer", text:
-          "The popout button sits in the chat header — it opens chat in its own window, handy for a second monitor or OBS. Note the popout is plain chat: my support desk only lives in the main app." },
-      },
-    ],
-  },
-  { key: "other", label: "Something else", action: { kind: "free-text" } },
-];
+/** What this install runs, as the help desk needs to know it. The server reads it
+ *  (supportFactsServer.ts) and the page hands it over (SupportModulesOff.tsx). */
+export type SupportFacts = {
+  /** The modules this install does not show (config/modules.mjs "ONE RULE"). */
+  off: readonly string[];
+  /** Points can be bought here (`currency.purchasable` and a payment provider). */
+  purchasable: boolean;
+  /** The Supporter subscription is offered (a usable Supporter price at Stripe). */
+  subscriptions: boolean;
+  /** Paid messages and big cheers are read out on stream. */
+  tts: boolean;
+  /** A typed question gets an AI answer. Off = no "Something else" and no question box. */
+  freeText: boolean;
+};
+
+/** Before the page says: nothing that depends on the install is offered or promised. */
+const UNKNOWN: SupportFacts = { off: [], purchasable: false, subscriptions: false, tts: false, freeText: false };
+
+// Every answer, worded for THIS install's facts. A leaf with `module` is offered only while that
+// module is shown; one that needs a fact is left out without it. Front-desk register, no persona
+// lines — the desk ships to every install.
+function allNodes(f: SupportFacts): FlowNode[] {
+  return keep(
+    {
+      key: "faq", label: "Quick answers",
+      children: keep(
+        {
+          key: "faq-points", label: MASS ? `What's ${currencyName()}?` : `What are ${currencyName()}?`,
+          action: { kind: "answer", text:
+            `${currencyTitle()} ${MASS ? "is" : "are"} the site currency. You earn ${IT} by watching and chatting while the stream is live`
+            + (f.purchasable ? `, or buy ${IT} in the Store (the coin button under the player)` : "")
+            + `, and spend ${IT} in the Store and on cheers.` },
+        },
+        f.subscriptions && {
+          key: "faq-supporter", label: "What does Supporter get me?",
+          action: { kind: "answer", text:
+            "Supporter is the monthly subscription: a Supporter badge in chat, a faster chat rate limit, and redacted messages (/r for a whole message, or ||hide part|| of one). Subscribe from the button under the player or from your profile card. A gifted month counts the same." },
+        },
+        {
+          key: "faq-linking", label: "Linking my Twitch/Kick/etc.",
+          action: { kind: "answer", text: LINKING_ANSWER },
+        },
+        {
+          key: "faq-votes", label: "Voting on messages",
+          action: { kind: "answer", text:
+            `Hover over a message in chat (on a phone, tap it) and the ▲ ▼ buttons show at its top right. Votes add to the writer's ${scoreName()}; you can't vote on your own messages.` },
+        },
+        {
+          key: "faq-radio", label: "The radio", module: "radio",
+          action: { kind: "answer", text:
+            "The Radio tab plays the station. The Library shows the whole catalogue by album: download songs or whole albums, and heart the ones you like so you can find them again (sign in to use hearts)." },
+        },
+        f.subscriptions && {
+          key: "faq-encrypted", label: "Redacted messages",
+          action: { kind: "answer", text:
+            "Supporter-only. Wrap part of a message in two bars — like ||this|| — and that part shows as a blacked-out bar; only Supporters can tap it open. The platforms it is posted to see [REDACTED] there instead. To redact a whole message, type /r before it; to keep redacting, pick Redacted message in the + menu, which stays on until you turn it off. Whole redacted messages stay on the site." },
+        },
+      ),
+    },
+    { key: "report-user", label: "Report a user", action: { kind: "report-user" } },
+    { key: "report-bug", label: "Report a bug", action: { kind: "report-bug" } },
+    {
+      key: "howto", label: "How do I…?",
+      children: keep(
+        {
+          key: "howto-namestyle", label: "Change my name style",
+          action: { kind: "answer", text:
+            "Open your profile card → Appearance. Colours, fonts and effects live there"
+            + (f.subscriptions ? "; some of them are Supporter perks" : "")
+            + ". Changes show up in chat at once." },
+        },
+        {
+          key: "howto-cheer", label: "Send a cheer",
+          action: { kind: "answer", text:
+            `Tap the coin chip above the composer, pick an amount, type your message, send. It posts highlighted and spends ${currencyName()}.`
+            + (f.tts ? " Big cheers are read out on stream — there's a toggle on the chip if you'd rather yours weren't." : "") },
+        },
+        {
+          key: "howto-music", label: "Download the music", module: "radio",
+          action: { kind: "answer", text:
+            "Radio tab → Library. Every song has a download button, and each album has one that zips the whole thing." },
+        },
+        {
+          key: "howto-popout", label: "Pop out the chat",
+          action: { kind: "answer", text:
+            "The popout button sits in the chat header — it opens chat in its own window, handy for a second monitor or OBS. The popout is plain chat: this help desk lives only on the main page." },
+        },
+      ),
+    },
+    f.freeText && { key: "other", label: "Something else", action: { kind: "free-text" } },
+  );
+}
+
+/** The nodes a fact did not leave out (`fact && node` is false without it). */
+function keep(...nodes: (FlowNode | false)[]): FlowNode[] {
+  return nodes.filter((n): n is FlowNode => n !== false);
+}
 
 function without(nodes: FlowNode[], off: (m: string) => boolean): FlowNode[] {
   return nodes
@@ -114,23 +150,35 @@ function without(nodes: FlowNode[], off: (m: string) => boolean): FlowNode[] {
     .map((n) => (n.children ? { ...n, children: without(n.children, off) } : n));
 }
 
-/** The answers offered for a set of modules not shown. Pure. */
-function supportRootFor(offModules: readonly string[]): FlowNode[] {
-  return without(ALL_NODES, (m) => offModules.includes(m));
+/** The answers offered for these facts. Pure. */
+function supportRootFor(f: SupportFacts): FlowNode[] {
+  return without(allNodes(f), (m) => f.off.includes(m));
 }
 
 /**
- * What the support panel offers. Until the page says which modules it shows
- * (setSupportModulesOff, from the home page's module rule), an answer about a module is NOT
- * offered: the desk must never describe a part this install does not run. A live binding —
- * readers see the current value.
+ * What the support panel offers. Until the page says what this install runs (setSupportFacts,
+ * from the stream page's server render), an answer about a module or a paid part is NOT offered
+ * and there is no free-text question: the desk must never describe a part this install does not
+ * run. A live binding — readers see the current value.
  */
-export let SUPPORT_ROOT: FlowNode[] = without(ALL_NODES, () => true);
+export let SUPPORT_ROOT: FlowNode[] = without(allNodes(UNKNOWN), () => true);
+let FREE_TEXT = false;
 
-/** Set the modules this install does not show (config/modules.mjs "ONE RULE"). */
-export function setSupportModulesOff(offModules: readonly string[]): void {
-  SUPPORT_ROOT = supportRootFor(offModules);
+/** Set what this install runs. */
+export function setSupportFacts(f: SupportFacts): void {
+  SUPPORT_ROOT = supportRootFor(f);
+  FREE_TEXT = f.freeText;
 }
+
+/** Whether a typed question goes to the AI. Off = the desk answers with NO_FREE_TEXT instead. */
+export function supportFreeText(): boolean {
+  return FREE_TEXT;
+}
+
+/** The desk's line for a typed question while nothing can answer one — instead of holding
+ *  it 30 s and then saying it can't reach its brain. */
+export const NO_FREE_TEXT =
+  "I can only help with the topics in the menu here. For anything else, use Report a bug and a person will follow up.";
 
 /**
  * Synthetic quick-reply offered under every free-text answer: files the

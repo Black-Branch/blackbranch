@@ -1,4 +1,4 @@
-// The mod privilege ceiling on EVERY mod route that acts on a person (round 5): unban, delete a
+// The mod privilege ceiling on EVERY mod route that acts on a person: unban, delete a
 // line, resolve a report, clear a mark, set pronouns, per-person slow mode — plus the Reports view.
 //   • against a real Postgres: who each thing names (modTargets.ts) and the ceiling's verdict on it —
 //     a mod never acts on an admin or another mod, never closes a case about themselves; an admin may;

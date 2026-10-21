@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
     expires_in?: number;
   };
 
-  // OUR homeserver (matrix.baseUrl) — not the issuer's origin, which used to stand in for it.
+  // OUR homeserver (matrix.baseUrl) — not the issuer's origin, which is a different host.
   const whoami = await fetch(`${matrixBaseUrl()}/_matrix/client/v3/account/whoami`, {
     headers: { Authorization: `Bearer ${tokens.access_token}` },
   }).then(r => r.ok ? r.json() : null).catch(() => null);

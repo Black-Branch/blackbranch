@@ -38,11 +38,18 @@ EXPOSE 3001
 CMD ["node", "index.js"]
 
 # ── stream-ingest ───────────────────────────────────────────────────────────────────────────
-# Playwright's browser is not downloaded: only the Kick and YouTube readers use it, and a fresh
-# install reads no platform until its setup pages switch one on.
+# The YouTube chat reader IS a headless Chromium (platforms/youtube.js), and Kick's channel lookup
+# falls back to one (platforms/kick.js): without it YouTube cannot be read at all. So the image
+# carries Playwright's headless Chromium shell — the browser `headless: true` launches — at the
+# revision the lockfile's Playwright names (npm's postinstall download is skipped; this one is
+# explicit, with the system libraries it needs via --with-deps). It lives in /ms-playwright,
+# readable by the `node` user the service runs as.
 FROM base AS stream-ingest
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY stream-ingest/package.json stream-ingest/package-lock.json ./
-RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --omit=dev --no-audit --no-fund --loglevel=error
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --omit=dev --no-audit --no-fund --loglevel=error \
+ && npx --no-install playwright install --with-deps --only-shell chromium \
+ && rm -rf /var/lib/apt/lists/* /root/.npm
 COPY stream-ingest/ ./
 COPY LICENSE /app/LICENSE
 USER node

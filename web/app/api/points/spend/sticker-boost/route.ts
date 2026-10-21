@@ -15,13 +15,13 @@ export const runtime = "nodejs";
 // cooldown — boosting an existing sticker is a smaller interruption than a new one.
 const userCooldown = createCooldown(5_000);
 
-// A boost must cost at least the advertised price. `requested` was previously
-// accepted on `> 0` alone, so a 1-Qorm request bought a full overlay pop —
+// A boost must cost at least the advertised price. Accepting `requested` on
+// `> 0` alone would let a 1-point request buy a full overlay pop —
 // on-stream griefing for a hundredth of the intended price. The ceiling is a
 // sanity bound on a single call (boosting past the SIZE cap is legal and still
 // spends, it just stops growing the sticker), not a policy limit.
-// A ceiling on ONE call, not on the cumulative total. Expressed against the
-// old 10-Qorm floor's intent (1,000 Qorm) rather than a multiple of the live
+// A ceiling on ONE call, not on the cumulative total. Expressed as a fixed
+// amount (1,000 points) rather than a multiple of the live
 // floor, so raising the floor between streams cannot quietly raise the most a
 // single tap can spend.
 const BOOST_MAX_PER_CALL = 1_000;
@@ -39,11 +39,11 @@ type StickerCard = {
 // → { ok, balance, charged, cumulative }
 //
 // Escalates an EXISTING sticker send — bigger, moved to the bottom of the feed
-// — for an extra Qorm spend (migrate-v70). One row for the sticker's whole
+// — for an extra currency spend (migrate-v70). One row for the sticker's whole
 // life: stream-api updates it in place and broadcasts a `stickerMove` (never
 // a second row — no duplicate). STICKER_BOOST_CAP is a SIZE cap only
 // (stickerBoostScale saturates once cumulative reaches it) — boosting past it
-// still spends real Qorm and is never rejected, it just stops growing the
+// still spends real points and is never rejected, it just stops growing the
 // sticker any further.
 export async function POST(req: NextRequest) {
   const matrixId = await requireUser();
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
   //
   // Summing the existing boosts and inserting later would let two concurrent
   // boosts on the same sticker both read the same stale total and both
-  // broadcast it, so the on-stream sticker would render SMALLER than the Qorm
+  // broadcast it, so the on-stream sticker would render SMALLER than the points
   // actually spent — the viewer paying for growth they never saw.
   //
   // pg_advisory_xact_lock serializes boosts per-sticker (and only per-sticker),

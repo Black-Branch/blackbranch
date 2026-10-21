@@ -17,14 +17,14 @@ type LinkedAccount = {
   linkedAt: string;
   /** Config scopes this link predates — non-empty ⇒ show the relink CTA. */
   missingScopes?: string[];
+  /** The platform refused this link's refresh: nothing reaches that platform until the
+   *  person reconnects — say so, and offer it. */
+  expired?: boolean;
 };
 
 type Props = {
   linked: LinkedAccount[];
   configuredPlatforms: string[];
-  /** Platforms shown but not yet linkable (e.g. YouTube pending Google
-   *  verification) — rendered greyed-out with a note instead of a Link button. */
-  pendingPlatforms?: string[];
   /** site.users.show_links (v153): the person shows their linked platforms on their profile. */
   showLinks?: boolean;
 };
@@ -74,12 +74,12 @@ function BannerReader({ onBanner }: { onBanner: (b: { type: "ok" | "err"; msg: s
   return null;
 }
 
-export default function AccountLinkPanel({ linked, configuredPlatforms, pendingPlatforms = [], showLinks: initialShowLinks = false }: Props) {
+export default function AccountLinkPanel({ linked, configuredPlatforms, showLinks: initialShowLinks = false }: Props) {
   const [accounts, setAccounts] = useState<LinkedAccount[]>(linked);
   const [showLinks, setShowLinks] = useState(initialShowLinks);
   const [savingShow, setSavingShow] = useState(false);
 
-  // The person's own choice to show their linked platforms (owner decision 2026-10-17). Saved
+  // The person's own choice to show their linked platforms. Saved
   // first, shown after: a switch that flips before the save would claim a privacy state the
   // server does not hold.
   async function toggleShowLinks() {
@@ -201,8 +201,12 @@ export default function AccountLinkPanel({ linked, configuredPlatforms, pendingP
         <p>Unlinking an account, or turning the switch off, hides it again.</p>
       </div>
 
-      {configuredPlatforms.length === 0 && pendingPlatforms.length === 0 && (
-        <EmptyState>No platforms configured yet.</EmptyState>
+      {configuredPlatforms.length === 0 && (
+        // Say why there is nothing to link, not just that there is nothing.
+        <EmptyState>
+          There is nothing to link yet: this site has no platform sign-in set up (the streamer adds
+          Twitch, Kick and the others in the Admin Panel). Your account works without one.
+        </EmptyState>
       )}
 
       {configuredPlatforms.map(platform => {
@@ -226,7 +230,11 @@ export default function AccountLinkPanel({ linked, configuredPlatforms, pendingP
 
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-body">{label}</div>
-              {isLinked ? (
+              {isLinked && account.expired ? (
+                <div className="text-xs text-amber-300">
+                  Disconnected by {label} — reconnect to post there again
+                </div>
+              ) : isLinked ? (
                 <div className="text-xs text-muted truncate">
                   {account.displayName ?? account.platform} · linked {fullDate(account.linkedAt)}
                 </div>
@@ -237,7 +245,15 @@ export default function AccountLinkPanel({ linked, configuredPlatforms, pendingP
 
             {isLinked ? (
               <div className="shrink-0 flex items-center gap-3">
-                {(account.missingScopes?.length ?? 0) > 0 && (
+                {account.expired ? (
+                  <button
+                    onClick={() => handleLink(platform)}
+                    disabled={isBusy}
+                    className="text-xs font-medium px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 transition-colors disabled:opacity-40"
+                  >
+                    {isBusy ? "…" : `Reconnect ${label}`}
+                  </button>
+                ) : (account.missingScopes?.length ?? 0) > 0 && (
                   <button
                     onClick={() => handleLink(platform)}
                     disabled={isBusy}
@@ -262,7 +278,7 @@ export default function AccountLinkPanel({ linked, configuredPlatforms, pendingP
                   onChange={(e) => setSpHandle(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleLink(platform); }}
                   placeholder="handle, e.g. yourname.bsky.social"
-                  aria-label="Your stream.place / Bluesky handle"
+                  aria-label="Your Streamplace / Bluesky handle"
                   autoFocus
                   className="w-40 rounded-lg border border-edge bg-surface-1 px-2 py-1.5 text-xs text-body placeholder-muted outline-none focus:border-control-strong"
                 />
@@ -290,40 +306,6 @@ export default function AccountLinkPanel({ linked, configuredPlatforms, pendingP
                 {isBusy ? "…" : `Link ${label}`}
               </button>
             )}
-          </div>
-        );
-      })}
-
-      {pendingPlatforms.map(platform => {
-        const color = PLATFORM_COLORS[platform] ?? "#888";
-        const label = platformLabel(platform);
-        return (
-          <div
-            key={platform}
-            className="flex items-center gap-4 rounded-xl border border-edge bg-surface-1 px-4 py-3 opacity-70"
-          >
-            <div
-              className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg"
-              style={{ backgroundColor: `${color}18`, color }}
-            >
-              <PlatformIcon platform={platform} size="1.1em" />
-            </div>
-
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-body-dim">{label}</div>
-              <div className="text-xs text-muted truncate">
-                Linking is pending verification — coming soon.
-              </div>
-            </div>
-
-            <button
-              type="button"
-              disabled
-              title={`${label} linking is pending verification`}
-              className="shrink-0 text-xs font-medium px-3 py-1.5 rounded-lg border border-edge bg-surface-1 text-muted cursor-not-allowed"
-            >
-              Coming soon
-            </button>
           </div>
         );
       })}

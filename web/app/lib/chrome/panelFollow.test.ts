@@ -86,7 +86,7 @@ test("currentTransformY: reads the Y of a matrix / matrix3d / translate transfor
 test("layoutTop: immune to the panel's OWN in-flight transform (the entry slide), not only its translate", () => {
   // The ResizeObserver's initial delivery lands while panel-seam-in is still
   // sliding on `transform`; a baseline that carried the slide read the entry's
-  // progress as growth and fired a follow on every open (final review).
+  // progress as growth and fired a follow on every open.
   const layer = box();
   const panel = box("0 -40px");
   panel.style.transform = "translateY(300px)";

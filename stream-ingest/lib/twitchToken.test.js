@@ -110,3 +110,24 @@ test('a refresh failure leaves the current access token in place', async () => {
   globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
   assert.equal(await mod.refreshAccessToken(), 'seed-access');
 });
+
+test('a refresh answer without a token logs its status and keys, never its values', async () => {
+  const { mod } = await freshModule({ env: { access: 'still-good' } });
+  // The provider's error body can carry a token or the account's login; none of it may reach the journal.
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ success: false, error: 'invalid', refresh: 'leaked-refresh', login: 'somebody' }),
+    { status: 400, headers: { 'content-type': 'application/json' } });
+  const lines = [];
+  const warn = console.warn;
+  console.warn = (...a) => lines.push(a.join(' '));
+  try {
+    assert.equal(await mod.refreshAccessToken(), 'still-good');
+  } finally {
+    console.warn = warn;
+  }
+  const line = lines.find((l) => l.includes('returned no token'));
+  assert.ok(line, `no "returned no token" line: ${JSON.stringify(lines)}`);
+  assert.match(line, /HTTP 400/);
+  assert.match(line, /keys=\[success,error,refresh,login\]/);
+  for (const value of ['leaked-refresh', 'somebody', 'invalid']) assert.ok(!line.includes(value), `${value} reached the journal: ${line}`);
+});

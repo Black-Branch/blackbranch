@@ -1,9 +1,9 @@
-// Subscription state against delivery order, on the REAL schema (external review S3).
+// Subscription state against delivery order, on the REAL schema.
 //
 // Stripe does not deliver events in order (docs.stripe.com/webhooks#event-ordering),
 // and `event.created` has one-second resolution. A cancellation and an older
-// "active" snapshot stamped in the same second used to be ordered by arrival:
-// the later delivery won, so a stale active restored access and the subscriber
+// "active" snapshot stamped in the same second must not be ordered by arrival:
+// the later delivery would win, so a stale active would restore access and the subscriber
 // badge. Runs through the runtime driver against a replayed Postgres, because the
 // recency gate and the serialisation are SQL — a mock pool cannot test either.
 // Runs in CI (web job sets SQL_PARSE_DATABASE_URL). Locally: donationsSchema.test.ts.

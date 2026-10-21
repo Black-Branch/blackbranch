@@ -38,7 +38,7 @@ function actionFor(severity) {
  * The markdown branch is not redundant, though it looks it — the bare scan
  * stops at `)` and finds the href anyway. What it changes is a URL in the
  * LABEL: that must NOT be judged, because a label is not clickable and the
- * "label claims a domain the href does not go to" case is M74's job. Deleting
+ * "label claims a domain the href does not go to" case is a separate check. Deleting
  * this branch breaks exactly one test, which is the one that says so.
  */
 function extractUrls(text) {
@@ -56,12 +56,8 @@ function extractUrls(text) {
   return out;
 }
 
-// @parked surface parity with web/app/lib/linkGate.ts — kept exported so the
-// two runtimes expose the same shape, enforced by linkGateParity.test.ts's
-// "the two copies expose the SAME SURFACE" case. Nothing in stream-api calls
-// this one; web's does (its mod route uses currentHostRules for the link-gate
-// dry run). One policy in two runtimes only stays portable while both sides
-// still HAVE the function the next fix is written against.
+// @parked surface parity with web/app/lib/linkGate.ts: both copies expose the same functions
+// (linkGateParity.test.ts, "the two copies expose the SAME SURFACE"). Nothing in stream-api calls it.
 function hostOf(url) {
   try {
     const h = new URL(url).hostname.toLowerCase();
@@ -72,12 +68,8 @@ function hostOf(url) {
   }
 }
 
-// @parked surface parity with web/app/lib/linkGate.ts — kept exported so the
-// two runtimes expose the same shape, enforced by linkGateParity.test.ts's
-// "the two copies expose the SAME SURFACE" case. Nothing in stream-api calls
-// this one; web's does (its mod route uses currentHostRules for the link-gate
-// dry run). One policy in two runtimes only stays portable while both sides
-// still HAVE the function the next fix is written against.
+// @parked surface parity with web/app/lib/linkGate.ts (linkGateParity.test.ts). Nothing in
+// stream-api calls it.
 function hostMatches(host, rule) {
   const r = String(rule).toLowerCase().replace(/^www\./, '');
   return host === r || host.endsWith('.' + r);
@@ -224,12 +216,8 @@ function setHostRules(rules) { hostRules = rules || []; }
 function setLinkPosture(p) { posture = (p === 'hold' || p === 'flag') ? p : 'off'; }
 
 function currentPosture() { return posture; }
-// @parked surface parity with web/app/lib/linkGate.ts — kept exported so the
-// two runtimes expose the same shape, enforced by linkGateParity.test.ts's
-// "the two copies expose the SAME SURFACE" case. Nothing in stream-api calls
-// this one; web's does (its mod route uses currentHostRules for the link-gate
-// dry run). One policy in two runtimes only stays portable while both sides
-// still HAVE the function the next fix is written against.
+// @parked surface parity with web/app/lib/linkGate.ts (linkGateParity.test.ts). Nothing in
+// stream-api calls it; web's copy feeds the mod routes' link-gate dry run.
 function currentHostRules() { return hostRules; }
 
 /** Production entry point: judge `text` against the live rules and posture. */

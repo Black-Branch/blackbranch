@@ -1,5 +1,5 @@
 // The broadcaster's "highlight": click a message and it takes the
-// highlight-card look (the 50-Qorm product's design) for EVERYONE — the site
+// highlight-card look (the 50-point product's design) for EVERYONE — the site
 // chat, the popout, the /chat window and the OBS source — so the audience can
 // see which message is being answered. One at a time; a second click on it
 // clears it; only an admin account (is_admin, never a name) can set it.

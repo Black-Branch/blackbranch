@@ -3,8 +3,8 @@
 //
 // POST /api/dm/ping records a nudge here; the recipient's own signed-in page asks GET /api/dm/ping
 // for the newest stamp and, on a new one, starts its Matrix client and looks for what arrived. The
-// nudge used to go out on the PUBLIC chat socket as a stable per-recipient tag, so anyone who
-// nudged a chosen person once could recognise every later nudge to them (external review S5).
+// nudge never goes out on the PUBLIC chat socket: a stable per-recipient tag there would let anyone
+// who nudged a chosen person once recognise every later nudge to them.
 // Kept here, a nudge is visible only to the session it is for.
 //
 // One stamp per recipient (the newest), strictly rising so two nudges in one millisecond still

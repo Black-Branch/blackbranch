@@ -6,6 +6,9 @@ import { parseAmountParam } from "./amountParam";
 import { DonateClient } from "./DonateClient";
 import { instanceString } from "@/app/lib/instanceConfigServer";
 import { paypalConfigured } from "@/app/lib/paypalClient";
+import { stripeConfigured } from "@/app/lib/stripe";
+import { httpsLink } from "@/app/lib/donateTarget";
+import { redirect } from "next/navigation";
 
 // The public tip page — an address you can paste in chat. Top-level, OUTSIDE
 // app/(main)/, so it inherits the root layout only: no nav, no chat, no video.
@@ -23,12 +26,20 @@ export default async function DonatePage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // No payment provider here, but the streamer gave an outside donate link (site.donateUrl, https
+  // only): an old /donate link or a pasted address goes there rather than to "Billing isn't
+  // configured" (contract 7).
+  if (!stripeConfigured() && !paypalConfigured()) {
+    const outside = httpsLink(instanceString("site.donateUrl"));
+    if (outside) redirect(outside);
+  }
+
   const sp = await searchParams;
   const initialAmount = parseAmountParam(sp.amount);
 
   // Signed in -> prefill the name. Signed out is still the FIRST-CLASS case
   // here: no account WALL anywhere on this page — but TipForm's own
-  // `signedIn` prop does show a one-line "sign in to also get N Qorm" nudge
+  // `signedIn` prop does show a one-line "sign in to also get N points" nudge
   // for a guest (see DonateClient's header).
   const session = await auth();
   const signedIn = Boolean(session?.user?.id);

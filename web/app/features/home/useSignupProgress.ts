@@ -13,8 +13,8 @@ export function useSignupProgress(active: boolean, signedIn: boolean) {
   // The answer is keyed on the signedIn it was asked for: the identity
   // provider starts with no matrixId, so the first render is signed-out
   // (null) and the flip to signed-in must read "not asked yet" (undefined)
-  // until /api/home/me answers — a stale null showed step 2 to everyone for
-  // one round trip (final review, Important 2).
+  // until /api/home/me answers — a stale null would show step 2 to everyone for
+  // one round trip.
   const [answer, setAnswer] = useState<{ signedIn: boolean; step: SignupStep | null | undefined }>({ signedIn, step: signedIn ? undefined : null });
   const step = answer.signedIn === signedIn ? answer.step : (signedIn ? undefined : null);
 

@@ -141,7 +141,7 @@ test("every window that floats on a computer takes its shape from useWindowDock"
     "app/features/chat/ChatSidebar.tsx": "usercard",
     "app/features/moderation/ModWindow.tsx": "mod",
     "app/features/instance/AdminWindow.tsx": "admin",
-    // The owner plugin's window, in a tree that has the owner folder.
+    // A site plugin's window, in a tree that has the app/(owner) folder.
     ...(existsSync("app/(owner)") ? { "app/(owner)/_radio/RadioPlayer/LibraryPanel.tsx": "library" } : {}),
   };
   for (const [file, id] of Object.entries(hosts)) {

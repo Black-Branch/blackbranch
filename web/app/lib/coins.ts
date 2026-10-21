@@ -10,8 +10,8 @@ import { currencySymbol } from "./currency.ts";
 // 1 point = 1¢ USD, always shown WITH its dollar equivalent. No bundles, no
 // markup, no obscured exchange rate — the anti-dark-pattern stance is the brand.
 
-/** The ONE payment range, in cents, for tips AND Qorm purchases — $1 to
- *  $1,000 both ways (Qorm-for-all-income spec, D4). Imported by
+/** The ONE payment range, in cents, for tips AND points purchases — $1 to
+ *  $1,000 both ways. Imported by
  *  /api/billing/donate, /api/billing/points, /api/billing/paypal/order and
  *  TipForm; there is deliberately no second copy anywhere (the old
  *  COIN_MIN/MAX_PURCHASE $2–$500 and the tip routes' own MIN/MAX_CENTS were
@@ -26,7 +26,7 @@ export const HIGHLIGHT_PRICE = 50;
 export const TTS_PRICE = 150;
 
 /** Extra badge slot (base_slots +1, server caps base at 2 — see badges/buy-slot). */
-/** A SIZE BASELINE, NOT A PRICE. The cumulative Qorm on a sticker drives
+/** A SIZE BASELINE, NOT A PRICE. The cumulative points on a sticker drive
  *  its rendered scale (stickerBoostScale below), and an unboosted sticker
  *  starts from this number. It is deliberately NOT the sticker's price:
  *    - the price lives in site.store_prices and moves between streams,
@@ -74,13 +74,13 @@ export function stickerBoostScale(cumulativeCoins: number): number {
   return STICKER_BASE_SCALE + t * (STICKER_MAX_SCALE - STICKER_BASE_SCALE);
 }
 
-/** The Qorm a tip of `cents` pays, at the peg (1 Qorm per USD cent — the
+/** The points a tip of `cents` pays, at the peg (1 point per USD cent — the
  *  same transparent 1:1 rate the top-up box uses). ONE place for the
  *  conversion the tip-form copy and
  *  the thank-you line both need, so a tipper never sees two different numbers
  *  for the same tip. `Math.round` absorbs float noise from `dollars * 100`
  *  (e.g. 12.34 * 100 === 1233.9999999999998); `Math.max(0, …)` keeps a
- *  mid-edit negative/invalid box from ever rendering a negative Qorm figure. */
+ *  mid-edit negative/invalid box from ever rendering a negative points figure. */
 export function pointsForCents(cents: number): number {
   return Math.max(0, Math.round(cents));
 }
@@ -102,7 +102,7 @@ export function formatCoinsShort(coins: number): string {
  * (as opposed to bought) — "1,475q (475q)".
  *
  * ALWAYS RENDERED. Omitting it when the two are equal would hide it from every
- * user who has never bought Qorm — i.e. almost everyone, and exactly the
+ * user who has never bought points — i.e. almost everyone, and exactly the
  * people for whom "all of this was earned" is the useful fact. A number that
  * appears and vanishes depending on purchase history cannot be learned; one
  * that is always there can.
@@ -127,7 +127,7 @@ export function earnedParenthetical(earned: number | null): string {
 // tests and labels iterate.
 //
 // This lives in coins.ts rather than coinsServer.ts because client components
-// (the Qorm history tab) need it and coinsServer imports the pg pool. coins.ts
+// (the points history tab) need it and coinsServer imports the pg pool. coins.ts
 // is the shared price/vocabulary table — see this file's header.
 
 // @test-only enumerated by coins.test.ts to prove every LedgerKind has a
@@ -139,15 +139,15 @@ export const LEDGER_KINDS = [
   // tab labels them; nothing writes them.
   "market_buy", "market_sell", "market_payout", "market_void",
   // Participation earning. Each source is its own kind so the split
-  // stays measurable in the ledger — "where does earned Qorm come from" is a
+  // stays measurable in the ledger — "where do earned points come from" is a
   // question the history tab and the provenance report both need to answer.
   "earn_first", "earn_vote", "earn_upvote",
   // The clock perk: the 2x bonus is its OWN row,
-  // ref-keyed to the base award it rode with — so history can say which Qorm
-  // was the bonus, and provenance can carve it out without a migration.
+  // ref-keyed to the base award it rode with — so history can say which points
+  // were the bonus, and provenance can carve it out without a migration.
   "earn_bonus",
-  // Money-bought Qorm: a tip pays Qorm at the purchase peg;
-  // a refund/dispute of money-bought Qorm takes it back (even below zero), and
+  // Money-bought points: a tip pays points at the purchase peg;
+  // a refund/dispute of money-bought points takes it back (even below zero), and
   // a won dispute — or a refund attempt that itself failed/was canceled —
   // gives the clawback back.
   "tip", "clawback", "clawback_reversed",
@@ -156,9 +156,9 @@ export type LedgerKind = (typeof LEDGER_KINDS)[number];
 
 // @test-only same reason as LEDGER_KINDS above — enumerated by coins.test.ts,
 // consumed elsewhere only via the derived `SpendSink` type.
-// `tts` is Read aloud, 150 Qorm. Its sink name is shared with an earlier
+// `tts` is Read aloud, 150 points. Its sink name is shared with an earlier
 // paid-voice-message product, so historical site.coin_ledger rows also
-// carry sink='tts' — the Qorm history tab labels rows by looking the sink up
+// carry sink='tts' — the points history tab labels rows by looking the sink up
 // here, and dropping an entry would render every past purchase as
 // `undefined`, the defect the "every spend sink has a non-empty label" test
 // exists to catch. `cheer` is a retired product kept for the same reason:
@@ -220,6 +220,6 @@ export const EARN_KINDS: readonly EarnKind[] =
 
 /** One award as the SERVER reports it — the kind is still carried across the
  *  wire even though the chip no longer renders it, because the heartbeat groups
- *  by kind and the split is what makes "where does earned Qorm come from"
+ *  by kind and the split is what makes "where do earned points come from"
  *  answerable without re-reading the ledger. The chip sums them. */
 export type EarnChipItem = { kind: EarnKind; points: number };

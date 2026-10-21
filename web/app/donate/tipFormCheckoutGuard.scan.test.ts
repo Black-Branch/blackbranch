@@ -69,7 +69,7 @@ test("the checkout branch never renders TipForm", () => {
 });
 
 test("TipForm renders from exactly one place, and it is POSITIONED after both the checkout AND done markers", () => {
-  // Position, not absence-within-a-slice (round 2): a `<TipForm>` sitting
+  // Position, not absence-within-a-slice: a `<TipForm>` sitting
   // BEFORE the checkout branch — rendered unconditionally, with the checkout
   // box merely appended below it — passes every earlier assertion in this
   // file (the slice-based check above never sees it, and the count is still

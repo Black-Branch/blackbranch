@@ -6,6 +6,7 @@ import { fanOutBan, fanOutUnban } from "@/app/lib/platformMod";
 import { applyModRole } from "@/app/lib/modRole";
 import { linkedMatrixIds } from "@/app/lib/canonicalIdentity";
 import { NextRequest } from "next/server";
+import { chatBanBody, pushChatBan } from "@/app/lib/chatBanPush";
 
 // GET ?targetId= — current ban/timeout status of a user (mod only)
 export async function GET(req: NextRequest) {
@@ -25,8 +26,8 @@ export async function GET(req: NextRequest) {
 
 // A canonical stream id (12-hex) names a platform-only chatter — or, when it is LINKED, the site
 // account(s) behind it, and then the action is a full site ban/unban. EVERY linked account is acted
-// on (round 5, M1): a canonical two site accounts share is one person (a link is proof), and the
-// old unordered `LIMIT 1` banned an arbitrary one of them while the other chatted on. Enforcement
+// on: a canonical two site accounts share is one person (a link is proof), and an unordered
+// `LIMIT 1` would ban an arbitrary one of them while the other chatted on. Enforcement
 // needs every linked identity — the ceiling already checks every one. [] = platform-only.
 // A failed read THROWS (the route answers 503): read as "unlinked", it would turn a site ban into a
 // platform-only one.
@@ -39,6 +40,15 @@ const unavailable = () =>
   new Response("Moderation check unavailable — try again shortly", { status: 503, headers: { "Retry-After": "5" } });
 
 const CANONICAL_RE = /^[0-9a-f]{12}$/i;
+
+// A ban names a site ACCOUNT (site.bans → site.users). A target with no account row — the
+// homeserver's own @system user, a typo, a room id — would reach the INSERT and answer 500 with
+// no mod-log line. Refused first, in words.
+const NOT_A_MEMBER = "That isn't an account on this site — there is nothing to ban.";
+async function isSiteAccount(matrixId: string): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT 1 FROM site.users WHERE matrix_id = $1`, [matrixId]);
+  return rows.length > 0;
+}
 
 function canonicalOf(body: { canonicalId?: unknown } | null): string | null {
   return typeof body?.canonicalId === "string" && CANONICAL_RE.test(body.canonicalId) ? body.canonicalId.toLowerCase() : null;
@@ -134,6 +144,12 @@ export async function POST(req: NextRequest) {
     const denied = await assertCanModerate(mod, guardTarget);
     if (denied) return denied;
   }
+  if (targetId) {
+    // A failed read is not "no account": it answers 503 (try again), never a false refusal.
+    const member = await isSiteAccount(targetId).catch(() => null);
+    if (member === null) return unavailable();
+    if (!member) return new Response(NOT_A_MEMBER, { status: 404 });
+  }
 
   // Groups this action's mod-log rows with its platform rows, so the mod who acted can read back
   // how each platform answered (the status line after the action, the ✗ on history rows).
@@ -153,6 +169,8 @@ export async function POST(req: NextRequest) {
         batchId,
       });
       const platforms = fanOutBan(mod, canonicalId, durationMinutes, reason, batchId);
+      // Their lines leave the site now, not when the platform's own ban echoes back.
+      await pushChatBan(chatBanBody({ matrixIds: [], canonicalId, expiresAt, lift: false }));
       // No site row to read: what the platforms held before is theirs to know (previous: null).
       return Response.json({ ok: true, applied: true, expiresAt, platformOnly: true, previous: null, batchId, platforms });
     }
@@ -168,6 +186,8 @@ export async function POST(req: NextRequest) {
   // the action reached counts as applied.
   const first = results[0]!;
   if (!results.some((r) => r.applied)) return Response.json({ ok: true, applied: false, kept: first.kept });
+  // The accounts the ban reached, pushed to the chat path at once.
+  await pushChatBan(chatBanBody({ matrixIds: targets.filter((_, i) => results[i]!.applied), canonicalId, expiresAt, lift: false }));
   const platforms = [...new Set(results.flatMap((r) => r.platforms))];
   return Response.json({ ok: true, applied: true, expiresAt, previous: first.previous, batchId, platforms, accounts: targets.length });
 }
@@ -198,6 +218,7 @@ export async function DELETE(req: NextRequest) {
     if (targets.length === 0) {
       await appendModLog({ action: "unban", target: canonicalId, by: mod, batchId });
       const platforms = fanOutUnban(mod, canonicalId, batchId);
+      await pushChatBan(chatBanBody({ matrixIds: [], canonicalId, expiresAt: null, lift: true }));
       return Response.json({ ok: true, platformOnly: true, batchId, platforms });
     }
   }
@@ -213,6 +234,7 @@ export async function DELETE(req: NextRequest) {
     // person platform-banned. Best-effort, fire-and-forget (see fanOutBan).
     for (const p of fanOutUnban(mod, t, batchId)) platforms.add(p);
   }
+  await pushChatBan(chatBanBody({ matrixIds: targets, canonicalId, expiresAt: null, lift: true }));
 
   return Response.json({ ok: true, batchId, platforms: [...platforms] });
 }

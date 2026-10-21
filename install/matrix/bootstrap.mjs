@@ -1,5 +1,5 @@
 // The homeserver's first-run bootstrap: the community
-// space and #general, created AS the account that will own them (room version 12: the creator's
+// space, #general and #forum (the Forums tab's first room), created AS the account that will own them (room version 12: the creator's
 // power is permanent, so the rooms are theirs). Every step looks first and creates
 // only what is missing, so running it again changes nothing.
 //
@@ -9,12 +9,14 @@
 // MX_SPACE_NAME (the space's display name — the site's name), and the room ids already recorded in
 // instance config, if any: MX_STORED_HUB, MX_STORED_GENERAL. A recorded room that is gone is
 // REPORTED, not silently replaced by a second one; MX_RECREATE=1 allows making a new one.
-// Output: one JSON line on stdout, {"hub","general","created":[…]}; progress on stderr.
+// Output: one JSON line on stdout, {"hub","general","forum","created":[…]}; progress on stderr.
+// (The forum room is found by its alias on a re-run: it has no instance-config key of its own.)
 //
 // Run by `blackbranch matrix bootstrap` (inside the stream-api image, on the bundle's network; the
 // setup pages' community step asks for it through the host request `matrix-bootstrap`) and by
-// the maintainers' disposable test install (on the host). It writes no data type of the site's own — only
-// Matrix's m.* state — so a fresh install's rooms carry no namespace but Matrix's.
+// the maintainers' disposable test install (on the host). It writes Matrix's m.* state, and one
+// state event of the PRODUCT's namespace — the forum flag (web matrixNamespace.ts ROOM_TYPE, the same
+// name on every install) — never an install's own prefix.
 
 const env = process.env;
 const BASE = (env.MX_BASE ?? "").replace(/\/+$/, "");
@@ -23,6 +25,10 @@ const SPACE_NAME = env.MX_SPACE_NAME || SERVER;
 const RECREATE = env.MX_RECREATE === "1";
 const HUB_ALIAS = "community-hub";
 const GENERAL_ALIAS = "general";
+const FORUM_ALIAS = "forum";
+// The forum flag: an ordinary room with this state event is a forum to the site (web
+// matrixRooms.ts isForumRoom, forumReader.ts); other Matrix apps show a normal room.
+const FORUM_FLAG = "app.blackbranch.room_type";
 // #general keeps 30 days of messages (the server's allowed range is 1 day – 1 year).
 const GENERAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -153,11 +159,21 @@ async function ensureLink(roomId, type, stateKey) {
   created.push(type);
   log(`linked: ${type}`);
 }
+const forum = await ensureRoom({
+  label: "#forum", alias: FORUM_ALIAS, stored: undefined,
+  body: {
+    name: "forum", topic: "Posts and discussion", preset: "public_chat", visibility: "public", room_version: ROOM_VERSION,
+    initial_state: [{ type: FORUM_FLAG, state_key: "", content: { type: "forum" } }],
+  },
+});
+
 await ensureLink(hub, "m.space.child", general);
 await ensureLink(general, "m.space.parent", hub);
+await ensureLink(hub, "m.space.child", forum);
+await ensureLink(forum, "m.space.parent", hub);
 
-// Both rooms in the server's public room list, so a Matrix app can find them. The rendered Synapse
-// config allows listing exactly these two aliases (install/matrix/render.sh). A server that refuses
+// The rooms in the server's public room list, so a Matrix app can find them. The rendered Synapse
+// config allows listing exactly these three aliases (install/matrix/render.sh). A server that refuses
 // (another homeserver's rules) leaves them unlisted — the site joins by alias, so nothing breaks —
 // and the run says so rather than failing.
 async function ensurePublished(label, roomId) {
@@ -169,5 +185,6 @@ async function ensurePublished(label, roomId) {
 }
 await ensurePublished("community space", hub);
 await ensurePublished("#general", general);
+await ensurePublished("#forum", forum);
 
-process.stdout.write(`${JSON.stringify({ hub, general, created })}\n`);
+process.stdout.write(`${JSON.stringify({ hub, general, forum, created })}\n`);

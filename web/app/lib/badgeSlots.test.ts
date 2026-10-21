@@ -77,7 +77,7 @@ const gated = { ...base, subscriberBadgeIds: new Set([SUB_BADGE]) };
 
 test("the resurface: lapse, buy a slot, and the stale Supporter badge must NOT reappear", () => {
   // equip/route.ts 403s a FRESH equip without entitlement, but the equipped
-  // array persists a lapse — a bought slot used to bring the badge back with
+  // array persists a lapse — a bought slot could bring the badge back with
   // no equip call for the route to refuse.
   const r = shapeBadgeUserState({ ...gated, entitled: false, ownedSlotCount: 1, equipped: [SUB_BADGE] });
   assert.equal(r, null, "a lapsed subscriber is wearing the Supporter badge again");

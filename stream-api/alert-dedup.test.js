@@ -40,7 +40,7 @@ function routeHarness() {
     tts: null, sounds: { manifest: () => [] }, cleanForTTS: (s) => s,
     recordSupport: async () => 1, persistEventCard: async () => 1,
     maskBlacklist: (s) => s, broadcast: noop, bufferPush: noop, bufferReplace: noop,
-    ALERT_TTS_ENABLED: false,
+    ttsEnabled: () => false,
   });
   money.registerMoneyRoutes(app, { requireInternal: (_q, _s, n) => n && n(), wrap: (fn) => fn });
   const handler = routes.get('POST /alert');

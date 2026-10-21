@@ -1,12 +1,12 @@
 -- Fresh-install BASELINE — the schema a full replay of migrations/schema.sql + every
--- migration up to v159 leaves, with NO data.
+-- migration up to v164 leaves, with NO data.
 --
--- 🔴 GENERATED. Never edit by hand: run `node tools/check-baseline.mjs --generate` (or
--- `npm run baseline:generate` in stream-api/). CI fails until this file matches the chain,
+-- 🔴 GENERATED. Never edit by hand: run `node tools/check-baseline.mjs --generate`.
+-- CI fails until this file matches the chain,
 -- so every new migration lands together with a regenerated baseline.
 --
 -- Applied ONCE, to an EMPTY database, followed by baseline/seed.sql and then every migration
--- newer than v159. It is not re-runnable on purpose: a database that already holds a
+-- newer than v164. It is not re-runnable on purpose: a database that already holds a
 -- schema must take migrations, never a second baseline. See migrations/baseline/README.md.
 
 --
@@ -79,7 +79,7 @@ CREATE TABLE public.schema_migrations (
 -- Name: TABLE schema_migrations; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.schema_migrations IS 'Which migrate-vN.sql have been applied. Backfilled 2026-07-21 from the observed state of production (audit H5). applied_at is the BACKFILL time for v2-v73, not the original apply time, which was never recorded.';
+COMMENT ON TABLE public.schema_migrations IS 'Which migrate-vN.sql have been applied. An install that started from the baseline holds one row per version up to it (note ''baseline''); applied_at is when the row was written, which for back-filled and baseline rows is not when the migration first ran.';
 
 --
 -- Name: account_deletions; Type: TABLE; Schema: site; Owner: -
@@ -110,8 +110,15 @@ CREATE TABLE site.accounts (
     token_type text,
     scope text,
     linked_at timestamp with time zone DEFAULT now() NOT NULL,
-    account_display_name text
+    account_display_name text,
+    refresh_failed_at timestamp with time zone
 );
+
+--
+-- Name: COLUMN accounts.refresh_failed_at; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.accounts.refresh_failed_at IS 'When the platform refused this link''s refresh token (HTTP 400/401). NULL = the link works. Cleared by linking again or by a successful refresh.';
 
 --
 -- Name: ai_slots; Type: TABLE; Schema: site; Owner: -
@@ -1316,6 +1323,178 @@ CREATE TABLE site.style_prices (
 );
 
 --
+-- Name: subscription_accounts; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.subscription_accounts (
+    provider text NOT NULL,
+    provider_user_id text NOT NULL,
+    matrix_id text NOT NULL,
+    linked_at timestamp with time zone DEFAULT now() NOT NULL,
+    linked_via text NOT NULL,
+    CONSTRAINT subscription_accounts_linked_via_check CHECK ((linked_via = ANY (ARRAY['oauth'::text, 'code'::text, 'owner-approved'::text]))),
+    CONSTRAINT subscription_accounts_provider_check CHECK ((provider = ANY (ARRAY['stripe'::text, 'paypal'::text, 'patreon'::text, 'kofi'::text, 'twitch'::text, 'kick'::text])))
+);
+
+--
+-- Name: subscription_claims; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.subscription_claims (
+    id bigint NOT NULL,
+    matrix_id text NOT NULL,
+    kind text NOT NULL,
+    code_hash text,
+    email_hmac text,
+    typed_email text,
+    status text DEFAULT 'open'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT subscription_claims_kind_check CHECK ((kind = ANY (ARRAY['code'::text, 'email'::text]))),
+    CONSTRAINT subscription_claims_shape CHECK ((((kind = 'code'::text) AND (code_hash IS NOT NULL) AND (email_hmac IS NULL) AND (typed_email IS NULL)) OR ((kind = 'email'::text) AND (code_hash IS NULL) AND (email_hmac IS NOT NULL)))),
+    CONSTRAINT subscription_claims_status_check CHECK ((status = ANY (ARRAY['open'::text, 'matched'::text, 'approved'::text, 'refused'::text, 'expired'::text])))
+);
+
+--
+-- Name: subscription_claims_id_seq; Type: SEQUENCE; Schema: site; Owner: -
+--
+
+ALTER TABLE site.subscription_claims ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME site.subscription_claims_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+--
+-- Name: subscription_events; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.subscription_events (
+    provider text NOT NULL,
+    event_id text NOT NULL,
+    event_type text NOT NULL,
+    received_at timestamp with time zone DEFAULT now() NOT NULL,
+    occurred_at timestamp with time zone,
+    external_id text,
+    body jsonb,
+    applied_at timestamp with time zone,
+    outcome text,
+    CONSTRAINT subscription_events_outcome_check CHECK (((outcome IS NULL) OR (outcome = ANY (ARRAY['applied'::text, 'stale'::text, 'unclaimed'::text, 'ignored'::text])) OR (outcome ~~ 'failed:%'::text))),
+    CONSTRAINT subscription_events_provider_check CHECK ((provider = ANY (ARRAY['stripe'::text, 'paypal'::text, 'patreon'::text, 'kofi'::text, 'twitch'::text, 'kick'::text])))
+);
+
+--
+-- Name: subscription_intents; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.subscription_intents (
+    id text NOT NULL,
+    matrix_id text NOT NULL,
+    provider text NOT NULL,
+    tier text NOT NULL,
+    plan_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone DEFAULT (now() + '30 days'::interval) NOT NULL,
+    external_id text,
+    price_cents integer,
+    currency text,
+    CONSTRAINT subscription_intents_currency_check CHECK (((currency IS NULL) OR (currency ~ '^[a-z]{3}$'::text))),
+    CONSTRAINT subscription_intents_id_check CHECK ((id ~ '^si_[0-9A-Za-z]{22}$'::text)),
+    CONSTRAINT subscription_intents_price_cents_check CHECK (((price_cents IS NULL) OR (price_cents > 0))),
+    CONSTRAINT subscription_intents_provider_check CHECK ((provider = ANY (ARRAY['stripe'::text, 'paypal'::text])))
+);
+
+--
+-- Name: COLUMN subscription_intents.price_cents; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.subscription_intents.price_cents IS 'The plan''s monthly price when this subscribe started, in the currency''s minor units: the floor a payment of the subscription must meet to be credited. NULL on intents written before v164.';
+
+--
+-- Name: subscription_payments; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.subscription_payments (
+    provider text NOT NULL,
+    payment_id text NOT NULL,
+    record_id bigint NOT NULL,
+    amount_cents integer NOT NULL,
+    currency text NOT NULL,
+    net_cents integer,
+    paid_at timestamp with time zone NOT NULL,
+    spend_id text,
+    credit text,
+    refunded_at timestamp with time zone,
+    reversed_at timestamp with time zone,
+    CONSTRAINT subscription_payments_credit_check CHECK (((credit IS NULL) OR (credit = ANY (ARRAY['pending'::text, 'landed'::text, 'refused'::text])))),
+    CONSTRAINT subscription_payments_provider_check CHECK ((provider = ANY (ARRAY['stripe'::text, 'paypal'::text, 'patreon'::text, 'kofi'::text, 'twitch'::text, 'kick'::text])))
+);
+
+--
+-- Name: subscription_records; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.subscription_records (
+    id bigint NOT NULL,
+    provider text NOT NULL,
+    external_id text NOT NULL,
+    matrix_id text,
+    account_ref text,
+    tier text,
+    status text NOT NULL,
+    provider_status text NOT NULL,
+    renews boolean DEFAULT true NOT NULL,
+    period_end timestamp with time zone,
+    access_until timestamp with time zone,
+    source_event_at timestamp with time zone NOT NULL,
+    last_checked_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT subscription_records_provider_check CHECK ((provider = ANY (ARRAY['stripe'::text, 'paypal'::text, 'patreon'::text, 'kofi'::text, 'twitch'::text, 'kick'::text]))),
+    CONSTRAINT subscription_records_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'past_due'::text, 'paused'::text, 'ended'::text])))
+);
+
+--
+-- Name: TABLE subscription_records; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.subscription_records IS 'One row per subscription per service (subscription sources, v161). Written only by web subscriptions/state.ts (writeTransition); a viewer is a Supporter while any entitling row is theirs.';
+
+--
+-- Name: COLUMN subscription_records.status; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.subscription_records.status IS 'Normalised: pending | active | past_due | paused | ended. active and past_due entitle. provider_status keeps the service''s own word.';
+
+--
+-- Name: COLUMN subscription_records.access_until; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.subscription_records.access_until IS 'NULL = status alone decides (Stripe). Else access stops at this time, with no job and no write.';
+
+--
+-- Name: COLUMN subscription_records.source_event_at; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.subscription_records.source_event_at IS 'The ordering stamp of the last write; an observation strictly older than it is dropped as stale.';
+
+--
+-- Name: subscription_records_id_seq; Type: SEQUENCE; Schema: site; Owner: -
+--
+
+ALTER TABLE site.subscription_records ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME site.subscription_records_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+--
 -- Name: subscriptions; Type: TABLE; Schema: site; Owner: -
 --
 
@@ -1960,7 +2139,7 @@ CREATE TABLE stream.support_events (
 -- Name: COLUMN support_events.admitted_usd; Type: COMMENT; Schema: stream; Owner: -
 --
 
-COMMENT ON COLUMN stream.support_events.admitted_usd IS 'Amount of this credit the per-stream support bar and the timer admitted: its net after refunds held before it landed (review round 6 D-D). NULL = the whole amount_usd.';
+COMMENT ON COLUMN stream.support_events.admitted_usd IS 'Amount of this credit the per-stream support bar and the timer admitted: its net after any refunds already recorded before it landed. NULL = the whole amount_usd.';
 
 --
 -- Name: support_events_id_seq; Type: SEQUENCE; Schema: stream; Owner: -
@@ -2785,6 +2964,62 @@ ALTER TABLE ONLY site.style_prices
     ADD CONSTRAINT style_prices_pkey PRIMARY KEY (style_id);
 
 --
+-- Name: subscription_accounts subscription_accounts_one_per_service; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_accounts
+    ADD CONSTRAINT subscription_accounts_one_per_service UNIQUE (provider, matrix_id);
+
+--
+-- Name: subscription_accounts subscription_accounts_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_accounts
+    ADD CONSTRAINT subscription_accounts_pkey PRIMARY KEY (provider, provider_user_id);
+
+--
+-- Name: subscription_claims subscription_claims_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_claims
+    ADD CONSTRAINT subscription_claims_pkey PRIMARY KEY (id);
+
+--
+-- Name: subscription_events subscription_events_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_events
+    ADD CONSTRAINT subscription_events_pkey PRIMARY KEY (provider, event_id);
+
+--
+-- Name: subscription_intents subscription_intents_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_intents
+    ADD CONSTRAINT subscription_intents_pkey PRIMARY KEY (id);
+
+--
+-- Name: subscription_payments subscription_payments_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_payments
+    ADD CONSTRAINT subscription_payments_pkey PRIMARY KEY (provider, payment_id);
+
+--
+-- Name: subscription_records subscription_records_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_records
+    ADD CONSTRAINT subscription_records_pkey PRIMARY KEY (id);
+
+--
+-- Name: subscription_records subscription_records_provider_external_key; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_records
+    ADD CONSTRAINT subscription_records_provider_external_key UNIQUE (provider, external_id);
+
+--
 -- Name: subscriptions subscriptions_pkey; Type: CONSTRAINT; Schema: site; Owner: -
 --
 
@@ -3345,6 +3580,54 @@ CREATE INDEX sticker_boosts_message_idx ON site.sticker_boosts USING btree (orig
 CREATE INDEX stripe_customers_viewer ON site.stripe_customers USING btree (matrix_id);
 
 --
+-- Name: subscription_claims_matrix_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX subscription_claims_matrix_idx ON site.subscription_claims USING btree (matrix_id);
+
+--
+-- Name: subscription_events_body_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX subscription_events_body_idx ON site.subscription_events USING btree (received_at) WHERE (body IS NOT NULL);
+
+--
+-- Name: subscription_events_inbox_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX subscription_events_inbox_idx ON site.subscription_events USING btree (received_at) WHERE (applied_at IS NULL);
+
+--
+-- Name: subscription_events_record_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX subscription_events_record_idx ON site.subscription_events USING btree (provider, external_id) WHERE (external_id IS NOT NULL);
+
+--
+-- Name: subscription_intents_matrix_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX subscription_intents_matrix_idx ON site.subscription_intents USING btree (matrix_id);
+
+--
+-- Name: subscription_payments_record_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX subscription_payments_record_idx ON site.subscription_payments USING btree (record_id);
+
+--
+-- Name: subscription_records_access_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX subscription_records_access_idx ON site.subscription_records USING btree (provider, access_until) WHERE (status = ANY (ARRAY['active'::text, 'past_due'::text]));
+
+--
+-- Name: subscription_records_matrix_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX subscription_records_matrix_idx ON site.subscription_records USING btree (matrix_id) WHERE (matrix_id IS NOT NULL);
+
+--
 -- Name: subscriptions_stripe_customer_id_idx; Type: INDEX; Schema: site; Owner: -
 --
 
@@ -3723,6 +4006,41 @@ ALTER TABLE ONLY site.sticker_boosts
     ADD CONSTRAINT sticker_boosts_original_message_id_fkey FOREIGN KEY (original_message_id) REFERENCES site.chat_messages(id) ON DELETE CASCADE;
 
 --
+-- Name: subscription_accounts subscription_accounts_matrix_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_accounts
+    ADD CONSTRAINT subscription_accounts_matrix_id_fkey FOREIGN KEY (matrix_id) REFERENCES site.users(matrix_id) ON DELETE CASCADE;
+
+--
+-- Name: subscription_claims subscription_claims_matrix_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_claims
+    ADD CONSTRAINT subscription_claims_matrix_id_fkey FOREIGN KEY (matrix_id) REFERENCES site.users(matrix_id) ON DELETE CASCADE;
+
+--
+-- Name: subscription_intents subscription_intents_matrix_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_intents
+    ADD CONSTRAINT subscription_intents_matrix_id_fkey FOREIGN KEY (matrix_id) REFERENCES site.users(matrix_id) ON DELETE CASCADE;
+
+--
+-- Name: subscription_payments subscription_payments_record_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_payments
+    ADD CONSTRAINT subscription_payments_record_id_fkey FOREIGN KEY (record_id) REFERENCES site.subscription_records(id) ON DELETE CASCADE;
+
+--
+-- Name: subscription_records subscription_records_matrix_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.subscription_records
+    ADD CONSTRAINT subscription_records_matrix_id_fkey FOREIGN KEY (matrix_id) REFERENCES site.users(matrix_id) ON DELETE CASCADE;
+
+--
 -- Name: subscriptions subscriptions_matrix_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
 --
 
@@ -4022,6 +4340,11 @@ INSERT INTO public.schema_migrations (version, note) VALUES
   (156, 'baseline'),
   (157, 'baseline'),
   (158, 'baseline'),
-  (159, 'baseline')
+  (159, 'baseline'),
+  (160, 'baseline'),
+  (161, 'baseline'),
+  (162, 'baseline'),
+  (163, 'baseline'),
+  (164, 'baseline')
 ON CONFLICT (version) DO NOTHING;
 -- baseline:end

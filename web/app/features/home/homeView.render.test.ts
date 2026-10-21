@@ -32,30 +32,39 @@ const data = {
   vods: [{ id: "v1", title: "Last night's replay", duration: "8:55:00", when: "1d ago" }],
   threads: [{ roomId: "!c", roomName: "Content", eventId: "$e", title: "Stream lead-up videos", replyCount: 1, lastTs: Date.parse("2026-09-25T11:30:00.000Z") }],
   boards: null,
+  platforms: [],
   generatedAt: "2026-09-25T12:00:00.000Z",
 };
 const html = (p: Partial<Parameters<typeof HomeView>[0]>) =>
   renderToStaticMarkup(createElement(HomeView, { ...base, data, signedIn: false, ...p }));
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-test("signed out: the pitch header, the sign-in column with its list and the seven marks, and NO explainer line anywhere", () => {
-  const out = html({ signedIn: false });
+test("signed out: the pitch header, the sign-in column with its list and the marks of the platforms set up, and NO explainer line anywhere", () => {
+  const out = html({ signedIn: false, data: { ...data, platforms: ["kick", "twitch", "patreon"] } as never });
   assert.match(out, /<h2 class="text-lg font-semibold text-strong">Example heading<\/h2><p class="text-sm text-secondary">Example intro line\.<\/p>/);
   assert.match(out, /href="\/auth\/signin"/);
   assert.match(out, /Sign in or create an account/);
-  for (const line of ["E2EE DMs and channels", "Ad free", "Private data", "Full cross-platform integration", "Fully customizable"]) {
+  for (const line of ["End-to-end encrypted DMs and private channels", "Full cross-platform integration", "Fully customizable"]) {
     assert.match(out, new RegExp(esc(line)), line);
   }
-  for (const mark of ["Twitch", "YouTube", "Kick", "Streamplace", "Discord", "Patreon", "Element"]) {
-    assert.match(out, new RegExp(`title="${mark}"`), `the ${mark} mark`);
-  }
+  // The marks are the install's own, in the column's order — never one it has not set up.
+  const marks = [...out.matchAll(/title="([A-Za-z]+)" class="inline-flex"/g)].map((m) => m[1]);
+  assert.deepEqual(marks, ["Twitch", "Kick", "Patreon"]);
   assert.doesNotMatch(out, /text-blue-300/);
   assert.doesNotMatch(out, /Your card|this could be you/i);
 });
 
+test("no platform set up (or a body that does not say): no integration line and no marks — the rest of the list stays", () => {
+  for (const platforms of [[], undefined, null]) {
+    const out = html({ signedIn: false, data: { ...data, platforms } as never });
+    assert.match(out, /End-to-end encrypted DMs and private channels/, "vacuity: the list rendered");
+    assert.doesNotMatch(out, /Full cross-platform integration|data-home-marks/, JSON.stringify(platforms));
+  }
+});
+
 test("the retired over-explaining phrases never come back", () => {
   const out = html({ signedIn: false });
-  for (const s of ["readable without an account", "One chat identity", "One account, linked", "What you get", "Encrypted direct messages", "Welcome to site.test", "Whether Casey is live", "Click one to", "Chat with everyone here", "Pick how your name looks"]) {
+  for (const s of ["Ad free", "Private data", "E2EE DMs and channels", "readable without an account", "One chat identity", "One account, linked", "What you get", "Encrypted direct messages", "Welcome to site.test", "Whether Casey is live", "Click one to", "Chat with everyone here", "Pick how your name looks"]) {
     assert.doesNotMatch(out, new RegExp(esc(s)), s);
   }
 });
@@ -79,11 +88,23 @@ test("status: offline reads the last stream in plain words; live reads LIVE and 
 
 test("empty lists and a dead loader are words, never a blank box", () => {
   const empty = html({ data: { ...data, news: [], vods: [] } });
-  assert.equal((empty.match(/Nothing yet/g) ?? []).length, 2);
+  // The VODs card says Nothing yet; the News card is not there at all (no feed has given it items).
+  assert.equal((empty.match(/Nothing yet/g) ?? []).length, 1);
+  assert.doesNotMatch(empty, /data-widget="news"/);
   const dead = html({ data: { ...data, status: null, lastStream: null } });
   assert.match(dead, /Couldn(&#x27;|')t load right now/); // renderToStaticMarkup escapes the apostrophe
   const none = html({ data: null, loading: true });
   assert.match(none, /Loading/);
+});
+
+test("News: a card only once a feed has items — none for an install with no feed, nor for a feed that did not answer", () => {
+  assert.match(html({}), /data-widget="news"/, "vacuity: items → the card is there");
+  assert.match(html({}), /A headline/);
+  for (const news of [[], null]) {
+    const out = html({ data: { ...data, news } as never });
+    assert.doesNotMatch(out, /data-widget="news"|>News</, JSON.stringify(news));
+    assert.match(out, /data-widget="threads"/, "the rest of the grid stays");
+  }
 });
 
 test("no money and no radio on Home", () => {
@@ -148,7 +169,7 @@ test("VOD rows carry YouTube's own thumbnail — no API, no scrape", () => {
 test("columns form only where they have 17rem of room — never a breakpoint-forced third column", () => {
   const out = html({});
   // min(17rem,100%): a track never wider than the cell, or a pane under ~616px
-  // (a 900px window with the default chat) scrolled SIDEWAYS (final review, Important 1).
+  // (a 900px window with the default chat) scrolled SIDEWAYS.
   assert.match(out, /grid-cols-\[repeat\(auto-fit,minmax\(min\(17rem,100%\),1fr\)\)\]/);
   assert.match(out, /data-widget="status" class="[^"]*\bcol-span-full\b/);
   assert.doesNotMatch(out, /lg:grid-cols-|lg:col-span/);

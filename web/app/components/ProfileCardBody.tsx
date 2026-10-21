@@ -104,7 +104,7 @@ export default function ProfileCardBody({
   const earnedPoints = useEarnedBalance(true);
   const { verdict, pendingVerification, dotClass } = useEncryptionStatus();
 
-  // One batch in, one paint out (feedback round 2, issue 2 — the pop-in fix).
+  // One batch in, one paint out — no pop-in.
   // Warm cache: the card paints fully populated immediately, then background
   // revalidation updates state silently. Cold: every section lands together.
   useEffect(() => {
@@ -263,11 +263,11 @@ export default function ProfileCardBody({
           {currencyTitle()}
           {/* "1,475q (475q)" — total, then how much of it was EARNED rather than
               bought. Both carry the glyph: two bare numbers side by side would
-              not say that either is Qorm.
+              not say that either is the currency.
 
               The parenthetical is shown even when it equals the total: the
               case an omit-when-equal rule would hide is every viewer who has
-              never bought Qorm — almost everyone, and the people for whom "all
+              never bought any — almost everyone, and the people for whom "all
               of this is yours" is the useful fact. Shared with the store header
               via earnedParenthetical so the two can never disagree. */}
           {coinBalance !== null && (

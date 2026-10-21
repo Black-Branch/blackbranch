@@ -1,4 +1,4 @@
-// /chat/event and the ledger's "already recorded" (review round 2, R2-3).
+// /chat/event and the ledger's "already recorded".
 // Run: node --test chat-event-ledger-dedup.test.js
 //
 // When fireStreamEffects reports that the ledger already holds a native money
@@ -30,7 +30,7 @@ function chatEventHarness({ duplicate }) {
     maskBlacklist: (t) => t,
     broadcast: (f) => calls.push(`broadcast:${f.type}`),
     bufferPush: () => calls.push('buffer'), bufferReplace: () => {},
-    ALERT_TTS_ENABLED: true,
+    ttsEnabled: () => true,
   });
   const routes = {};
   money.registerMoneyRoutes(
@@ -66,7 +66,7 @@ test('/chat/event still posts the card for a first delivery', async () => {
 
 // A ledger that could not record the event is NOT effects_failed (which web reads as refund-legal):
 // it answers 503 ledger_unavailable, releases the spendId so web's retry re-processes, and posts
-// no card. (Security review of the hold.)
+// no card.
 test('/chat/event answers 503 ledger_unavailable for a LedgerWriteError, and the retry re-processes', async () => {
   let failNext = true;
   const calls = [];

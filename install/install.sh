@@ -21,6 +21,10 @@
 #                          there every account on the box can read it, and sudo logs it)
 #   --acme-email <addr>    direct mode: Let's Encrypt account email (optional)
 #   --skip-dns-check       direct mode: do not require the three names to resolve first
+#   --moving               this server takes over a site from its backup (a move, operate.md
+#                          "Moving"): installs everything but makes no tunnel and starts nothing —
+#                          `blackbranch restore latest --with-env` brings the site, its secrets and
+#                          its tunnel back, then starts it. Implies --skip-dns-check.
 #   --no-swap              do not add a swap file on a small box
 #   --release-key <key>    the key this box trusts to sign its updates ("ed25519:<base64>", or a
 #                          file holding it) instead of the project's (install/release-key.pub) —
@@ -56,8 +60,19 @@ VERSION_RE='^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})(-[0-9
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
 die()  { printf '\n\033[31minstall: %s\033[0m\n' "$*" >&2; exit 1; }
+# Compose's version ("2.29.1", "v2.20.0", "5.6.0") is 2.20 or newer.
+compose_version_ok() {
+  [[ "${1#v}" =~ ^([0-9]+)\.([0-9]+) ]] || return 1
+  [ "${BASH_REMATCH[1]}" -gt 2 ] || { [ "${BASH_REMATCH[1]}" = 2 ] && [ "${BASH_REMATCH[2]}" -ge 20 ]; }
+}
+# The image registry answers this server at all (any HTTP status will do: ghcr.io/v2/ answers 401).
+# Not `curl -4`: a NAT64 network reaches it over IPv6 and works; a server with IPv6 alone does not.
+ipv4_out_ok() {
+  local code; code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 20 "${BB_REGISTRY_PROBE:-https://ghcr.io/v2/}" 2>/dev/null || true)
+  [ -n "$code" ] && [ "$code" != 000 ]
+}
 
-DOMAIN="" MODE="" SITE_NAME_ARG="" TUNNEL_TOKEN="" TUNNEL_TOKEN_ASK=0 TUNNEL_TOKEN_FILE="" ACME_EMAIL="" SKIP_DNS=0 NO_SWAP=0 RELEASE_KEY_ARG="" UPDATE_FEED_ARG="" UPDATE_CHANNEL_ARG=""
+DOMAIN="" MODE="" SITE_NAME_ARG="" TUNNEL_TOKEN="" TUNNEL_TOKEN_ASK=0 TUNNEL_TOKEN_FILE="" ACME_EMAIL="" SKIP_DNS=0 NO_SWAP=0 RELEASE_KEY_ARG="" UPDATE_FEED_ARG="" UPDATE_CHANNEL_ARG="" MOVING=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN="${2:?}"; shift 2 ;;
@@ -71,6 +86,7 @@ while [ $# -gt 0 ]; do
     --tunnel-token-file) TUNNEL_TOKEN_FILE="${2:?}"; shift 2 ;;
     --acme-email) ACME_EMAIL="${2:?}"; shift 2 ;;
     --skip-dns-check) SKIP_DNS=1; shift ;;
+    --moving) MOVING=1; SKIP_DNS=1; shift ;;
     --no-swap) NO_SWAP=1; shift ;;
     --release-key) RELEASE_KEY_ARG="${2:?}"; shift 2 ;;
     --update-feed) UPDATE_FEED_ARG="${2:?}"; shift 2 ;;
@@ -227,6 +243,9 @@ apt_install() { # apt_install <pkg>... — only the missing ones
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}" >/dev/null
 }
 apt_install ca-certificates curl rsync openssl unattended-upgrades
+# The images come from registries that answer over IPv4 only (ghcr.io has no IPv6 address): an
+# IPv6-only server was accepted and then failed at its first download (R1.7).
+ipv4_out_ok || die "this server cannot reach the image registry (https://ghcr.io): the bundle's images come from registries that answer over IPv4 only, so a server with IPv6 alone cannot fetch them. Give it an IPv4 address or route out (or a NAT64/DNS64 network), check its DNS, then run this again — nothing was installed"
 
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
   say "Installing Docker Engine (Docker's own apt repository)"
@@ -244,6 +263,11 @@ EOF
   systemctl enable --now docker >/dev/null
 fi
 info "$(docker --version); $(docker compose version | head -1)"
+# Compose 2.20 brought `docker compose wait`, which `up` uses to wait for the migrations: an older
+# one failed there and read as "the database migrations failed" (R1.7).
+compose_v=$(docker compose version --short 2>/dev/null || true)
+compose_version_ok "$compose_v" \
+  || die "Docker Compose ${compose_v:-of unknown version} is too old: Black Branch needs 2.20 or newer. Update it (Docker's apt repository: apt-get install docker-compose-plugin), then run this again — nothing was installed"
 
 # The host patches itself. Turned on once; a choice the operator changes later is kept.
 if [ ! -f /etc/apt/apt.conf.d/20auto-upgrades ]; then
@@ -298,15 +322,22 @@ if [ -f "$ENV_FILE" ]; then
   # old one — the only change a re-run makes to .env. `up` below recreates cloudflared with it.
   if [ -n "$TUNNEL_TOKEN_FILE" ] || [ "$TUNNEL_TOKEN_ASK" = 1 ]; then
     [ "$MODE" = tunnel ] || die "this box is installed in $MODE mode: it has no tunnel, so a tunnel token means nothing here — nothing was changed"
-    [ -n "$(env_get CLOUDFLARE_TUNNEL_TOKEN)" ] || die "this box's tunnel was made by signing in to Cloudflare, not from a token: its credentials are in $BB_HOME/cloudflared/ — nothing was changed"
     read_tunnel_token
     if [ "$TUNNEL_TOKEN" = "$(env_get CLOUDFLARE_TUNNEL_TOKEN)" ]; then info "tunnel token unchanged"
     else
+      signed_in=""; [ -n "$(env_get CLOUDFLARE_TUNNEL_TOKEN)" ] || signed_in=1
       tmp=$(mktemp "$BB_HOME/.env.XXXXXX"); chmod 600 "$tmp"
       TOKEN="$TUNNEL_TOKEN" awk '/^CLOUDFLARE_TUNNEL_TOKEN=/ { print "CLOUDFLARE_TUNNEL_TOKEN=" ENVIRON["TOKEN"]; next } { print }' "$ENV_FILE" > "$tmp" \
         || { rm -f "$tmp"; die "could not write the new token (is the disk full?) — nothing was changed"; }
       mv -f "$tmp" "$ENV_FILE"
       info "tunnel token replaced in $ENV_FILE (cloudflared starts with it below)"
+      # A tunnel made by signing in, given a dashboard tunnel's token (R1.6: its tunnel was deleted —
+      # a move's dead end — or the operator prefers the dashboard): the token tunnel takes over. The
+      # signed-in tunnel's config is set aside, so the front door below writes the token's.
+      if [ -n "$signed_in" ] && [ -f "$BB_HOME/cloudflared/config.yml" ]; then
+        mv -f "$BB_HOME/cloudflared/config.yml" "$BB_HOME/cloudflared/config.yml.signed-in-$(date -u +%Y%m%d-%H%M%S)"
+        info "the tunnel made by signing in is replaced by the dashboard tunnel whose token you gave"
+      fi
     fi
   fi
 else
@@ -539,6 +570,9 @@ front_door() {
     if [ -n "$(env_get CLOUDFLARE_TUNNEL_TOKEN)" ]; then
       [ -f "$cfdir/config.yml" ] || printf '# Token tunnel: its routes are set in the Cloudflare dashboard.\nno-autoupdate: true\n' > "$cfdir/config.yml"
       info "token tunnel: in the Cloudflare dashboard, route $DOMAIN, api.$DOMAIN and matrix.$DOMAIN to http://caddy:80"
+    elif [ "$MOVING" = 1 ] && [ ! -f "$cfdir/config.yml" ]; then
+      # A move: the site's own tunnel comes back with the restore, and connects from here.
+      info "moving: no tunnel is made here — the restore brings back the site's own tunnel"
     elif [ ! -f "$cfdir/config.yml" ]; then
       cf() { docker run --rm -v "$cfdir:/home/nonroot/.cloudflared" "$image" "$@"; }
       if [ ! -f "$cfdir/cert.pem" ]; then
@@ -551,7 +585,7 @@ front_door() {
       out=$(cf tunnel list --name "$name" --output json 2>&1) || die "could not read the account's tunnels: $(printf '%s' "$out" | tail -n 1)"
       uuid=$(printf '%s' "$out" | grep -oE '"id": *"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"' | head -1 | grep -oE '[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}' || true)
       if [ -n "$uuid" ]; then
-        [ -f "$cfdir/$uuid.json" ] || die "the tunnel $name exists in Cloudflare, but its credentials are not on this box ($cfdir/$uuid.json) — delete it in the dashboard (Zero Trust → Networks → Tunnels) and run this again"
+        [ -f "$cfdir/$uuid.json" ] || die "the tunnel $name exists in Cloudflare, but its credentials are not on this server. Moving the site here from another server? Run this again with --moving: the restore brings the tunnel back (docs: operate.md, \"Moving to a bigger server\"). A tunnel left from an install you gave up on: delete it in the dashboard (Zero Trust → Networks → Tunnels) and run this again"
         info "using the tunnel an earlier run made ($name)"
       else
         out=$(cf tunnel create "$name" 2>&1) || die "could not create the tunnel $name: $(printf '%s' "$out" | tail -n 1)"
@@ -639,7 +673,24 @@ systemctl is-active -q blackbranch-requests.path || systemctl start blackbranch-
 front_door
 
 # ── 7. Up ───────────────────────────────────────────────────────────────────────────────────
-BB_HOME="$BB_HOME" /usr/local/bin/blackbranch up
+# A move starts nothing yet: the restore brings the site, its .env (the secrets) and its tunnel,
+# then starts everything itself. Starting now would make an empty site the restore must replace —
+# and in direct mode ask Let's Encrypt for certificates for names that still point at the old server.
+if [ "$MOVING" = 1 ]; then
+  exec 9>&-
+  say "Ready for the restore"
+  cat <<EOF
+   Nothing is started yet, and there is no setup link: this server becomes the old one's copy.
+   1. Make the backups reachable from here (operate.md, "Moving to a bigger server", step 2).
+   2. sudo blackbranch restore latest --with-env      (a bucket or SFTP server: add --from <its address>)
+      It brings back the databases, the secrets (.env)$([ "$MODE" = tunnel ] && printf ' and the tunnel —\n      stop the old server first, or both of them answer for the site') and starts the site.
+EOF
+  [ "$MODE" = direct ] && info "3. Then point the three DNS records ($DOMAIN, api.$DOMAIN, matrix.$DOMAIN) at this server."
+  exit 0
+fi
+# Its own red line says what stopped it and what to do; this one says it is safe to go again.
+BB_HOME="$BB_HOME" /usr/local/bin/blackbranch up \
+  || die "the services did not all start — the line above says why and what to do. Everything so far is kept: fix that one thing and run the same install command again"
 # The services are up on this release: an update may run now (the feed read below is one's first step).
 exec 9>&-
 
@@ -649,7 +700,8 @@ cat <<EOF
    api         https://api.$DOMAIN
    homeserver  https://matrix.$DOMAIN   (server name $DOMAIN — permanent; federation off)
    values      $ENV_FILE  (back it up — its secrets exist nowhere else)
-   operate     blackbranch status · blackbranch logs <service> · blackbranch backup · blackbranch help
+   operate     sudo blackbranch status · sudo blackbranch logs <service> · sudo blackbranch backup · blackbranch help
+               (every command but help needs sudo: the install is root's)
 EOF
 [ "$MODE" = internal ] && echo "   ⚠ LAB MODE: certificates from caddy's own CA — not for production."
 # The update feed, read once now (a box that cannot read it says so on the doctor page).

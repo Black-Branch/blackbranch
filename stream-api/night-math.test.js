@@ -49,11 +49,11 @@ test('gold: everything past duration is overflow; encore drains it at the flat f
   assert.equal(d.seconds, Math.round(500 / finalRate));
 });
 
-// ── fix round 1: caller-contract guards ─────────────────────────────────────
+// ── caller-contract guards ──────────────────────────────────────────────────
 
 test('a frontier below the first sellable block throws instead of pricing the free seed', () => {
-  // Without the guard this bought 2h1s for a single cent — the seed region
-  // (0..7200 here) got silently priced because the frontier started at 0
+  // Without the guard this buys 2h1s for a single cent — the seed region
+  // (0..7200 here) is silently priced when the frontier starts at 0
   // instead of at seedSec. The timer always starts the frontier at seedSec,
   // so a lower frontier is a caller bug, not a state to handle.
   const b = NM.layoutBlocks(8*3600, 2*3600, 36200);
@@ -65,9 +65,9 @@ test('a frontier below the first sellable block throws instead of pricing the fr
 
 test('blocks extending past durationSec throws instead of stranding the extra time as overflow', () => {
   // The exact stale-duration shape: extend the blocks by 3600s but do not
-  // widen durationSec by the same amount. Before this guard, draining the
-  // overflow into the extended block silently bought nothing (the walk
-  // stopped at the stale durationSec) and handed the whole 500c back as
+  // widen durationSec by the same amount. Without this guard, draining the
+  // overflow into the extended block silently buys nothing (the walk
+  // stops at the stale durationSec) and hands the whole 500c back as
   // overflowCents — money for nothing, with no error.
   const b = NM.layoutBlocks(2*3600, 0, 2000);
   const b2 = NM.extendBlocks(b, 3600);

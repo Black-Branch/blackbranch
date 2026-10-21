@@ -13,7 +13,7 @@ export const PLATFORM_LABELS: Record<string, string> = {
   tiktok: "TikTok",
   discord: "Discord",
   kick: "Kick",
-  streamplace: "stream.place",
+  streamplace: "Streamplace",
   native: siteName(),
   all: "all platforms",
 };
@@ -21,7 +21,7 @@ export const PLATFORM_LABELS: Record<string, string> = {
 // The short letters a platform wears in front of a name where room is tight — the terminal's
 // chat column ("@t:" rather than "@twitch:"). One per platform id above that has its own users;
 // site/native names carry no prefix. yt and sp match the video switcher's codes.
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export const PLATFORM_SHORT: Record<string, string> = {
   twitch: "t",
   youtube: "yt",

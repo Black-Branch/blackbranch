@@ -1,4 +1,4 @@
-// The viewer "link YouTube" button exists only on a site with the owner plugin.
+// The viewer "link YouTube" button exists only on a site with a site plugin.
 // Run: node --test app/lib/viewerLinkPolicy.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -33,7 +33,7 @@ test("a switched-off payment provider's webhook answers 404 before it reads anyt
   const p0 = paypal.indexOf("export async function POST");
   const pg = paypal.indexOf('if (!paypalModuleOn()) return new Response("Not found", { status: 404 });');
   assert.ok(pg > p0 && pg < paypal.indexOf("req.text()") && pg < paypal.indexOf("paypalWebhookConfigured()"), "PayPal: the switch first");
-  // Every checkout route gates on stripeConfigured(), which now includes the switch.
+  // Every checkout route gates on stripeConfigured(), which includes the switch.
   assert.match(read("./stripe.ts"), /return stripeModuleOn\(\) && Boolean\(instanceString\("stripe\.secretKey"\)\);/);
   assert.match(read("./paypalClient.ts"), /return paypalModuleOn\(\) && Boolean\(/);
   // Vacuity anchor at the END of a file the scans read.

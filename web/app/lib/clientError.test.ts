@@ -371,3 +371,40 @@ test("the listener actually APPLIES the filter, before it reports", () => {
   const report = src.indexOf('reportClientError("onerror"');
   assert.ok(drop > 0 && report > drop, "the drop sits inside onError, ahead of the report");
 });
+
+// Browser and extension noise that names nothing in the site (as seen in
+// site.client_errors): the ResizeObserver loop notice (54 rows), wallet extensions fighting over
+// window.ethereum, a throw whose stack is an extension's own file, and 567 rejections whose reason is
+// the bare string "Unable to load image data:image/svg+xml…" — a message no code of ours or of our
+// dependencies builds (an extension's image analysis does). A real error must still get through.
+test("browser and extension noise is dropped; a real error, and our own image failures, are kept", async () => {
+  const { isBrowserNoise } = await import("./clientError.ts");
+  for (const noise of [
+    "ResizeObserver loop completed with undelivered notifications.",
+    "ResizeObserver loop limit exceeded",
+    new Error("Cannot redefine property: ethereum"),
+    new TypeError("Cannot set property ethereum of #<Window> which has only a getter"),
+    "Unable to load image data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><path d='M0 0'/></svg>",
+    Object.assign(new Error("boom"), { stack: "Error: boom\n    at x (chrome-extension://abcdef/inpage.js:1:2)" }),
+    Object.assign(new Error("boom"), { stack: "x@moz-extension://1234/content.js:3:4" }),
+  ]) assert.equal(isBrowserNoise(noise), true, String(noise));
+  assert.equal(isBrowserNoise("boom", "chrome-extension://abcdef/content.js"), true, "an onerror whose file is an extension's");
+  for (const real of [
+    new TypeError("Cannot read properties of undefined (reading 'map')"),
+    new Error("Unable to load image"),
+    "that file is not a picture this browser can open",
+    Object.assign(new Error("boom"), { stack: "Error: boom\n    at x (https://example.tv/_next/static/chunks/app.js:1:2)" }),
+    undefined, null, {},
+  ]) assert.equal(isBrowserNoise(real), false, String(real));
+});
+
+test("both window listeners drop the noise before they report", () => {
+  const src = stripComments(readFileSync(join(process.cwd(), "app/lib/clientError.ts"), "utf8"));
+  const onError = src.slice(src.indexOf("const onError = "), src.indexOf("const onRejection = "));
+  assert.ok(onError.indexOf("if (isBrowserNoise(e.error ?? e.message, e.filename)) return;") > 0
+    && onError.indexOf("if (isBrowserNoise(") < onError.indexOf('reportClientError("onerror"'), "onError reports noise");
+  const onRejection = src.slice(src.indexOf("const onRejection = "), src.indexOf('window.addEventListener("error"'));
+  assert.ok(onRejection.indexOf("if (isBrowserNoise(e.reason)) return;") > 0
+    && onRejection.indexOf("if (isBrowserNoise(") < onRejection.indexOf('reportClientError("unhandledrejection"'), "onRejection reports noise");
+  assert.match(src, /return \(\) => \{\s+window\.removeEventListener\("error", onError\);\s+window\.removeEventListener\("unhandledrejection", onRejection\);\s+\};\s+\}\s*$/, "END anchor");
+});

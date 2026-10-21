@@ -50,6 +50,6 @@ test('createChat accepts getStreamId and the corpus INSERT uses the resolved id'
 test('index.js wires the same live-session lookup the support bar uses', () => {
   assert.match(indexSrc.slice(-400), /\n\}\);\s*$|\n\}\s*$/, 'index.js did not end as expected — the read is truncated');
   assert.match(indexSrc,
-    /createChat\(\{ pool, resolveOrCreate, resolveCanonical, pronouns, pollEngine,\s*msgBuffer, broadcast, bufferPush,\s*getStreamId: async \(\) => \(await liveState\(\)\)\.streamId \|\| null \}\)/,
+    /createChat\(\{ pool, resolveOrCreate, resolveCanonical, pronouns, banHold, pollEngine,\s*msgBuffer, broadcast, bufferPush,\s*getStreamId: async \(\) => \(await liveState\(\)\)\.streamId \|\| null \}\)/,
     'createChat must be given getStreamId from lifecycle.liveState — the default is null and the row stays unattributed');
 });

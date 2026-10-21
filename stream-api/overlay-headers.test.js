@@ -1,6 +1,6 @@
 // The two OBS overlay pages stream-api serves (/overlay/poll, /overlay/sticker) arrive with a
 // Content-Security-Policy that lets their OWN inline script run and nothing else, nosniff, and no
-// framing (review round 3, CSP assessment). Read AS DELIVERED: the real register functions on a
+// framing. Read AS DELIVERED: the real register functions on a
 // real express server, fetched over HTTP — a header set on a constant proves nothing about the wire.
 //
 // Run: node --test overlay-headers.test.js

@@ -133,7 +133,7 @@ export function startDeviceHealth(): () => void {
     slot.n += 1;
     req += 1;
     if (r.transferSize > 0) slot.b += r.transferSize;
-    else if (!r.encodedBodySize && !r.decodedBodySize) slot.nb += 1; // size hidden (no TAO), F8
+    else if (!r.encodedBodySize && !r.decodedBodySize) slot.nb += 1; // size hidden (no TAO)
   });
   observe("long-animation-frame", (e) => addLoaf(loaf, e as unknown as LoafEntry, origin));
 

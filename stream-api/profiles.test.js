@@ -1,5 +1,5 @@
 'use strict';
-// /user/lookup carries the owner plugin's own fields (profileExtras) and, without a plugin,
+// /user/lookup carries the site plugin's own fields (profileExtras) and, without a plugin,
 // nothing but the product's. Run: node --test profiles.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');

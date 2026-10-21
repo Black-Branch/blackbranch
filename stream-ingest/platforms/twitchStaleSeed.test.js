@@ -1,11 +1,11 @@
-// The Twitch reader keeps its handle when the seed token is stale (external review follow-up).
+// The Twitch reader keeps its handle when the seed token is stale.
 //
 // The first connect is seeded with the .env access token. Once that token has expired, tmi.js
 // rejects the first login with the STRING 'Login authentication failed'; the chat client then
-// refreshes the token and reconnects by itself. startTwitch() used to reject on that first
-// failure, so the platform starter held no handle and the bot's Twitch sender said "no twitch
-// sender" until a restart — which hit the same path again. The failed client's own disconnect
-// also rejected unhandled ('Cannot disconnect from server…').
+// refreshes the token and reconnects by itself. If startTwitch() rejected on that first failure,
+// the platform starter would hold no handle and the bot's Twitch sender would say "no twitch
+// sender" until a restart — which hits the same path again. The failed client's own disconnect
+// must not reject unhandled either ('Cannot disconnect from server…').
 //
 // A fake tmi.js whose first client refuses the login and whose second accepts it.
 //
@@ -62,6 +62,10 @@ test('a refused seed token: startTwitch still returns its handle, and replies re
   process.on('unhandledRejection', onUnhandled);
   const realFetch = global.fetch;
   global.fetch = async (url) => {
+    // Twitch's validate says the seed is fine (so it is used as it is), and the login still fails:
+    // the reconnect's refresh is what recovers. (An EXPIRED seed is refreshed before the first login
+    // — platforms/twitchSeedRefresh.test.js.)
+    if (String(url) === 'https://id.twitch.tv/oauth2/validate') return { ok: true, status: 200, json: async () => ({ expires_in: 9000 }) };
     assert.match(String(url), /twitchtokengenerator\.com\/api\/refresh\//);
     return { ok: true, status: 200, json: async () => ({ token: 'fresh-token', refresh: 'casey-refresh-2' }) };
   };

@@ -397,7 +397,7 @@ test("--tree counts EVERY file — docs, tests and fixtures included — and nev
 
 test("--tree reads file PATHS too: a name in a file or folder name ships as plainly as one inside", () => {
   // An owner's file whose CONTENT holds no pattern but whose name does (an owner-named output file,
-  // a folder named after a member) used to pass the cut's scan at zero.
+  // a folder named after a member) must not pass the cut's scan at zero.
   const tree = fixtureTree({ "stream-api/acmecorp-proposals.json": "{}\n", "web/app/acmecorp/page.ts": "export {};\n" });
   const r = runTree(tree, "--patterns", OWNER_FIXTURE);
   assert.equal(r.status, 1, r.stdout);

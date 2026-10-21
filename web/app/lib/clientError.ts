@@ -13,6 +13,7 @@
 // Explicit .ts extension so this module is directly importable by node --test
 // (the codebase already does this wherever a lib module is unit-tested).
 import { postJson } from "./http.ts";
+import { shouldReloadForChunkError } from "./chunkReload.ts";
 
 /** Where the error was caught. Kept short — it is stored verbatim. */
 export type ClientErrorSource =
@@ -86,7 +87,7 @@ function describe(err: unknown): { message: string; stack?: string } {
 const RECENT_MAX = 50;
 const recent: { at: number; source: string; message: string }[] = [];
 /** The last errors this page caught, oldest first — the terminal's /var/log/dmesg. */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function recentClientErrors(): { at: number; source: string; message: string }[] {
   return [...recent];
 }
@@ -163,13 +164,44 @@ export function isOpaqueCrossOriginError(e: { error?: unknown; message?: string 
   return e.error == null && /^Script error\.?$/i.test(String(e.message ?? "").trim());
 }
 
+const EXTENSION_FILE = /\b(?:chrome|moz|safari(?:-web)?)-extension:\/\//;
+
+/**
+ * Noise from the browser or an extension, never from the site: the ResizeObserver loop notice
+ * (the browser deferring a resize, harmless), wallet extensions fighting over `window.ethereum`,
+ * a throw whose stack or file is an extension's own, and an extension's image analysis rejecting
+ * with the bare string "Unable to load image <url>" (no code here or in our dependencies builds
+ * it; ours rejects with an Error). Dropped before it is stored.
+ *
+ * @test-only exported for clientError.test.ts; installGlobalErrorReporting below is its only
+ * runtime caller.
+ */
+export function isBrowserNoise(err: unknown, file?: string): boolean {
+  if (typeof file === "string" && EXTENSION_FILE.test(file)) return true;
+  if (typeof err === "string") {
+    return /^ResizeObserver loop /.test(err) || /^Unable to load image \S/.test(err) || /\bethereum\b/.test(err);
+  }
+  if (!(err instanceof Error)) return false;
+  return /^ResizeObserver loop /.test(err.message) || /\bethereum\b/.test(err.message) || EXTENSION_FILE.test(err.stack ?? "");
+}
+
+/** sessionStorage, or null where touching it throws (a private window, blocked site data). */
+function sessionStore(): Storage | null {
+  try { return window.sessionStorage; } catch { return null; }
+}
+
 export function installGlobalErrorReporting(): () => void {
   const onError = (e: ErrorEvent) => {
     if (isOpaqueCrossOriginError(e)) return;
+    if (isBrowserNoise(e.error ?? e.message, e.filename)) return;
     reportClientError("onerror", e.error ?? e.message);
   };
   const onRejection = (e: PromiseRejectionEvent) => {
+    if (isBrowserNoise(e.reason)) return;
     reportClientError("unhandledrejection", e.reason);
+    // A server action called from an event handler rejects here, never reaching a boundary: a tab
+    // left open across an update reloads once, like a missing chunk (chunkReload.ts).
+    if (shouldReloadForChunkError(e.reason, sessionStore())) window.location.reload();
   };
   window.addEventListener("error", onError);
   window.addEventListener("unhandledrejection", onRejection);

@@ -1,9 +1,9 @@
-// Twitch live status from the setup wizard's Twitch app alone (external review, finding B).
+// Twitch live status from the setup wizard's Twitch app alone.
 //
 // The wizard says a Twitch app (client id + secret) and the broadcaster id give live status, and
-// that signing in a bot account comes later. twitchStatus() used to return "not configured" at
-// once without the legacy bot access token, making no request, so a Twitch-only install that
-// followed the wizard never got a session. Here there is NO bot token: the settings arrive the
+// that signing in a bot account comes later. A twitchStatus() that answered "not configured"
+// without the legacy bot access token would leave a Twitch-only install that followed the wizard
+// with no session. Here there is NO bot token: the settings arrive the
 // way a wizard-configured install has them — read from (a fake) stream-api, whose
 // /config/secrets hands this process only the credentials the schema lists it as a consumer of.
 // The poller then mints its own client-credentials app token and asks Helix.

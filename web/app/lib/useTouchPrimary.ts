@@ -24,7 +24,7 @@ function subscribe(onChange: () => void) {
  * Server snapshot `false`: the SSR'd HTML is the computer's, and the client
  * syncs to the real answer in the same commit (useNarrowViewport's reasoning).
  */
-// @parked plugin API: a console beside the chat (the owner plugin's terminal, app/(owner)/_terminal) reads or drives the chat through it
+// @parked plugin API: a site plugin's console beside the chat reads or drives the chat through it
 export function useTouchPrimary(): boolean {
   return useSyncExternalStore(
     subscribe,

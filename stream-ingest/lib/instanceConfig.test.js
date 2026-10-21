@@ -231,3 +231,16 @@ test('a restart-applied key is reported as the first load took it — what this 
   assert.equal(cfg.get('modules.youtube'), true, 'the layer holds the saved value');
   assert.equal(cfg.statusReport()['modules.youtube'].display, false, 'the report says the old value still runs');
 });
+
+test('a channel key applies live: the report shows the new value as soon as it is saved, and markApplied leaves it', async () => {
+  // platform.* keys are reload: 'live' since the starter reconciles on every settings load, so
+  // nothing is ever "pending restart" for them; markApplied is for keys that still are.
+  const values = { 'platform.kick.slug': 'casey-old' };
+  const cfg = createInstanceConfig({ env: BASE, fetchImpl: stubApi({ values }), log: quiet });
+  await cfg.load();
+  values['platform.kick.slug'] = 'casey-new';
+  await cfg.load();
+  assert.equal(cfg.statusReport()['platform.kick.slug'].display, 'casey-new', 'live: no pending state');
+  cfg.markApplied(['platform.kick.slug', 'site.origin', 'no.such.key']);
+  assert.equal(cfg.statusReport()['platform.kick.slug'].display, 'casey-new');
+});

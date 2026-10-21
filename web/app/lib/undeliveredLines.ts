@@ -2,7 +2,7 @@
 // TRANSIENT reason (not live, unreachable…). The send hook marks them (it knows
 // the line's id from the route's answer); the chat row reads the mark and shows a
 // zero-height inline marker labelled "not delivered to Kick" — never a row under
-// the line (U1 rework). A persistent refusal is not marked at all: the composer's
+// the line. A persistent refusal is not marked at all: the composer's
 // one note explains it (platformRefusals.ts).
 //
 // In-memory and per tab on purpose: it describes what THIS sender just saw happen,

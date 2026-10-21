@@ -1,4 +1,4 @@
-// The profile-card session cache (feedback round 2, issue 2 — the pop-in fix).
+// The profile-card session cache (the pop-in fix).
 //
 // The properties that make the UX fix real, pinned:
 //   - concurrent prefetches (idle warm + hover + card mount) coalesce onto ONE

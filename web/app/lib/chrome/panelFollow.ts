@@ -52,7 +52,7 @@ export function currentTransformY(el: HTMLElement): number {
  *  way on a keyboard close's first frame. The lift's transform lives on an
  *  ancestor of both rects, so it cancels; the panel's OWN transform is
  *  panel-seam-in/out's — a baseline read one frame after mount, while the
- *  entry is still sliding, must not carry the slide (final review: the
+ *  entry is still sliding, must not carry the slide (the
  *  ResizeObserver's initial delivery would otherwise read the entry's
  *  progress as growth and fire a follow on every open). */
 export function layoutTop(panel: HTMLElement, layer: HTMLElement): number {

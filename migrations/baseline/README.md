@@ -26,7 +26,7 @@ The check fails while any `migrate-vN.sql` is newer than the baseline. In the co
 migration, run
 
 ```bash
-node tools/check-baseline.mjs --generate     # or, from stream-api/: npm run baseline:generate
+node tools/check-baseline.mjs --generate
 ```
 
 and commit the rewritten `schema.sql` with it. Generation replays the chain into a throwaway
@@ -51,7 +51,7 @@ each seed row with the row the chain wrote and fails on any difference.
 ## The check
 
 ```bash
-node tools/check-baseline.mjs                # or, from stream-api/: npm run baseline:check
+node tools/check-baseline.mjs
 ```
 
 In one throwaway container it builds two databases — the chain, and baseline + seed + newer

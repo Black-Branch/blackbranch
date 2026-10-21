@@ -51,7 +51,7 @@ test('the erased-person row is never merged into anyone', async () => {
   assert.deepEqual(r, { ok: true, survivor: 'cccccccccccc', merged: 0 });
 });
 
-test('index.js hands the erase the identity cache and the sponsor pool (the in-memory copies P8 is about)', () => {
+test('index.js hands the erase the identity cache and the sponsor pool (the in-memory copies an erase must reach)', () => {
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, 'index.js'), 'utf8');
   assert.match(src, /createAccountErase\(\{ pool, memory, identity, sponsors, msgBuffer, broadcast, redactBuffered \}\)/);
   // The hooks the erase calls exist under those names.

@@ -2,10 +2,10 @@ import { NATIVE_SQL } from "./nativePlatform.ts";
 // A canonical stream id (12 hex — stream.users.id, the identity a platform
 // chatter resolves to) versus a matrix id (a site account). The two are not
 // interchangeable, and handing one where the other is expected fails only at
-// the database: awarding upvote Qorm to a platform message's AUTHOR — a
+// the database: awarding upvote points to a platform message's AUTHOR — a
 // canonical id read from stream.chat_log.user_id — as if it were a matrix id
 // violates `coin_earn_stream_matrix_id_fkey`, and linked people are silently
-// owed Qorm.
+// owed points.
 //
 // The query is injected so the rule is testable without the pg pool (the same
 // reason chatIdentity's tests mirror its policy).

@@ -22,8 +22,8 @@ const { instanceConfig } = require('./instance-config');
 let appToken = null; // { token, expiresAt }
 
 function clientId() {
-  // Instance key twitch.clientId — env TWITCH_OAUTH_CLIENT_ID, then the alias TWITCH_CLIENT_ID
-  // (the order this line always had), then the stored credential.
+  // Instance key twitch.clientId — env TWITCH_OAUTH_CLIENT_ID, then the alias TWITCH_CLIENT_ID,
+  // then the stored credential.
   return instanceConfig.get('twitch.clientId') || '';
 }
 

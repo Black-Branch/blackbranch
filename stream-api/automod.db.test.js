@@ -227,8 +227,8 @@ test('automod against real Postgres', async (t) => {
     assert.equal(marks, 1, 'the held-row prune took a mark with it — only the evidence sweep (dailyPrune) removes marks');
   });
 
-  // In a rolled-back transaction (inTxn, below): since round 6 the timer's run also sweeps marks,
-  // and a committed global sweep deleted other test files' fixture marks mid-test.
+  // In a rolled-back transaction (inTxn, below): the timer's run also sweeps marks, and a committed
+  // global sweep would delete other test files' fixture marks mid-test.
   await t.test('the prune timer, run for real: started with the module, it removes an old row on its own', () => inTxn(async (db) => {
     const am = createAutomod({ pool: db, ai: fakeAi(() => OK), config: fakeConfig(), log: quiet, pruneTiming: { firstMs: 20, everyMs: 60_000 } });
     await db.query(`INSERT INTO site.automod_held (source, status, platform, matrix_id, text, held_at)
@@ -246,10 +246,10 @@ test('automod against real Postgres', async (t) => {
     }
   }));
 
-  // Round 6 D-E (k: automatic marks do not outlive their evidence). The daily job, after the
-  // held-row prune, deletes every OPEN source='automod' mark none of whose evidence rows is left.
-  // That sweep is GLOBAL, and the test files run in parallel against one database: run for real
-  // and committed, it deleted other files' fixture marks (made-up evidence ids) mid-test. So each
+  // Automatic marks do not outlive their evidence. The daily job, after the held-row prune,
+  // deletes every OPEN source='automod' mark none of whose evidence rows is left. That sweep is
+  // GLOBAL, and the test files run in parallel against one database: run for real and committed,
+  // it would delete other files' fixture marks (made-up evidence ids) mid-test. So each
   // sweep test runs the job on ONE connection inside a transaction that is rolled back — the job's
   // SQL runs unchanged, and no other file ever sees its deletes.
   async function inTxn(fn) {
@@ -275,7 +275,7 @@ test('automod against real Postgres', async (t) => {
   const expiredLog = async (db, who) => (await db.query(
     `SELECT action, performed_by, reason FROM site.mod_log WHERE target_id = $1 AND action = 'mark_expired'`, [who])).rows;
 
-  await t.test('D-E: an open automatic mark goes when its last evidence is deleted, with ONE mark_expired row; marks with evidence left, carried, hand-placed and cleared marks stay', () => inTxn(async (db) => {
+  await t.test('an open automatic mark goes when its last evidence is deleted, with ONE mark_expired row; marks with evidence left, carried, hand-placed and cleared marks stay', () => inTxn(async (db) => {
     const am = createAutomod({ pool: db, ai: fakeAi(() => OK), config: fakeConfig(), log: quiet });
     const gone = '@amtest30:x';
     await putMark(db, gone, { evidence: [await heldRow(db, gone, 31), await heldRow(db, gone, 40)], reason: '3 risky messages in 24 h: spam ×3' });
@@ -300,7 +300,7 @@ test('automod against real Postgres', async (t) => {
     for (const who of [half, carried, cleared, byHand]) assert.deepEqual(await expiredLog(db, who), [], `a mark_expired row for a mark that stayed (${who})`);
   }));
 
-  await t.test('D-E retry: the daily job run twice removes and logs each mark ONCE', () => inTxn(async (db) => {
+  await t.test('retry: the daily job run twice removes and logs each mark ONCE', () => inTxn(async (db) => {
     const am = createAutomod({ pool: db, ai: fakeAi(() => OK), config: fakeConfig(), log: quiet });
     const who = '@amtest35:x';
     await putMark(db, who, { evidence: [await heldRow(db, who, 45)] });
@@ -312,7 +312,7 @@ test('automod against real Postgres', async (t) => {
     assert.equal((await expiredLog(db, who)).length, 1, 'the retry logged the removal twice');
   }));
 
-  await t.test('D-E restart: stopped before its first run, a NEW instance\'s start() registers the job again and sweeps the orphaned mark', () => inTxn(async (db) => {
+  await t.test('restart: stopped before its first run, a NEW instance\'s start() registers the job again and sweeps the orphaned mark', () => inTxn(async (db) => {
     const who = '@amtest36:x';
     await putMark(db, who, { evidence: [await heldRow(db, who, 50)] });
     const before = createAutomod({ pool: db, ai: fakeAi(() => OK), config: fakeConfig(), log: quiet, pruneTiming: { firstMs: 60_000, everyMs: 60_000 } });
@@ -334,7 +334,7 @@ test('automod against real Postgres', async (t) => {
     }
   }));
 
-  await t.test('D-E side bug: automod reaching its threshold on a person with an open carried mark ADDS evidence only — source and reason stay (also on a retry and after a restart)', async () => {
+  await t.test('automod reaching its threshold on a person with an open carried mark ADDS evidence only — source and reason stay (also on a retry and after a restart)', async () => {
     const who = 'amtest37';
     await putMark(pool, who, { source: 'carried', reason: 'carried from a deleted account under an open moderation case' });
     const flag = (am, k) => am.flagPlatform({ platform: 'twitch', canonicalId: who, username: 'tw', text: `rude ${k}`, category: 'harassment', confidence: 0.9 });

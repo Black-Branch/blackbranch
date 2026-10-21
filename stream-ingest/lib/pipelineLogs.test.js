@@ -1,5 +1,4 @@
-// Round 7 (ingest-logs): the chat pipeline's journal lines carry the platform and the platform
-// USER ID, never the viewer's name — and for a command, only the command's name (`!karma`), never
+// The chat pipeline's journal lines carry the platform and the platform USER ID, never the viewer's name — and for a command, only the command's name (`!karma`), never
 // the rest of what the viewer typed. A name is personal data the journal keeps for months
 // (stream-api/log-names.test.js). The bot's reply preview stays: it is the bot's text.
 //
@@ -11,6 +10,8 @@ import { format } from 'node:util';
 // postChat goes through fetch to STREAM_API_URL — a made-up address, and fetch is stubbed.
 process.env.STREAM_API_URL = 'http://stream-api.site.test';
 delete process.env.ENABLE_COMMANDS;
+// A donate link, so !dono has a "support the stream" line to answer (lib/commands.js donoLine).
+process.env.DONATE_URL = 'https://tips.site.test/jar';
 
 const { processMessage } = await import('./pipeline.js');
 

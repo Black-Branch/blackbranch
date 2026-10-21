@@ -2,7 +2,7 @@
 
 # PayPal and Venmo
 
-Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. One-time payments only: subscriptions and gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers "not found", so PayPal keeps its events and retries them for about three days.
+Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers "not found", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them — cancel their subscriptions in PayPal first, or switch back on.
 
 This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel → Site → Modules — it is off on a new install. Its setup page then appears with the steps below.
 
@@ -10,7 +10,7 @@ The addresses below are for a site at `example.com`; your setup page shows your 
 
 ## 1. Your PayPal app
 
-In the PayPal Developer Dashboard → Apps & Credentials, pick Live (or Sandbox to try it first) and create an app of type Merchant. Paste its client id and secret, and say which of the two it is. PayPal decides when to offer Venmo: only to a buyer it finds eligible, which in practice means a US business account and a US buyer paying in US dollars. Everyone else sees only PayPal.
+In the PayPal Developer Dashboard → Apps & Credentials, pick Live (or Sandbox to try it first) and create an app of type Merchant. Paste its client id and secret, and say which of the two it is. PayPal decides when to offer Venmo: only to a buyer it finds eligible, which in practice means a US business account and a US buyer paying in US dollars. Everyone else sees only PayPal. Subscription plans: monthly, a fixed price, and a payment failure threshold (3) set on the plan in PayPal — any other plan is refused credit and flagged; without the threshold PayPal keeps retrying and the perks last only a month past the last payment.
 
 Links:
 
@@ -37,7 +37,7 @@ Copy into the provider's page:
 | What | Value |
 |---|---|
 | Webhook URL | `https://example.com/api/billing/paypal/webhook` |
-| Events | `PAYMENT.CAPTURE.COMPLETED · PAYMENT.CAPTURE.REFUNDED · PAYMENT.CAPTURE.REVERSED · CUSTOMER.DISPUTE.RESOLVED` |
+| Events | `PAYMENT.CAPTURE.COMPLETED · PAYMENT.CAPTURE.REFUNDED · PAYMENT.CAPTURE.REVERSED · CUSTOMER.DISPUTE.RESOLVED · BILLING.SUBSCRIPTION.CREATED · BILLING.SUBSCRIPTION.ACTIVATED · BILLING.SUBSCRIPTION.UPDATED · BILLING.SUBSCRIPTION.EXPIRED · BILLING.SUBSCRIPTION.CANCELLED · BILLING.SUBSCRIPTION.SUSPENDED · BILLING.SUBSCRIPTION.PAYMENT.FAILED · PAYMENT.SALE.COMPLETED · PAYMENT.SALE.REFUNDED · PAYMENT.SALE.REVERSED` |
 
 This step fills:
 

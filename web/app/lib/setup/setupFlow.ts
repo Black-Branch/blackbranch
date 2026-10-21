@@ -28,6 +28,15 @@ export function resumeStep(saved: string | null | undefined, order: readonly str
   return "recovery";
 }
 
+/** The pages the operator has opened, with `page` added: the Doctor counts a module whose
+ *  keys were never set as failing only once its page was visited. In order of first visit, each
+ *  once; the record's own bound (50) keeps the oldest. */
+export function recordVisit(visited: readonly string[] | undefined, page: string): string[] {
+  const out = [...(visited ?? [])];
+  if (!out.includes(page) && out.length < 50) out.push(page);
+  return out;
+}
+
 export function nextStep(current: string, order: readonly string[]): string | null {
   const i = order.indexOf(current);
   return i >= 0 && i < order.length - 1 ? order[i + 1]! : null;

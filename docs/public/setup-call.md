@@ -43,7 +43,7 @@ never takes a copy of any of them.
        the values it shows, fill the fields, press **Test** until it passes. Stripe: make the
        **restricted** key with exactly the listed permissions — never the full secret key. Behind
        Cloudflare, add the skip rule for Stripe's webhook (the Stripe page shows how).
-9. [ ] Community: create the space and `#general`. Leave federation off unless they ask for it.
+9. [ ] Community: create the space, `#general` and `#forum`. Leave federation off unless they ask for it.
 10. [ ] Finish: the quiet hour (a time they are never live — security updates run then), backups to a
         bucket or another server if they have one, and wait for the test backup to pass.
 11. [ ] Sign in on the site; post in site chat and in `#general`; check the site's name.

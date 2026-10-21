@@ -1,7 +1,53 @@
 // The "Your site" and "Points" forms' checks. Run: node --test app/lib/setup/setupValidate.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateSiteStep, validatePointsStep, SITE_FIELDS, POINTS_FIELDS } from "./setupValidate.ts";
+import { validateSiteStep, validatePointsStep, SITE_FIELDS, POINTS_FIELDS, resolveTimeZone, timeZoneNames, installDay, communityWords } from "./setupValidate.ts";
+
+test("W1: every way of typing one city finds its zone; a made-up or shared city is not guessed", () => {
+  const zones = timeZoneNames();
+  assert.ok(zones.length > 300, `vacuity: this runtime lists ${zones.length} zones`);
+  for (const typed of ["New York", "new york", "America/New York", "america/new_york", "  America/New_York "]) {
+    assert.equal(resolveTimeZone(typed, zones), "America/New_York", typed);
+  }
+  assert.equal(resolveTimeZone("berlin", zones), "Europe/Berlin");
+  assert.equal(resolveTimeZone("UTC", zones), "UTC");
+  assert.equal(resolveTimeZone("Mars/Olympus", zones), null);
+  assert.equal(resolveTimeZone("", zones), null);
+  // A city two zones share is refused rather than picked.
+  assert.equal(resolveTimeZone("Springfield", ["America/Springfield", "Europe/Springfield"]), null);
+  const v = validateSiteStep({ SITE_NAME: "x", SITE_TIME_ZONE: "new york" });
+  assert.ok(v.ok && v.timeZone === "America/New_York", "the canonical name is what is saved");
+  const bad = validateSiteStep({ SITE_NAME: "x", SITE_TIME_ZONE: "Pacific time" });
+  assert.ok(!bad.ok && /pick it from the list/.test(bad.error));
+});
+
+test("W22: the streamer display name is on Your site, saved as a setting (never written into .env)", () => {
+  assert.equal(SITE_FIELDS[1]!.name, "STREAMER_DISPLAY_NAME");
+  assert.equal(SITE_FIELDS[1]!.label, "Streamer display name");
+  const v = validateSiteStep({ SITE_NAME: "x", STREAMER_DISPLAY_NAME: " Casey " });
+  assert.ok(v.ok);
+  if (v.ok) { assert.equal(v.displayName, "Casey"); assert.equal("STREAMER_DISPLAY_NAME" in v.install, false); }
+  const blank = validateSiteStep({ SITE_NAME: "x" });
+  assert.ok(blank.ok && blank.displayName === null);
+});
+
+test("W24: the install day is today in the site's time zone (UTC without one)", () => {
+  const late = new Date("2026-10-21T03:30:00Z"); // still the 20th in New York
+  assert.equal(installDay(late, "America/New_York"), "2026-10-20");
+  assert.equal(installDay(late, null), "2026-10-21");
+  assert.equal(installDay(late, "Not/AZone"), "2026-10-21", "a bad zone falls back to the UTC day");
+  assert.ok(validateSiteStep({ SITE_NAME: "x", SITE_DATA_SINCE: installDay(late, null) }).ok, "the shape the Data since field takes");
+});
+
+test("W12: the community step says what was made, from the bootstrap's own answer when it names a forum", () => {
+  assert.equal(communityWords("Gadget", "community space !a:x · #general !b:x"),
+    "Made: the space “Gadget” (your community's home) and #general for chat. They belong to your account, and you are in each.");
+  const withForum = communityWords("Gadget", 'info line\n{"hub":"!a:x","general":"!b:x","forum":"!c:x","created":["space"]}');
+  assert.match(withForum, /^Made: the space “Gadget” \(your community's home\), #general for chat and a Forums room/);
+  assert.match(communityWords("Gadget", '{"hub":"!a:x","general":"!b:x","created":[]}'), /^Already there:/);
+  assert.match(communityWords("Gadget", null), /^Made:/);
+  assert.match(communityWords("Gadget", '{"hub": broken'), /^Made:/, "an unreadable line is the plain words, never an error");
+});
 
 test("site: the name is needed; values .env cannot hold are refused; the two settings rows are not staged", () => {
   assert.equal(validateSiteStep({}).ok, false);

@@ -23,9 +23,9 @@ import { useStorePrices } from "@/app/lib/useStorePrices";
 // never granted by this UI — the webhook credits the wallet in both cases;
 // onComplete/onPaypalCaptured just polls the balance until it moves.
 //
-// Qorm-for-all-income piece 3 (task 4): the Store renders the SAME TipForm
+// The Store renders the SAME TipForm
 // that /donate and the Support panel do, with "Announce on stream" starting
-// OFF (a quiet Qorm purchase — the store's original purpose). Flipping it on
+// OFF (a quiet points purchase — the store's original purpose). Flipping it on
 // turns the same box into a real tip. One form, one checkout path
 // (checkoutRequestFor), instead of the Store's own amount box and pay button.
 //
@@ -62,7 +62,7 @@ export default function StoreContent({
   initialTab?: EntryTab;
   onClose?: () => void;
 }) {
-  // Either provider opens the Store (k, 2026-10-19): with Stripe off, PayPal's
+  // Either provider opens the Store: with Stripe off, PayPal's
   // own button buys the points (a quiet PayPal points order, paypalPointsOrder.ts).
   // The Store sells no subscriptions or gifts, so nothing else changes here.
   const { stripe: stripeOn, paypalClientId } = useBillingAvailability();
@@ -78,10 +78,10 @@ export default function StoreContent({
 
   const [tab, setTab] = useState<Tab>(initialTab === "history" ? "history" : "store");
   const { purchasable } = useStorePrices();
-  // Entering with "topup" used to select a tab; now it scrolls the buy box into
-  // view. Every caller keeps working (StreamMetaBar's Qorm pill, CheerChip's
-  // "Top up" when short, ProfileEditor's two style links, TradeTicket) without
-  // knowing the tabs changed — the event contract is the compatibility surface,
+  // Entering with "topup" scrolls the buy box into view. Every caller
+  // (StreamMetaBar's points pill, CheerChip's "Top up" when short,
+  // ProfileEditor's two style links, TradeTicket) works without knowing
+  // the Store's tabs — the event contract is the compatibility surface,
   // not the internal shape.
   const topupRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -228,11 +228,11 @@ export default function StoreContent({
     );
   }
 
-  // After the checkout and done views, on purpose: a switch read while a payment
-  // is open must not pull the box out from under it.
-  if (!configured) {
-    return <p className="text-sm text-amber-400/80">Billing isn’t configured on the server yet.</p>;
-  }
+  // With no payment provider only the top-up box goes: the wallet, spending, free badges
+  // and history are the Store too, and earning runs whether or not anyone can buy. Read after the
+  // checkout and done views, on purpose: a switch read while a payment is open must not pull the
+  // box out from under it.
+  const canBuy = configured && purchasable !== false;
 
   return (
     <div className="flex flex-col gap-3">
@@ -257,9 +257,9 @@ export default function StoreContent({
           different question. */}
       <Sections items={STORE_TABS} value={tab} onChange={setTab} label="Store sections" />
 
-      {/* No top-up box when buying is switched off (`currency.purchasable`) — the
-          Store is then spending and history only. */}
-      {tab === "store" && purchasable !== false && (
+      {/* No top-up box when buying is switched off (`currency.purchasable`) or no
+          provider can take the money — the Store is then spending and history only. */}
+      {tab === "store" && canBuy && (
         <section ref={topupRef} className="rounded-xl border border-raised bg-panel/60 p-4">
           <TipForm
             busy={busy}
@@ -290,7 +290,7 @@ export default function StoreContent({
             <LoadingState className="p-2" />
           ) : rows.length === 0 ? (
             <p className="p-2 text-xs text-muted">
-              Nothing yet — {purchasable === false ? "earn" : "top up or earn"} {currencyName()} by watching and chatting while the stream is live.
+              Nothing yet — {canBuy ? "top up or earn" : "earn"} {currencyName()} by watching and chatting while the stream is live.
             </p>
           ) : (
             <table className="w-full text-xs">

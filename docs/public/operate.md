@@ -1,20 +1,21 @@
 # Running your install
 
 Everything here is done on the server with the `blackbranch` command, or in the site's Admin Panel.
-The command needs root: run it with `sudo` from your usual account (as below, `sudo` is left off for
-short). It works even when the site is down — that is why it exists.
+The command needs root: run it with `sudo` from your usual account, as every recipe below does. (Without
+`sudo` it answers "the install at /opt/blackbranch is root's: run it with sudo".) It works even when
+the site is down — that is why it exists.
 
 ```
-blackbranch status                 what runs, which release, the last backup and update check
-blackbranch doctor [--report]      check the install (exit 1 when a check fails)
-blackbranch logs <service> [-f]    recent logs: postgres, stream-api, stream-ingest, web, caddy, synapse, mas
-blackbranch restart <service>
-blackbranch backup [list|key]      back up now · list the snapshots · print the SFTP target's key
-blackbranch restore <snapshot|latest> [--verify] [--with-env] [--from <address>] [--yes]
-blackbranch update [--check|--dry-run]   read the release feed; apply a newer release (asks first)
-blackbranch update --channel stable|beta
-blackbranch set <KEY> <value>      change one display value (SITE_NAME, LEGAL_*, CURRENCY_*…); the site restarts with it
-blackbranch federation [on|off]    show or switch federation with other Matrix servers
+sudo blackbranch status                 what runs, which release, the last backup and update check
+sudo blackbranch doctor [--report]      check the install (exit 1 when a check fails)
+sudo blackbranch logs <service> [-f]    recent logs: postgres, stream-api, stream-ingest, web, caddy, synapse, mas
+sudo blackbranch restart <service>
+sudo blackbranch backup [list|key]      back up now · list the snapshots · print the SFTP target's key
+sudo blackbranch restore <snapshot|latest> [--verify] [--with-env] [--from <address>] [--yes]
+sudo blackbranch update [--check|--dry-run]   read the release feed; apply a newer release (asks first)
+sudo blackbranch update --channel stable|beta
+sudo blackbranch set <KEY> <value>      change one display value (SITE_NAME, LEGAL_*, CURRENCY_*…); the site restarts with it
+sudo blackbranch federation [on|off]    show or switch federation with other Matrix servers
 ```
 
 Where things are: `/opt/blackbranch/.env` holds the install's values and **every secret** (mode 600).
@@ -22,7 +23,7 @@ Where things are: `/opt/blackbranch/.env` holds the install's values and **every
 
 ## The doctor
 
-`blackbranch doctor` on the server and **Admin Panel → Doctor** in the site show the same checks with
+`sudo blackbranch doctor` on the server and **Admin Panel → Doctor** in the site show the same checks with
 the same verdicts: the box (memory, free disk, clock, security updates), the front door (the three
 addresses resolve and answer; the tunnel or the certificates), the database, the chat server and its
 sign-in service, the secrets, each module you switched on (its Test, run again), payments and
@@ -36,9 +37,17 @@ sends no message, email or push about it. The same goes for a payment that faile
 disputed: it is listed in **Admin Panel → Payments → Payment history**, and nothing else tells you.
 Look at both now and then, and after any change at Stripe or PayPal.
 
-When you ask for help, attach `blackbranch doctor --report`: it writes a report next to `.env` with
+When you ask for help, attach `sudo blackbranch doctor --report`: it writes a report next to `.env` with
 the release, the module switches and every check — no secret, no chat text, no viewer id and no
 domain. Before it keeps the file it searches it for every value in `.env` and refuses if it finds one.
+
+## Ending a stream
+
+**End each stream on the site when you stop.** The site marks you live when a platform says so, but
+it does not yet notice every stream ending by itself: until you end it, the site keeps showing you
+as live (the live player, the timer, watch points). End it from the site — type `/stream end` in the
+site's chat (the admin and moderators can), or press **Force offline** in the stream page's
+**Community embeds** window.
 
 ## Backups and restores
 
@@ -53,7 +62,7 @@ Kept: 7 daily and 4 weekly snapshots (Admin Panel → Site → Backups).
 
 **Where:** set on setup's last page, changed in the Admin Panel: this server
 (`/opt/blackbranch/backups/`), an S3-compatible bucket, or an SFTP server (put the key
-`blackbranch backup key` prints into that account's `authorized_keys`). Note: a backup on the same disk
+`sudo blackbranch backup key` prints into that account's `authorized_keys`). Note: a backup on the same disk
 does not survive losing the server — add a bucket or another server.
 
 - A bucket must exist before the first backup (create it at the provider — Black Branch never creates
@@ -62,11 +71,11 @@ does not survive losing the server — add a bucket or another server.
 - SFTP: `sftp:<user>@<host>:/srv/backups/site` is a folder from the server's root;
   `sftp://<user>@<host>:<port>/backups/site` (another port) is a folder **inside that account's home**.
 
-**Check a backup without touching anything:** `blackbranch restore latest --verify` restores the
+**Check a backup without touching anything:** `sudo blackbranch restore latest --verify` restores the
 newest snapshot into a throwaway container and checks every database, the keys and the media. A
 damaged snapshot fails loudly.
 
-**Restore:** `blackbranch restore latest` (or a snapshot id from `blackbranch backup list`). It asks you
+**Restore:** `sudo blackbranch restore latest` (or a snapshot id from `sudo blackbranch backup list`). It asks you
 to type the domain, stops the site, puts back the databases, media and keys, and starts everything
 again. Anything written after that snapshot is gone.
 
@@ -76,8 +85,8 @@ passphrase:
 1. Install a new server with **the same domain** and front door, and do not open the setup link.
 2. Make the backups reachable: a local target — copy the backups folder you kept into
    `/opt/blackbranch/backups/` (a plain folder of encrypted files); an SFTP server — add the new
-   server's key (`blackbranch backup key`) to that account first.
-3. `blackbranch restore latest --with-env` — for a bucket or SFTP server add `--from <its address>`
+   server's key (`sudo blackbranch backup key`) to that account first.
+3. `sudo blackbranch restore latest --with-env` — for a bucket or SFTP server add `--from <its address>`
    (a bucket asks for its two keys). It sees that the new `.env`'s passphrase does not open the
    backups and asks for the one on your recovery sheet; then it brings back the databases, the chat
    server's media and signing key, its sign-in keys **and your old `.env`**. Your accounts, rooms and
@@ -128,8 +137,8 @@ Postgres major version (that is always its own announced step).
 - A **security release** applies itself then — **never while you are live**: it waits, checking every
   minute, until the stream ends (up to six hours; after that, the next night).
 - A **feature release** waits for you: **Admin Panel → Updates** shows it with an **Apply** button, or
-  run `blackbranch update`.
-- `blackbranch update --check` only looks; `--dry-run` also downloads and checks the release and
+  run `sudo blackbranch update`.
+- `sudo blackbranch update --check` only looks; `--dry-run` also downloads and checks the release and
   changes nothing.
 
 **What an update does:** downloads and checks the release; updates `.env` for it on a copy (and stops,
@@ -137,14 +146,20 @@ naming the setting, if something is not understood); fetches its images — the 
 and tries the new site beside the running one; then stops the site (usually for well under a minute), **backs up**, switches
 to the new release, starts it, and runs a health check — the doctor's checks, a live chat connection
 and a sign-in round trip — then restarts the services twice and checks again.
+The front door is checked on the server itself (in direct mode, at its own port 443 by each name),
+so a home router that cannot reach its own public address from inside does not roll an update back.
+Whether the site answers **from outside** is the doctor's "Reachable from outside" row: a warning,
+because from inside many home networks it cannot succeed — open the site on a phone with Wi-Fi off
+to be sure.
 
 **Rollback is automatic:** if anything fails after the stop, the server goes back to the previous
 release, its `.env`, and the databases and media from the backup it made just before, then checks
-health again. Both results show on the Admin Panel and in `blackbranch status`. A release that rolled
+health again. Both results show on the Admin Panel and in `sudo blackbranch status`. A release that rolled
 back is not retried by the nightly timer.
 
 **Channels:** `stable` (the default) or `beta` (earlier releases, for people who want to help test):
-`blackbranch update --channel beta`.
+`sudo blackbranch update --channel beta`. Every release so far is a preview on `beta`, and `stable` has
+none yet; a server installed with the one-line form already follows `beta`.
 
 ## Password resets
 
@@ -152,24 +167,23 @@ The site does not send email yet, so a forgotten password is reset on the server
 server's sign-in service:
 
 ```bash
-cd /opt/blackbranch
-read -rs NEWPW && docker compose exec mas mas-cli manage set-password <username> "$NEWPW"; unset NEWPW
+read -rs NEWPW && sudo docker compose --project-directory /opt/blackbranch exec mas mas-cli manage set-password <username> "$NEWPW"; unset NEWPW
 ```
 
-(`read -rs` keeps the password out of your shell history.) A `blackbranch user reset-password`
+(`read -rs` keeps the password out of your shell history.) A `sudo blackbranch user reset-password`
 command comes in a later release.
 
 ## Changing the site's name and other display values
 
 The site's name, its legal details and the points names live in `/opt/blackbranch/.env`, and the site
 reads them when it starts. The setup pages set them; afterwards change one on the server with
-`blackbranch set SITE_NAME "New name"` — the site restarts with it (a few seconds), and goes back to the
+`sudo blackbranch set SITE_NAME "New name"` — the site restarts with it (a few seconds), and goes back to the
 old value by itself if it does not come back healthy. The domain and the chat server's name can never
 change.
 
 **Your own icons:** put `icon.png` (512 px), `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` and
-`apple-touch-icon.png` (180 px) in `/opt/blackbranch/site-files/`, then `blackbranch set SITE_ICON_SET
-/site-files`. A points icon goes there too: `blackbranch set CURRENCY_ICON /site-files/<file>`. The
+`apple-touch-icon.png` (180 px) in `/opt/blackbranch/site-files/`, then `sudo blackbranch set SITE_ICON_SET
+/site-files`. A points icon goes there too: `sudo blackbranch set CURRENCY_ICON /site-files/<file>`. The
 folder is yours: it is not in the backups, so keep your own copy of what you put there.
 
 ## Who can do what: viewers, moderators and the admin
@@ -227,17 +241,32 @@ own room permissions.
 
 A move is a restore onto a new server:
 
-1. On the old server: `blackbranch backup` (a fresh snapshot), then stop it:
-   `cd /opt/blackbranch && docker compose stop`.
+1. On the old server: `sudo blackbranch backup` (a fresh snapshot), then stop it:
+   `sudo docker compose --project-directory /opt/blackbranch stop`.
 2. Get the backup repository onto the new server. A local target: copy `/opt/blackbranch/backups/`
-   across (`rsync -a`). A bucket or SFTP target: copy the repository folder from there into
+   across (`sudo rsync -a`). A bucket or SFTP target: copy the repository folder from there into
    `/opt/blackbranch/backups/restic/` on the new server (it is a plain folder of encrypted files).
-3. On the new server, install with **the same domain** and the same front door, and **do not open the
-   setup link**.
-4. `blackbranch restore latest --with-env` — it takes the snapshot's `.env` (your secrets) as well as
-   the data. (A bucket or SFTP target can be read directly: add `--from <its address>`.)
-5. Point the front door at the new server (direct mode: the three DNS records; tunnel mode: the
-   tunnel's credentials came back with the restore). Check `blackbranch doctor`.
+3. On the new server, install with **the same domain** and the same front door, adding `--moving`:
+   `… install.sh --domain example.com --mode tunnel --moving` (or `--mode direct`). It installs
+   everything but starts nothing, makes no tunnel and prints no setup link — the restore brings all
+   of that back.
+4. `sudo blackbranch restore latest --with-env` — it takes the snapshot's `.env` (your secrets) as well as
+   the data, then starts the site. (A bucket or SFTP target can be read directly: add `--from <its address>`.)
+5. The front door:
+   - **Tunnel mode:** nothing to change. The restore brings back the site's own tunnel, which now
+     connects from the new server; its DNS records already point at it. (Keep the old server stopped:
+     two servers on one tunnel would both answer.)
+   - **Direct mode:** point the three DNS records at the new server.
+
+   Then check `sudo blackbranch doctor`.
+
+**If the installer already made a new tunnel** (you installed without `--moving`): the restore keeps
+the new server's own tunnel and says so — its routes are the ones in place. Delete the old tunnel in
+Cloudflare's dashboard (Zero Trust → Networks → Tunnels) once the old server is gone. **If you deleted
+the old tunnel before restoring** and the site's own is gone: make a tunnel in the dashboard, route
+the three names to `http://caddy:80`, and give the new server its token —
+`sudo /opt/blackbranch/release/install/install.sh --tunnel-token` (or `--tunnel-token-file <file>`);
+it replaces the signed-in tunnel with that one.
 
 Note: this path is built and its refusals are tested, but the project has not yet rehearsed a whole move
 on two fresh servers. Try it on a spare server first, and keep the old one until the new one is green.

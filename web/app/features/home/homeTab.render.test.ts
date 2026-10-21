@@ -1,11 +1,12 @@
 // The server-rendered first frame of the tab (no effects run, no fetch yet):
-// it must read as loading, never as three failures — final review finding 1.
+// it must read as loading, never as three failures.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import "../../lib/testTsx.ts";
-// An install WITH a VOD playlist, so all five widgets exist (installValues.ts reads this once).
+// An install WITH a VOD playlist, so the VODs card exists (installValues.ts reads this once). With no
+// body yet there is no News card: it shows only once a feed has items (homeLayout.ts) — four widgets.
 process.env.INSTALL_VALUES = JSON.stringify({ "site.name": "Example Stream", "platform.youtube.vodPlaylist": "PLexampleexampleexample" });
 const { HomeTab } = await import("./HomeTab.tsx");
 const { HomeView } = await import("./HomeView.tsx");
@@ -16,12 +17,12 @@ const readSrc = (rel: string) => stripComments(readFileSync(join(process.cwd(), 
 
 const noop = () => {};
 
-test("the SSR frame of HomeTab says Loading five times (one per widget) and Couldn't-load zero times", () => {
+test("the SSR frame of HomeTab says Loading four times (one per widget; News waits for a body with items) and Couldn't-load zero times", () => {
   const out = renderToStaticMarkup(createElement(HomeTab, {
     active: false, signedIn: false, variant: "grid", selectedVodId: null,
     onPickVod: noop, onWatchCommunity: noop, onOpenNews: noop,
   }));
-  assert.equal((out.match(/Loading/g) ?? []).length, 5);
+  assert.equal((out.match(/Loading/g) ?? []).length, 4);
   assert.equal((out.match(/Couldn/g) ?? []).length, 0);
 });
 
@@ -30,7 +31,7 @@ test("no body AND a failed fetch is the one state that reads as a failure everyw
     data: null, loading: false, error: true, active: false, signedIn: true, variant: "grid", selectedVodId: null,
     onPickVod: noop, onWatchCommunity: noop, onOpenNews: noop,
   }));
-  assert.equal((out.match(/Couldn/g) ?? []).length, 5);
+  assert.equal((out.match(/Couldn/g) ?? []).length, 4);
   assert.equal((out.match(/Loading/g) ?? []).length, 0);
 });
 
@@ -38,7 +39,7 @@ test("with the server's body the SSR frame IS the page — zero Loading, the hea
   const out = renderToStaticMarkup(createElement(HomeTab, {
     active: false, signedIn: false, variant: "grid", selectedVodId: null,
     onPickVod: noop, onWatchCommunity: noop, onOpenNews: noop,
-    initial: { status: { live: false, viewers: null, community: null }, lastStream: null, news: [{ id: "n1", feedId: 1, feedTitle: "Feed", guid: "g1", title: "A headline", link: "https://x/1", summary: null, imageUrl: null, publishedAt: null }], vods: [], threads: [], boards: null, generatedAt: "2026-09-26T08:00:00.000Z" },
+    initial: { status: { live: false, viewers: null, community: null }, lastStream: null, news: [{ id: "n1", feedId: 1, feedTitle: "Feed", guid: "g1", title: "A headline", link: "https://x/1", summary: null, imageUrl: null, publishedAt: null }], vods: [], threads: [], boards: null, platforms: [], generatedAt: "2026-09-26T08:00:00.000Z" },
   }));
   assert.equal((out.match(/Loading/g) ?? []).length, 0);
   assert.match(out, /A headline/);

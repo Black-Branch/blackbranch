@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 // no colour field). Public — the colours already render in live chat — but it answers only for
 // the ids asked (at most 200, rate-limited per address): a request without ids gets {}, never the
 // list of every account (userStyleIds.ts).
-// Accepted (review round 4, low): it answers for ANY guessed Matrix id, not only ids seen recently
+// Accepted: it answers for ANY guessed Matrix id, not only ids seen recently
 // in public chat. What it returns is what chat already draws beside that name, it is rate-limited,
 // and it cannot be enumerated without the ids; limiting it to "recently seen" ids would need a
 // shared record of what was on screen, which nothing keeps.

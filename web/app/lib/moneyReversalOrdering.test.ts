@@ -1,12 +1,12 @@
-// Delivery ORDER of money events on the REAL schema (external review S2 + S4).
+// Delivery ORDER of money events on the REAL schema (cases S2 + S4).
 //
 // Stripe and PayPal do not promise to deliver events in the order they happened.
-// Two orders used to lose money:
-//   S2  a refund/dispute that arrives BEFORE the credit it reverses found nothing to
-//       take back, was forgotten, and the late credit then paid the full amount.
+// Two orders lose money unless handled:
+//   S2  a refund/dispute that arrives BEFORE the credit it reverses finds nothing to
+//       take back; if forgotten, the late credit then pays the full amount.
 //   S4  a failed/cancelled refund or a won dispute that arrives BEFORE the event that
-//       opened it found no clawback to give back, was forgotten, and the late opening
-//       event then took the viewer's Qorm although the money stayed with us.
+//       opened it finds no clawback to give back; if forgotten, the late opening
+//       event then takes the viewer's points although the money stayed with us.
 // Every property is SQL (locks, unique keys, a jsonb lookup), so this runs against a
 // replayed Postgres through the runtime driver — a mock pool cannot reject any of it.
 // Runs in CI (web job sets SQL_PARSE_DATABASE_URL). Locally: donationsSchema.test.ts.

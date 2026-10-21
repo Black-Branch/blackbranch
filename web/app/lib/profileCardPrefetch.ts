@@ -27,7 +27,7 @@ import {
 } from "@/app/lib/profileCardCache";
 
 async function loadProfileCard(ids: ProfileCardIds): Promise<ProfileCardData> {
-  // Nudge the shared coin-balance store (the card's Qorm row reads it via
+  // Nudge the shared coin-balance store (the card's currency row reads it via
   // useCoinBalance). Inside the loader on purpose: the loader only runs when
   // the batch isn't fresh/coalesced, so hover-spam can't fire repeated
   // balance fetches — it rides the same 15s freshness as everything else.
@@ -67,8 +67,8 @@ async function loadProfileCard(ids: ProfileCardIds): Promise<ProfileCardData> {
 
 // Monotonic cache-buster for /api/avatar/me, shared by the chat-bar thumbnail,
 // the card, and the prefetch warm — one version means the warm always fetches
-// the exact URL the card will render, including after an avatar change (the
-// card used to reset to v=0 on every mount, so a mid-session change served the
+// the exact URL the card will render, including after an avatar change (a
+// card that reset to v=0 on every mount would serve a mid-session change as the
 // stale browser-cached image until its max-age expired).
 let avatarVersion = 0;
 export function currentAvatarVersion(): number {

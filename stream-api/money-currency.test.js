@@ -2,7 +2,7 @@
 // must not treat it as USD cents unconditionally.
 //
 // The checkout routes only mint USD sessions, so this is a backstop —
-// but web's recordCoinPurchase already guards this EXACT case for Qorm
+// but web's recordCoinPurchase already guards this EXACT case for currency purchases
 // (Stripe adaptive pricing can settle a session in the buyer's local
 // currency), because crediting a foreign-cents number as USD moves real value
 // by a number in the wrong unit, in an unknown direction. The contract,
@@ -67,7 +67,7 @@ function harness() {
     maskBlacklist: (t) => t,
     broadcast: (f) => log('broadcast', { type: f.type, kind: f.kind }),
     bufferPush: () => {}, bufferReplace: () => {},
-    ALERT_TTS_ENABLED: false,
+    ttsEnabled: () => false,
   });
   const routes = {};
   money.registerMoneyRoutes(
@@ -161,12 +161,12 @@ test('an ANONYMOUS native donation sends no userId (and stays its own row downst
   assert.equal(userIdSentBy(h), undefined);
 });
 
-// Qorm is channel points: a coin spend is spectacle,
+// The currency is channel points: a coin spend is spectacle,
 // never support, so it must never reach the ledger or the bar — the canonical
 // id resolved by recordSupport is irrelevant here because recordSupport is
 // never called at all. (Donations/subs/gifts still credit through
 // alert.fireStreamEffects — alert.test.js pins that leg.)
-test('a native coin spend (sticker) never reaches recordSupport or supportBar.add — Qorm is channel points', async () => {
+test('a native coin spend (sticker) never reaches recordSupport or supportBar.add — the currency is channel points', async () => {
   const STICKER = { kind: 'sticker', username: 'S', emoteUrl: 'https://cdn/e.webp', emoteName: 'e', coins: 200, senderMatrixId: '@gadgetfan:site.test' };
   const h = harness();
   const res = await h.post(STICKER);
@@ -203,6 +203,19 @@ test('a donation with a valid netUsd credits exactly that — not stripeNet(gros
   await h.post({ ...DONATION, currency: 'usd', spendId: 'pp_valid', netUsd: 4.55 }); // gross $5.00
   assert.equal(grossOf(h), 5);
   assert.equal(takeHomeSentBy(h), 4.55);
+});
+
+test('a PayPal subscription sale with a valid netUsd credits exactly that — the sub kind carries the reported net like a tip', async () => {
+  const h = harness();
+  await h.post({ kind: 'sub', subscriber: 'S', subscriberMatrixId: '@s:site.test', tier: 'Supporter', months: 1, amount: 500, currency: 'usd', spendId: 'paypal-sub:I-1', netUsd: 4.34 }); // gross $5.00
+  // the sub effect carries no grossUSD (the tier's price is the gross), so only the take-home is asserted
+  assert.equal(takeHomeSentBy(h), 4.34, 'the sale\'s own net, never stripeNet(gross) = 4.15');
+});
+
+test('a card subscription without a netUsd still credits stripeNet(gross) — the Stripe path is unchanged', async () => {
+  const h = harness();
+  await h.post({ kind: 'sub', subscriber: 'S', subscriberMatrixId: '@s:site.test', tier: 'Supporter', months: 1, amount: 500, currency: 'usd', spendId: 'sub_card' });
+  assert.equal(takeHomeSentBy(h), 5 * 0.83, 'the harness stub stripeNet(5), unrounded by the fallback');
 });
 
 test('a netUsd greater than the gross is nonsense, not a big tip — refused, falls back to stripeNet(gross)', async () => {

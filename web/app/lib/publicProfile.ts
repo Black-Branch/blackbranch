@@ -1,9 +1,9 @@
 import { NATIVE_SQL } from "./nativePlatform.ts";
 // The fields of stream-api's /user/lookup that GET /api/user/[id] may hand to anyone. That route is
 // public (no sign-in), and the lookup also carries what no stranger should read — the exact
-// lifetime support total, whatever the owner plugin adds (its bot's free-text read on the person),
+// lifetime support total, whatever a site plugin adds (its bot's free-text read on the person),
 // and the AI scoring read on the person (camp / temperament and its rank, the intelligence, word
-// count and regularity tiers, average words — owner decision: never public). So the route copies
+// count and regularity tiers, average words — never public). So the route copies
 // the fields a card renders, by name, and nothing else: a field stream-api adds later stays private
 // until it is listed here.
 
