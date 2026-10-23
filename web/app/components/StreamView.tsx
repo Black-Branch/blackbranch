@@ -25,6 +25,7 @@ import CommunityEmbedManager from "./CommunityEmbedManager";
 import { useKeyboardShortcuts } from "@/app/lib/useKeyboardShortcuts";
 import { usePanelResize } from "@/app/lib/usePanelResize";
 import { useBillingAvailability } from "@/app/lib/useStripe";
+import { subscribeButton } from "@/app/features/support";
 import dynamic from "next/dynamic";
 import { type Vod } from "@/app/lib/vods";
 import type { HomePayload } from "@/app/lib/homePayload";
@@ -178,17 +179,17 @@ export default function StreamView({
   const subscribed = useSubscriptionStatus(isSignedIn);
   const router = useRouter();
 
-  // When Stripe is configured the support buttons open the in-place embed scoped
+  // When a provider is set up the support buttons open the in-place panel scoped
   // to a section; otherwise they fall back to the external links (env URLs).
-  // A tip opens in place with EITHER provider (PayPal/Venmo alone included); subscribing is a
-  // Stripe checkout, so it needs Stripe.
+  // A tip opens in place with EITHER provider (PayPal/Venmo alone included). So does subscribing
+  // (k, 2026-10-21): a Stripe Supporter price or a PayPal plan; a subscriber's Gift needs Stripe's
+  // price (subscribeButton, features/support).
   const billing = useBillingAvailability();
   const stripeReady = billing.stripe;
   const [guestDonate, setGuestDonate] = useState(false);
-  // Subscribing (and gifting) in place needs a usable Supporter price at Stripe as well.
-  const subscribeInPlace = stripeReady && billing.supporter !== null;
+  const subscribeBtn = subscribeButton({ billing, subscribed, outsideUrl: subscribeUrl });
   function openSupport(section: "donation" | "subscribe", fallbackUrl: string) {
-    const inPlace = section === "donation" ? stripeReady || billing.paypalClientId !== null : subscribeInPlace;
+    const inPlace = section === "donation" ? stripeReady || billing.paypalClientId !== null : subscribeBtn.inPlace;
     if (!inPlace) { window.open(fallbackUrl, "_blank", "noopener"); return; }
     if (!isSignedIn) {
       // Guests can DONATE — /api/billing/donate takes a null matrix_id by
@@ -767,9 +768,9 @@ export default function StreamView({
               subscribed={subscribed}
               openSupport={openSupport}
               donateUrl={donateUrl}
-              // No Supporter price at Stripe and no outside link = nowhere to subscribe: no button
-              // (money.subscribeUrl).
-              subscribeUrl={subscribeInPlace || subscribeUrl ? subscribeUrl : null}
+              // No subscription for sale (no Stripe price, no PayPal plan) and no outside link
+              // (money.subscribeUrl) = nowhere to subscribe: no button.
+              subscribeUrl={subscribeBtn.shown ? subscribeUrl : null}
             />
           )}
 

@@ -4,7 +4,7 @@
 
 Reads the chat of your YouTube live streams into site chat. Off: nothing is read from YouTube and no YouTube setup page is shown.
 
-This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel → Site → Modules — it is off on a new install. Its setup page then appears with the steps below.
+This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel, at the top of its own page (Platforms → YouTube). It is off on a new install. Its setup steps are below.
 
 The addresses below are for a site at `example.com`; your setup page shows your own.
 
@@ -20,7 +20,7 @@ Links:
 
 This step fills:
 
-- **YouTube channel id**. The channel id (UC…) — the embed, live detection, chat and moderation.
+- **YouTube channel id**. The channel id (UC…). Used for the embed, live detection, chat and moderation.
 - **YouTube Data API key** (kept encrypted). Live detection, VODs, the channel avatar and account-age checks.
 
 Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.

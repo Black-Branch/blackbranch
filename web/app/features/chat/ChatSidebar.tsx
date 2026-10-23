@@ -51,6 +51,7 @@ import { StreamTab } from "@/app/features/stream";
 import { SUGGEST_EVENT } from "@/app/lib/contentSuggest";
 import { useSupportConversation } from "./support/useSupportConversation";
 import { SupportPanel } from "./support/SupportPanel";
+import { paneForGreeting } from "./support/greetingPane";
 import {
   CLOSE_HINT, FIRST_VISIT, LINK_NUDGE_LINE, linkNudgeOptions,
   NUDGE_LATER_KEY, NUDGE_NEVER_KEY,
@@ -285,6 +286,14 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
     if (k === "matrix") { setContentTab(null); setTab("matrix"); setMatrixOpened(true); return; }
     setContentTab(k);
   };
+  // The help desk greeted (the load-time opener below): on a phone showing another pane, bring
+  // the live chat on screen, where the greeting is. Render-time adjust, consumed once.
+  const [greetPending, setGreetPending] = useState(false);
+  if (greetPending) {
+    setGreetPending(false);
+    const pane = paneForGreeting(pagerOn, activePane);
+    if (pane) selectPane(pane);
+  }
   // THE single ordered key list — leading content tabs (Home), live, matrix,
   // then the rest of the armed content tabs. The row below renders its
   // children in exactly that order and ChatTabBar's `items` is built from the
@@ -785,6 +794,7 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
         }
         supportCtl.current?.enter();
         setSupportActive(true);
+        setGreetPending(true);
       })
       // A failed fetch shows nothing — a reminder is never worth an error state.
       .catch(() => { settled = true; });
@@ -1361,6 +1371,8 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
         progress={pagerProgress}
         requestPane={pagerOn ? requestPane : undefined}
         mobileHidden={mobileCompactHidden || composerReplaced}
+        // A window over the pane puts its buttons at the top edge this bar reveals from.
+        standDown={windowOpen}
       />
 
       {/* ── The middle. On narrow it is the pager — ONE horizontal snap row,

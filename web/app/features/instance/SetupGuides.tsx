@@ -20,7 +20,7 @@ export default function SetupGuides({ guides }: { guides: Guide[] }) {
             <div className="space-y-0.5">
               <h2 className="text-sm font-semibold text-body">How to set up {g.page.label}</h2>
               <p className="text-xs text-secondary">{g.page.description}</p>
-              {off && <p className="text-xs text-amber-300">Switched off — switch it on in Site → Modules to use it. The steps are below for when you do.</p>}
+              {off && <p className="text-xs text-amber-300">Switched off. Switch it on on this page to use it; the steps are below for when you do.</p>}
             </div>
             <details className="space-y-3">
               <summary className="cursor-pointer text-xs text-muted">Show the {g.page.steps.length} step{g.page.steps.length === 1 ? "" : "s"}</summary>

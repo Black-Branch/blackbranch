@@ -89,8 +89,9 @@ async function main() {
   running.push(startAiReporting());
   // The chat bot hears the feed from the first frame (the history replay seeds its recent chat),
   // so it is listening before the socket opens; whether it ANSWERS is the supervisor's below.
-  // A reader started with new values has applied its restart-applied keys: the Credentials page
-  // is told at once (one report per burst of starts), not at the next 5-minute re-read.
+  // A reader started with new values, or stopped because it was switched off, has applied its
+  // restart-applied keys: the Credentials page is told at once (one report per burst), not at the
+  // next 5-minute re-read.
   let appliedReport = null;
   const platforms = createPlatformStarter({
     starters: STARTERS,

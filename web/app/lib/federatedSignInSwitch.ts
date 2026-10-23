@@ -34,8 +34,7 @@ export function normalizeServerName(raw: unknown): string | null {
 }
 
 /** The server name of a Matrix id (`@local:server`), normalised; null when it has none.
- *  @test-only exported so the tests can pin how a name is read from an id; the product reads it
- *  through federatedSessionAllowed. */
+ *  Read by federatedSessionAllowed and by matrixRefreshPath.ts (own server → local refresh). */
 export function serverNameOf(matrixId: unknown): string | null {
   if (typeof matrixId !== "string" || !matrixId.startsWith("@")) return null;
   const at = matrixId.indexOf(":");

@@ -30,7 +30,7 @@ export const runtime = "nodejs";
 // route, after the signature check, is Stripe's. The checkout redirect is never
 // trusted to grant a sub.
 export async function POST(req: NextRequest) {
-  // Card payments switched off (Site → Modules): "not found", before anything is read — Stripe
+  // Card payments switched off (Payments → Connections): "not found", before anything is read — Stripe
   // keeps a non-2xx event and retries it for about three days, so switching back on in time loses
   // nothing. On the owner's chain-built database an absent switch reads ON (instanceConfigServer).
   if (!stripeModuleOn()) return new Response("Not found", { status: 404 });
@@ -262,7 +262,7 @@ async function recordRenewal(stripe: Stripe, inv: Stripe.Invoice) {
     usernameColor: identity.usernameColor,
     usernameStyle: identity.usernameStyle,
     tier: tier?.name ?? "Supporter",
-    months: tenureMonths(paid),
+    months: tenureMonths(paid, sub.trial_end != null),
     amount: renewal.amount, // cents
     currency: renewal.currency,
   });
@@ -301,8 +301,11 @@ async function syncSubscription(
   // Resolve the subscriber's display name + color so the card matches how they
   // appear in chat; pass the price so stream-api credits the support bar +
   // support_events (subs are income). Best-effort — broadcastChatEvent never throws.
+  // A TRIALING sub (a card bought during a gift — checkout's trial_end) has paid nothing yet: its
+  // first charge comes at the trial's end as a subscription_cycle invoice, which recordRenewal
+  // celebrates and credits. Crediting the price here too would count income that never arrived.
   const sub = announceFrom;
-  if (sub && isActiveStatus(sub.status)) {
+  if (sub && isActiveStatus(sub.status) && sub.status !== "trialing") {
     const identity = await getChatIdentity(matrixId);
     const price = sub.items.data[0]?.price;
     const tier = tierByPriceId(price?.id ?? null);

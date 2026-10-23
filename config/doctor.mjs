@@ -83,7 +83,7 @@ export const DOCTOR = (() => {
       judge: (h) => typeof h.memTotalMiB !== 'number' ? grey('could not read the memory size')
         : h.memTotalMiB >= MIN_MEMORY_MIB ? ok(`${h.memTotalMiB} MiB`) : fail(`${h.memTotalMiB} MiB`) },
     { id: 'box.disk', area: 'Box', side: 'host', title: `Disk: at least ${MIN_DISK_FREE_PCT} % free`,
-      fix: 'Free some space: delete files you added, remove unused Docker images (docker image prune), or grow the disk.',
+      fix: 'Free some space: delete files you added, remove unused Docker images (sudo docker image prune), or grow the disk.',
       judge: (h) => {
         const d = Array.isArray(h.disk) ? h.disk.filter((x) => x && typeof x.freePct === 'number') : [];
         if (!d.length) return grey('could not read the disk');
@@ -92,10 +92,10 @@ export const DOCTOR = (() => {
         return worst.freePct >= MIN_DISK_FREE_PCT ? ok(`${worst.freePct} % free ${where}`) : fail(`${worst.freePct} % free ${where}`);
       } },
     { id: 'box.clock', area: 'Box', side: 'host', title: 'Clock: in sync',
-      fix: 'Turn on time sync: timedatectl set-ntp true. Sign-in tokens depend on the clock.',
+      fix: 'Turn on time sync: sudo timedatectl set-ntp true. Sign-in tokens depend on the clock.',
       judge: (h) => h.clockSynced === true ? ok('synchronised') : h.clockSynced === false ? fail('not synchronised') : grey('could not read the clock state') },
     { id: 'box.upgrades', area: 'Box', side: 'host', title: 'Security updates install themselves',
-      fix: 'Turn unattended upgrades back on: apt install unattended-upgrades, then dpkg-reconfigure -plow unattended-upgrades.',
+      fix: 'Turn unattended upgrades back on: sudo apt install unattended-upgrades, then sudo dpkg-reconfigure -plow unattended-upgrades.',
       judge: (h) => h.upgrades === true ? ok('unattended upgrades on') : h.upgrades === false ? fail('unattended upgrades off') : grey('could not read the setting') },
 
     { id: 'door.names', area: 'Front door', side: 'host', title: 'The three names resolve',
@@ -108,7 +108,7 @@ export const DOCTOR = (() => {
         return bad.length ? fail(`${names(bad)} ${bad.length === 1 ? 'does' : 'do'} not resolve`) : ok('all three resolve');
       } },
     { id: 'door.tls', area: 'Front door', side: 'host', title: 'Tunnel connected, or certificates valid',
-      fix: 'Tunnel mode: blackbranch logs cloudflared (a revoked or deleted tunnel needs the installer\'s tunnel step again). Direct mode: ports 80 and 443 must reach this server so certificates can renew — blackbranch logs caddy.',
+      fix: 'Tunnel mode: sudo blackbranch logs cloudflared (a revoked or deleted tunnel needs the installer\'s tunnel step again). Direct mode: ports 80 and 443 must reach this server so certificates can renew; sudo blackbranch logs caddy shows why they did not.',
       judge: (h) => {
         if (h.mode === 'internal') return grey('lab mode: certificates come from the box\'s own authority');
         if (h.mode === 'tunnel') return h.tunnel === true ? ok('the tunnel is connected') : h.tunnel === false ? fail('the tunnel is not connected') : grey('could not read the tunnel');
@@ -126,7 +126,7 @@ export const DOCTOR = (() => {
     // an update must not depend on the home router sending the box's own public address back in.
     // Tunnel mode asks by the public names, out to Cloudflare and back through the tunnel.
     { id: 'door.answers', area: 'Front door', side: 'host', title: 'The site, api. and matrix. answer by name',
-      fix: 'blackbranch status shows which service is down; blackbranch logs caddy shows the router\'s errors.',
+      fix: 'sudo blackbranch status shows which service is down; sudo blackbranch logs caddy shows the router\'s errors.',
       judge: (h) => {
         const a = Array.isArray(h.answers) ? h.answers : [];
         if (!a.length) return grey('not checked');
@@ -157,7 +157,7 @@ export const DOCTOR = (() => {
     // NOT a failure — a platform is quiet while nobody streams or chats there. Only a service that
     // does not run, or a connection a reader reports broken, is a problem.
     { id: 'services.api', area: 'Services', side: 'site', title: 'The chat service (stream-api) answers',
-      fix: 'blackbranch status; blackbranch logs stream-api.',
+      fix: 'sudo blackbranch status; sudo blackbranch logs stream-api.',
       fixOutside: 'Restart the chat service (stream-api) where it runs and read its log.',
       judge: (h, s) => {
         const a = s.services && s.services.api;
@@ -166,7 +166,7 @@ export const DOCTOR = (() => {
         return a.loaded ? ok('answers, saved settings loaded') : warn('answers, but has not loaded the saved settings — it runs on its server settings and defaults');
       } },
     { id: 'services.ingest', area: 'Services', side: 'site', title: 'The ingest service (stream-ingest) runs',
-      fix: 'blackbranch status; blackbranch logs stream-ingest.',
+      fix: 'sudo blackbranch status; sudo blackbranch logs stream-ingest.',
       fixOutside: 'Restart the ingest service (stream-ingest) where it runs and read its log.',
       judge: (h, s) => {
         const sv = s.services;
@@ -199,7 +199,7 @@ export const DOCTOR = (() => {
     // that failed to start — YouTube's browser, Kick's lookup — is named with its one-line reason.
     // Not an update check: the readers depend on platforms outside the box.
     { id: 'ingest.readers', area: 'Services', side: 'host', title: 'Chat readers started',
-      fix: 'Admin Panel → Stream shows the reason; blackbranch logs stream-ingest.',
+      fix: 'The site\'s Stream tab (admins only) shows the reason; sudo blackbranch logs stream-ingest.',
       judge: (h) => {
         const g = h.ingest;
         if (!g || typeof g !== 'object') return grey('not checked');
@@ -215,20 +215,20 @@ export const DOCTOR = (() => {
       } },
 
     { id: 'db.reachable', area: 'Database', side: 'site', title: 'Postgres answers',
-      fix: 'blackbranch status; if postgres is not healthy, blackbranch logs postgres.',
+      fix: 'sudo blackbranch status; if postgres is not healthy, sudo blackbranch logs postgres.',
       judge: (h, s) => s.db && s.db.reachable ? ok() : fail('the site cannot reach its database') },
     { id: 'db.schema', area: 'Database', side: 'site', title: 'The database is at this release\'s version',
-      fix: 'Apply the migrations: blackbranch migrate (it also runs on every start).',
+      fix: 'Apply the migrations: sudo blackbranch migrate (it also runs on every start).',
       judge: (h, s) => {
         if (!s.db || !s.db.reachable) return grey('database unreachable');
         const v = s.db.version;
         if (typeof v !== 'number') return fail('no schema_migrations version');
         if (v === SCHEMA_VERSION) return ok(`v${v}`);
         return v < SCHEMA_VERSION ? fail(`v${v}; this release expects v${SCHEMA_VERSION}`)
-          : fail(`v${v} is newer than this release (v${SCHEMA_VERSION})`, 'The database was migrated by a newer release: run that release (blackbranch update when it exists), never an older one against it.');
+          : fail(`v${v} is newer than this release (v${SCHEMA_VERSION})`, 'The database was migrated by a newer release: run that release (sudo blackbranch update when it exists), never an older one against it.');
       } },
     { id: 'db.vector', area: 'Database', side: 'site', title: 'The vector extension is present',
-      fix: 'blackbranch migrate (a fresh database gets it from the baseline); if it is still missing, blackbranch logs migrate.',
+      fix: 'sudo blackbranch migrate (a fresh database gets it from the baseline); if it is still missing, sudo blackbranch logs migrate.',
       judge: (h, s) => !s.db || !s.db.reachable ? grey('database unreachable') : s.db.vector ? ok(`vector ${s.db.vector}`) : fail('not installed') },
 
     // site.legacyId (SITE_LEGACY_ID, an install value read when the site starts): the site's own
@@ -237,7 +237,7 @@ export const DOCTOR = (() => {
     // Needed only where the site had visitors before the rename: a database built by the migration
     // chain with accounts older than the rename's migration (v145).
     { id: 'site.legacyId', area: 'Database', side: 'site', title: 'An install from before the platform-key rename keeps its old id',
-      fix: 'Set SITE_LEGACY_ID in the site\'s environment to its platform id from before the rename (one lower-case word), then restart the site — it is read when the site starts.',
+      fix: 'Set SITE_LEGACY_ID in the site\'s environment to its platform id from before the rename (one lower-case word), then restart the site: it is read when the site starts.',
       judge: (h, s) => {
         const p = s.platform;
         if (!p || !['unset', 'set', 'ignored'].includes(p.legacyId)) return grey('the site did not report');
@@ -255,20 +255,20 @@ export const DOCTOR = (() => {
       } },
 
     { id: 'matrix.synapse', area: 'Matrix', side: 'site', title: 'Synapse answers (/versions)',
-      fix: 'blackbranch status; blackbranch restart synapse; if it stays down, blackbranch logs synapse.',
+      fix: 'sudo blackbranch status; sudo blackbranch restart synapse; if it stays down, sudo blackbranch logs synapse.',
       fixOutside: 'The homeserver is managed outside Black Branch: restart it where it runs and read its log.',
       judge: (h, s) => s.matrix && s.matrix.versions === 200 ? ok() : fail(s.matrix && s.matrix.versions ? `answered ${s.matrix.versions}` : 'did not answer') },
     { id: 'matrix.mas', area: 'Matrix', side: 'site', title: 'MAS, the sign-in service, answers (/health)',
-      fix: 'blackbranch restart mas; if it stays down, blackbranch logs mas.',
+      fix: 'sudo blackbranch restart mas; if it stays down, sudo blackbranch logs mas.',
       fixOutside: 'The sign-in service is managed outside Black Branch: restart it where it runs and read its log.',
       judge: (h, s) => s.matrix && s.matrix.mas === 200 ? ok() : fail(s.matrix && s.matrix.mas ? `answered ${s.matrix.mas}` : 'did not answer') },
     { id: 'matrix.issuer', area: 'Matrix', side: 'site', title: 'The homeserver names this site\'s sign-in service',
-      fix: 'blackbranch render (Synapse\'s config is made from .env), then check again.',
+      fix: 'sudo blackbranch render (Synapse\'s config is made from .env), then check again.',
       fixOutside: 'The homeserver is managed outside Black Branch: in its own config, name the sign-in service this site uses (the site\'s MATRIX_OAUTH_ISSUER), restart it, then check again.',
       judge: (h, s) => s.matrix && s.matrix.issuer === true ? ok('auth_metadata names the configured issuer')
         : s.matrix && s.matrix.issuer === false ? fail('auth_metadata names a different issuer') : grey('the homeserver did not answer') },
     { id: 'matrix.wellknown', area: 'Matrix', side: 'site', title: 'Both well-known files match the config',
-      fix: 'blackbranch up (the site makes the files from .env when it starts; up restarts it with the current .env).',
+      fix: 'sudo blackbranch up (the site makes the files from .env when it starts; up restarts it with the current .env).',
       fixOutside: 'The site makes the files from its environment when it starts: correct MATRIX_HOMESERVER_URL, MATRIX_OAUTH_ISSUER or MATRIX_FEDERATION_SERVER there and restart the site.',
       judge: (h, s) => {
         const m = s.matrix || {};
@@ -276,16 +276,16 @@ export const DOCTOR = (() => {
         return bad.length ? fail(`/.well-known/matrix/${bad.join(' and ')} ${bad.length > 1 ? 'differ' : 'differs'} or did not answer`) : ok();
       } },
     { id: 'matrix.rendered', area: 'Matrix', side: 'host', title: 'The rendered config files match a fresh render',
-      fix: 'blackbranch render — a hand edit is overwritten; put lasting changes in .env.',
+      fix: 'Run sudo blackbranch render. A hand edit is overwritten, so put lasting changes in .env.',
       judge: (h) => {
         const r = Array.isArray(h.rendered) ? h.rendered : [];
-        if (h.renderError) return fail('the config does not render from .env', 'blackbranch render prints what is wrong in .env.');
+        if (h.renderError) return fail('the config does not render from .env', 'sudo blackbranch render prints what is wrong in .env.');
         if (!r.length) return grey('not checked');
         const bad = r.filter((x) => !x.match).map((x) => x.file);
         return bad.length ? fail(`${list(bad)} ${bad.length > 1 ? 'differ' : 'differs'} from the render`) : ok(`${r.length} files match`);
       } },
     { id: 'matrix.federation', area: 'Matrix', side: 'site', title: 'Federation matches its switch',
-      fix: 'blackbranch render applies the switch (blackbranch federation shows it; the Admin Panel sets it).',
+      fix: 'sudo blackbranch render applies the switch (sudo blackbranch federation shows it; the Admin Panel sets it).',
       fixOutside: 'The homeserver is managed outside Black Branch: federation is set in its own config, not by the switch here.',
       judge: (h, s, input) => {
         const f = (s.matrix && s.matrix.federation) || {};
@@ -300,7 +300,7 @@ export const DOCTOR = (() => {
     // write of matrix.registration is applied once the host answers a render ok at or after it
     // (web lockdownRegistration.ts renderApplied — the same reading).
     { id: 'matrix.lockdown', area: 'Matrix', side: 'site', title: 'Homeserver sign-up has the lockdown\'s last change',
-      fix: 'blackbranch render applies it now, and says what stops it (blackbranch logs mas). Until then the homeserver\'s sign-up is not what the Lockdown screen chose; the site keeps asking for the render.',
+      fix: 'sudo blackbranch render applies it now, and says what stops it (sudo blackbranch logs mas). Until then the homeserver\'s sign-up is not what the Lockdown screen chose; the site keeps asking for the render.',
       judge: (h, s, input) => {
         const l = s.matrix && s.matrix.lockdown;
         if (input.hostState === 'none' || (l && l.managed === 'outside')) return grey('managed outside Black Branch — the lockdown cannot reach that homeserver\'s sign-up');
@@ -333,7 +333,7 @@ export const DOCTOR = (() => {
         return bad.length ? fail(`missing: ${list(bad)}`) : ok(`${sct.count} present`);
       } },
     { id: 'secrets.site', area: 'Secrets', side: 'site', title: 'The site holds its secrets',
-      fix: 'The site was started without some of its secrets: compare .env with the backup, then blackbranch up.',
+      fix: 'The site was started without some of its secrets: compare .env with the backup, then sudo blackbranch up.',
       judge: (h, s) => {
         const m = s.secrets && Array.isArray(s.secrets.missing) ? s.secrets.missing : null;
         return !m ? grey('not checked') : m.length ? fail(`missing: ${list(m)}`) : ok();
@@ -354,29 +354,23 @@ export const DOCTOR = (() => {
       } },
 
     { id: 'modules.tests', area: 'Modules', side: 'site', title: 'Each switched-on module\'s Test passes',
-      fix: 'Admin Panel → the module\'s own page: correct the value and press Test.',
+      fix: 'Admin Panel → the module\'s own page: correct the value and press Check.',
       judge: (h, s) => {
-        const mods = Array.isArray(s.modules) ? s.modules.filter((m) => m.on) : [];
+        // The module's own switch says whether it is set up: off = "not set up yet" (grey, never
+        // red); on = its Test counts, so a module switched on without its keys fails.
+        const all = Array.isArray(s.modules) ? s.modules : [];
+        const mods = all.filter((m) => m.on);
+        const off = all.filter((m) => m.on === false).map((m) => m.id);
+        const notYet = off.length ? `not set up yet: ${list(off)} ${off.length > 1 ? 'are' : 'is'} switched off` : '';
         const tests = mods.flatMap((m) => (Array.isArray(m.tests) ? m.tests.map((t) => ({ ...t, module: m.id })) : []));
-        if (!mods.length) return ok('no module is switched on');
-        if (!tests.length) return ok(`${list(mods.map((m) => m.id))} on; none has a Test`);
-        // A module switched on whose setup page was never opened is "not set up yet", not broken
-        // (W18b): amber, until its page has been visited — from then on its Test counts. "Visited" is
-        // the setup flow's stamp, setup.state.visited ("module:<id>"), read by the host (h.setup);
-        // the site may also say so itself (`untouched`). An install from before the stamp that
-        // finished setup has no list: every page counts as visited, as before.
-        const st = h && h.setup && typeof h.setup === 'object' ? h.setup : null;
-        const visited = st && Array.isArray(st.visited) ? new Set(st.visited) : st && st.visited === null && st.completed === false ? new Set() : null;
-        const fresh = new Set(mods.filter((m) => m.untouched === true || (visited && !visited.has(`module:${m.id}`))).map((m) => m.id));
-        const bad = tests.filter((t) => t.ok === false && !fresh.has(t.module));
-        const notYet = [...fresh].filter((id) => tests.some((t) => t.module === id && t.ok !== true));
-        const unrun = tests.filter((t) => t.ok !== true && t.ok !== false && !fresh.has(t.module));
-        if (bad.length) return fail(bad.map((t) => `${t.module}: ${t.detail || 'failed'}`).join('; ')
-          + (notYet.length ? `; not set up yet: ${list(notYet)}` : ''));
-        if (notYet.length) return { ...warn(`not set up yet: ${list(notYet)} — switched on, but its page has not been opened`),
-          fix: 'Admin Panel → the module\'s own page: set it up, or switch the module off if it is not wanted.' };
+        if (!mods.length) return off.length ? grey(notYet) : ok('no module is switched on');
+        const also = notYet ? `; ${notYet}` : '';
+        if (!tests.length) return ok(`${list(mods.map((m) => m.id))} on; none has a Test${also}`);
+        const bad = tests.filter((t) => t.ok === false);
+        const unrun = tests.filter((t) => t.ok !== true && t.ok !== false);
+        if (bad.length) return fail(bad.map((t) => `${t.module}: ${t.detail || 'failed'}`).join('; '));
         if (unrun.length) return grey(unrun.map((t) => `${t.module}: ${t.detail || 'not run'}`).join('; '));
-        return ok(`${tests.length} passed`);
+        return ok(`${tests.length} passed${also}`);
       } },
     { id: 'modules.skipped', area: 'Modules', side: 'site', title: 'No setup step left skipped',
       fix: 'Admin Panel: finish the steps that setup skipped.',
@@ -387,7 +381,7 @@ export const DOCTOR = (() => {
     // Read-aloud (round 1 contract 2): stream-api's GET /tts/status, asked by the host inside its
     // container. Judged only while read-aloud is switched on.
     { id: 'tts.ready', area: 'Modules', side: 'host', title: 'Read-aloud has its key and a voice',
-      fix: 'Admin Panel → Voice: set the ElevenLabs key and a voice id',
+      fix: 'Admin Panel → Utility → TTS: set the ElevenLabs key and a voice id.',
       judge: (h) => {
         const t = h.tts;
         if (!t || typeof t !== 'object') return grey('not checked');
@@ -418,7 +412,7 @@ export const DOCTOR = (() => {
       } },
 
     { id: 'modules.failsafe', area: 'Modules', side: 'site', title: 'No switch is held on by the upgrade fail-safe',
-      fix: 'Apply the pending database migrations (`blackbranch migrate` on a bundle install), then reload this page. Until then the site keeps them on, as they were before they had switches.',
+      fix: 'Apply the pending database migrations (`sudo blackbranch migrate` on a bundle install), then reload this page. Until then the site keeps them on, as they were before they had switches.',
       judge: (h, s) => {
         const k = Array.isArray(s.heldOn) ? s.heldOn : null;
         if (!k) return grey('the site did not report');
@@ -427,23 +421,23 @@ export const DOCTOR = (() => {
 
     // Payments + Platforms: the setup pages' own Tests, run without recording.
     { id: 'payments.stripe', area: 'Payments', side: 'site', title: 'Stripe: this site\'s webhook exists, is enabled and sends every event',
-      fix: 'Admin Panel → Payments → Connections → Stripe: follow "The webhook" step (the address and the event list), then press Test.',
+      fix: 'Admin Panel → Payments → Connections → Stripe: follow "The webhook" step (the address and the event list), then press Check.',
       judge: (h, s) => providerRow(s.payments && s.payments.stripe, 'Stripe') },
     { id: 'payments.cloudflare', area: 'Payments', side: 'site', title: 'Stripe gets past Cloudflare\'s bot protection',
-      fix: 'Cloudflare → your domain → Security → WAF → Custom rules: a Skip rule for the URI path /api/billing/webhook.',
+      fix: 'Free plan: Bot Fight Mode blocks Stripe, and no rule can make an exception to it, so turn Bot Fight Mode off (Cloudflare → your domain → Security → Settings → Bot traffic). Pro plan or higher: use Super Bot Fight Mode with a custom rule that skips it for the URI path /api/billing/webhook.',
       judge: (h, s) => {
         const st = s.payments && s.payments.stripe;
         if (!st) return grey('the site did not report');
         if (!st.on) return ok('Stripe is switched off');
-        return grey('cannot be checked without a Cloudflare token — check by hand: a WAF Skip rule for /api/billing/webhook (Bot Fight Mode blocks Stripe without it)');
+        return grey('cannot be checked without a Cloudflare token, so check by hand: Bot Fight Mode off on a Free plan, or a Super Bot Fight Mode skip rule for /api/billing/webhook on a paid plan');
       } },
     { id: 'payments.paypal', area: 'Payments', side: 'site', title: 'PayPal: the webhook id exists and points at this site',
-      fix: 'Admin Panel → Payments → Connections → PayPal: follow "The webhook" step, paste the webhook id PayPal shows, then press Test.',
+      fix: 'Admin Panel → Payments → Connections → PayPal: follow "The webhook" step, paste the webhook id PayPal shows, then press Check.',
       judge: (h, s) => providerRow(s.payments && s.payments.paypal, 'PayPal') },
     // A platform whose channel is set but that has nothing to test (no app keys) is "not checked",
     // never a pass: the row says what was actually accepted.
     { id: 'platforms.credentials', area: 'Platforms', side: 'site', title: 'Platform keys accepted',
-      fix: 'Admin Panel → Platforms → the platform\'s tab: correct the channel or the app\'s keys, then press Test.',
+      fix: 'Admin Panel → Platforms → the platform\'s tab: correct the channel or the app\'s keys, then press Check.',
       judge: (h, s) => {
         const p = Array.isArray(s.platforms) ? s.platforms : null;
         if (!p) return grey('the site did not report');
@@ -464,7 +458,7 @@ export const DOCTOR = (() => {
     // Alerts: the push to whoever runs the site (stream-api/notify.js) is optional. Without a topic
     // nothing is lost — the problems stay on this page — but nobody is told while away from it.
     { id: 'alerts.channel', area: 'Alerts', side: 'site', title: 'Alerts reach someone',
-      fix: 'Optional: Admin Panel → Site → Health: paste an ntfy topic address (one is enough) and subscribe to that topic in the ntfy app.',
+      fix: 'Optional: Admin Panel → Site → Site, the "Alerts to your phone" card: paste an ntfy topic address (one is enough) and subscribe to that topic in the ntfy app.',
       judge: (h, s) => {
         const a = s.alerts;
         if (!a || typeof a.topics !== 'number') return grey('the chat service did not report');
@@ -472,10 +466,10 @@ export const DOCTOR = (() => {
         return ok(a.topics === 1 ? 'one topic: urgent and quiet alerts both go to it' : 'urgent and quiet alerts each have a topic');
       } },
     { id: 'backups.age', area: 'Backups', side: 'host', title: `The last good backup is less than ${MAX_BACKUP_AGE_H} hours old`,
-      fix: 'Run blackbranch backup and read why it stops; blackbranch status shows the last run. The nightly one runs at the quiet hour (Admin Panel → Site → Running the site).',
+      fix: 'Run sudo blackbranch backup and read why it stops; sudo blackbranch status shows the last run. The nightly one runs at the quiet hour (Admin Panel → Site → Running the site).',
       judge: (h) => {
         const b = h.backups;
-        if (!b) return grey('not checked yet: run blackbranch doctor');
+        if (!b) return grey('not checked yet: run sudo blackbranch doctor');
         const last = b.last;
         if (!last) return fail('no backup has been made yet');
         const now = Date.parse(h.at);
@@ -488,19 +482,19 @@ export const DOCTOR = (() => {
         return last.ok === false ? warn(`the last run failed; the one before it is ${age}`) : ok(age);
       } },
     { id: 'backups.verify', area: 'Backups', side: 'host', title: 'The newest backup restores (checked weekly)',
-      fix: 'blackbranch restore latest --verify says which part failed. A damaged backup cannot be mended: make a new one (blackbranch backup) and check it again.',
+      fix: 'sudo blackbranch restore latest --verify says which part failed. A damaged backup cannot be mended: make a new one (sudo blackbranch backup) and check it again.',
       judge: (h) => {
         const b = h.backups;
-        if (!b) return grey('not checked yet: run blackbranch doctor');
+        if (!b) return grey('not checked yet: run sudo blackbranch doctor');
         const v = b.verify;
-        if (!v) return fail('never checked: blackbranch restore latest --verify');
+        if (!v) return fail('never checked: sudo blackbranch restore latest --verify');
         if (v.ok !== true) return fail(`the last check failed${Array.isArray(v.failed) && v.failed.length ? ` (${list(v.failed)})` : ''}`);
         const days = Math.floor((Date.parse(h.at) - Date.parse(v.at)) / 86_400_000);
         if (Number.isNaN(days)) return ok('passed');
         return days > MAX_VERIFY_AGE_D ? warn(`passed ${days} days ago; the weekly check has not run since`) : ok(`passed ${days === 0 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`}`);
       } },
     { id: 'backups.target', area: 'Backups', side: 'host', title: 'The backup target answers',
-      fix: 'Admin Panel → Site → Backups: check the address and keys, and that this server can reach it. For SFTP, the key blackbranch backup key prints must be on that account.',
+      fix: 'Admin Panel → Site → Backups: check the address and keys, and that this server can reach it. For SFTP, the key sudo blackbranch backup key prints must be on that account.',
       judge: (h) => {
         const t = (h.backups && h.backups.target) || {};
         const where = TARGET_LABEL[t.kind] || 'the target';
@@ -508,14 +502,14 @@ export const DOCTOR = (() => {
         if (t.repo === 'missing') return fail(`${where} answers, but holds no backups yet`);
         if (t.repo === 'password') return fail(`${where} answers, but the backup passphrase does not open it`);
         if (t.repo === 'unreachable') return fail(`${where} does not answer`);
-        if (t.repo === 'refused') return fail('the backup address is refused (only s3:https:// and sftp: addresses, never loopback, link-local or this server\'s own network) — blackbranch backup says why');
+        if (t.repo === 'refused') return fail('the backup address is refused (only s3:https:// and sftp: addresses, never loopback, link-local or this server\'s own network) — sudo blackbranch backup says why');
         return grey('could not ask (no backup image yet, or the settings could not be read)');
       } },
     { id: 'updates.feed', area: 'Updates', side: 'host', title: 'The update feed was read in the last 3 days',
-      fix: 'blackbranch update --check says why: the box must reach its feed over the internet (BB_UPDATE_FEED in .env), and the feed must carry a signature from the key this box was installed with.',
+      fix: 'sudo blackbranch update --check says why: the box must reach its feed over the internet (BB_UPDATE_FEED in .env), and the feed must carry a signature from the key this box was installed with.',
       judge: (h) => {
         const c = h.updates && h.updates.check;
-        if (!h.updates) return grey('not checked yet: run blackbranch doctor');
+        if (!h.updates) return grey('not checked yet: run sudo blackbranch doctor');
         if (!c) return fail('the feed has never been read');
         const err = c.error ? ` (${c.error})` : '';
         const hours = typeof c.readAt === 'string' ? hoursSince(h, c.readAt) : null;
@@ -530,10 +524,10 @@ export const DOCTOR = (() => {
         return ok(`read ${agoWords(hours)} — ${c.channel} channel, release ${c.current}${what}`);
       } },
     { id: 'updates.last', area: 'Updates', side: 'host', title: 'The last update finished',
-      fix: 'blackbranch status shows the release in use and what the last update said. Nothing is lost by a rollback: the box runs the release before with its data from just before the update. Send blackbranch doctor --report to the project; the next release is offered as usual.',
+      fix: 'sudo blackbranch status shows the release in use and what the last update said. Nothing is lost by a rollback: the box runs the release before with its data from just before the update. Send sudo blackbranch doctor --report to the project; the next release is offered as usual.',
       judge: (h) => {
         const u = h.updates;
-        if (!u) return grey('not checked yet: run blackbranch doctor');
+        if (!u) return grey('not checked yet: run sudo blackbranch doctor');
         const st = u.state, l = u.last;
         if (st && st.state === 'running') return grey(`an update to ${st.to} is running — step ${st.step} of ${st.steps}: ${st.words}`);
         if (st && st.state === 'waiting') return grey(st.words || 'waiting');
@@ -550,9 +544,9 @@ export const DOCTOR = (() => {
         }
         if (l.result === 'not-applied') return warn(`${l.to} was not applied (${when}): ${l.message}`);
         if (l.result === 'rollback-failed') return fail(`${l.to} failed, and going back did not finish cleanly (${when}): ${l.message}`,
-          'Run blackbranch status and blackbranch doctor; the backup made before the update brings the data back: blackbranch restore <snapshot> --yes (blackbranch backup list).');
+          'Run sudo blackbranch status and sudo blackbranch doctor; the backup made before the update brings the data back: sudo blackbranch restore <snapshot> --yes (sudo blackbranch backup list).');
         if (l.result === 'interrupted') return fail(`an update stopped without finishing (${when}): ${l.message}`,
-          'Run blackbranch status. If the site does not answer, bring back the backup made before the update: blackbranch restore <snapshot> --yes (blackbranch backup list), then blackbranch up.');
+          'Run sudo blackbranch status. If the site does not answer, bring back the backup made before the update: sudo blackbranch restore <snapshot> --yes (sudo blackbranch backup list), then sudo blackbranch up.');
         return grey('the last result is not readable');
       } },
   ];
@@ -561,7 +555,7 @@ export const DOCTOR = (() => {
   function evaluate(input) {
     const h = input.host || {};
     const s = input.site || {};
-    const hostGrey = input.hostState === 'none' ? 'not a bundle install' : 'not checked yet: run blackbranch doctor';
+    const hostGrey = input.hostState === 'none' ? 'not a bundle install' : 'not checked yet: run sudo blackbranch doctor';
     const siteGrey = input.siteError ? `site unreachable (${input.siteError})` : 'site unreachable';
     return CHECKS.map((c) => {
       let v;

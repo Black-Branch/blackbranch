@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   faceOrDefault, faceLabel, windowsFor, windowLabel, defaultWindow, formatValue, isPeopleFace,
   type FaceId, type WindowId, type BoardRow, type HomeBoards,
@@ -28,14 +28,22 @@ const warmed = new Set<string>();
 // The AI-score faces only where the install's plugin computes those scores (boardFacesShown.ts).
 const FACES = facesShown(messageScores());
 
-export function BoardsWidget({ boards, loading, live, signedIn }: {
+export function BoardsWidget({ boards, loading, live, signedIn, hidden }: {
   boards: HomeBoards | null;
   loading: boolean;
   live: boolean;
   signedIn: boolean;
+  /** The boards switched off in the Admin Panel (leaderboard.hidden). */
+  hidden?: readonly string[];
 }) {
   const [storedFace, setStoredFace] = useLocalStorageString("home_board_face");
-  const face: FaceId = faceShown(faceOrDefault(storedFace), FACES);
+  const offered = useMemo(() => {
+    const kept = FACES.filter((f) => !hidden?.includes(f.id));
+    return kept.length ? kept : FACES;
+  }, [hidden]);
+  const pick = faceShown(faceOrDefault(storedFace), offered);
+  // The vote score is faceShown's fallback; when that board is switched off too, the first one offered.
+  const face: FaceId = offered.some((f) => f.id === pick) ? pick : offered[0]!.id;
   const [picked, setPicked] = useState<WindowId | null>(null);
   const wanted = picked ?? defaultWindow(live);
   // The Streams face offers no Stream window: a Stream pick carried onto it
@@ -90,7 +98,7 @@ export function BoardsWidget({ boards, loading, live, signedIn }: {
         </div>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {FACES.map((f) => (
+        {offered.map((f) => (
           <button
             key={f.id}
             type="button"

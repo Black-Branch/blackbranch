@@ -8,7 +8,7 @@
 // is setupExtras.ts.
 
 import { INSTANCE_KEYS, MODULES, SETUP_CORE } from "../instanceSchema.generated.mjs";
-import { STEP_HELP, WIZARD_STEPS, WIZARD_LISTS, type RawStep, type StepHelp } from "./setupExtras.ts";
+import { STEP_HELP, WIZARD_STEPS, WIZARD_LISTS, OWN_CHECKS, CHECK_VIA, PAGE_DOCS, SETUP_DOCS, docsUrl, type RawStep, type StepHelp } from "./setupExtras.ts";
 
 export type SetupAddresses = { origin: string; apiOrigin: string; matrixOrigin: string; serverName: string };
 
@@ -20,7 +20,9 @@ export type SetupStepView = Omit<RawStep, "fields" | "paste" | "ownerOnly"> & {
   /** The setup pages' own help for this step (setupExtras.ts STEP_HELP), its paste lines filled. */
   help: StepHelp | null;
 };
-export type SetupPage = { id: string; label: string; description: string; steps: SetupStepView[] };
+/** `docs`: the page's guide on blackbranch.app. */
+export type SetupPage = { id: string; label: string; description: string; steps: SetupStepView[]; docs: string };
+const docsFor = (id: string) => docsUrl(PAGE_DOCS[id] ?? SETUP_DOCS);
 export type ProductModule = { id: string; label: string; description: string; defaultOn: boolean; hasSetup: boolean };
 
 const manifests = MODULES as unknown as Manifest[];
@@ -59,6 +61,7 @@ function stepView(list: string, raw: RawStep, values: Record<string, string>, wi
   if (help && !wizard) delete help.later; // "add it later in the Admin Panel" read IN the Admin Panel says nothing
   return {
     ...s,
+    test: s.test ?? s.fields.find((f) => OWN_CHECKS.includes(f)) ?? s.fields.map((f) => CHECK_VIA[f]).find(Boolean) ?? null,
     paste: s.paste.map((p) => ({ label: p.label, value: fillTemplate(p.value, values) })),
     fields: s.fields.map(field),
     help,
@@ -97,7 +100,7 @@ export function moduleSetupPage(id: string, addresses: SetupAddresses, audience:
   const steps = m ? stepsFor(m, audience) : [];
   if (!m || !steps.length) return null;
   const values = placeholderValues(addresses);
-  return { id: m.id, label: m.label, description: m.description, steps: steps.map((s) => stepView(`module:${m.id}`, s, values, audience.wizard === true)) };
+  return { id: m.id, label: m.label, description: m.description, steps: steps.map((s) => stepView(`module:${m.id}`, s, values, audience.wizard === true)), docs: docsFor(m.id) };
 }
 
 type CoreList = { id: string; label: string; description: string; release: string; steps: RawStep[] };
@@ -115,7 +118,7 @@ export function coreSetupPage(id: string, addresses: SetupAddresses): SetupPage 
   const c = released(id);
   if (!c?.steps.length) return null;
   const values = placeholderValues(addresses);
-  return { id: c.id, label: c.label, description: c.description, steps: withExtras(`core:${c.id}`, c.steps, false).map((s) => stepView(`core:${c.id}`, s, values, false)) };
+  return { id: c.id, label: c.label, description: c.description, steps: withExtras(`core:${c.id}`, c.steps, false).map((s) => stepView(`core:${c.id}`, s, values, false)), docs: docsFor(c.id) };
 }
 
 // ── the setup pages' own choices (setupExtras.ts WIZARD_LISTS) ──────────────────────────────
@@ -146,7 +149,7 @@ export function wizardListPage(id: string, addresses: SetupAddresses): SetupPage
   const meta = wizardLists().find((x) => x.id === id);
   if (!s?.steps.length || !meta) return null;
   const values = placeholderValues(addresses);
-  return { ...meta, steps: s.steps.map((x) => stepView(s.list, x, values, true)) };
+  return { ...meta, steps: s.steps.map((x) => stepView(s.list, x, values, true)), docs: docsFor(id) };
 }
 
 /** Every key one of those pages may write. */

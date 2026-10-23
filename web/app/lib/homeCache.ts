@@ -15,7 +15,7 @@ import { getVods } from "@/app/lib/vods";
 import { getLastStream } from "@/app/lib/lastStream";
 import { buildHomePayload, statusFromStream, newsFromRss, homePlatforms, type HomePayload } from "@/app/lib/homePayload";
 import { chatPlatformsSetUp } from "@/app/lib/streamPlatformsServer";
-import { instanceString } from "@/app/lib/instanceConfigServer";
+import { instanceString, instanceBool, instanceList } from "@/app/lib/instanceConfigServer";
 import { modulesOff, servingSnapshot } from "@/app/lib/moduleRunningServer";
 import { forumReader } from "@/app/lib/forumReader";
 import { topThreads } from "@/app/lib/forumModel";
@@ -57,9 +57,10 @@ const cache = createTtlCache<HomePayload>({ ttlMs: 60_000, load: async () => {
   return { data, cacheable: data.status !== null && boardsWarm(data.boards) };
 } });
 
-/** The body, fresh within 60s — one build shared by everyone asking. */
+/** The body, fresh within 60s — one build shared by everyone asking — with the Leaderboard's
+ *  settings as they are now. */
 export function getHomePayload(): Promise<HomePayload> {
-  return cache.get();
+  return cache.get().then((p) => ({ ...p, leaderboard: { on: !instanceBool("leaderboard.off"), hidden: instanceList("leaderboard.hidden") } }));
 }
 
 /** The body if it arrives within `ms`, else null: the page render must never

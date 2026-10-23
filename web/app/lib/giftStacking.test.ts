@@ -59,3 +59,38 @@ test("attack: a PayPal subscriber is not picked as a community recipient, and th
     await pool.end();
   }
 });
+
+// Design review 2026-10-22: a TRIALING record (a card bought during a gift — checkout's trial_end) is
+// not a paid period. paidThroughSql must not count it, or a gift arriving during the trial would be
+// parked until the first charge day. The trial record still entitles (the gift covers it anyway).
+test("paidThroughSql leaves out trialing records", () => {
+  assert.match(paidThroughSql("$1", "$2"), /AND r\.provider_status <> 'trialing'/);
+});
+
+test("attack: a gift to a viewer on a Stripe trial starts now, not at the trial's end", { skip }, async () => {
+  assert.ok(!unsafe, "SQL_PARSE_DATABASE_URL must point at a local throwaway database in CI");
+  const pool = new Pool({ connectionString: DB_URL, max: 2 });
+  const RUN = `trial${process.pid}x${Date.now().toString(36)}`;
+  const SOURCES: Provider[] = ["stripe", "paypal"];
+  const who = `@${RUN}:site.test`;
+  const trialEnd = new Date(Date.now() + 20 * 86_400_000);
+  try {
+    await pool.query(`INSERT INTO site.users (matrix_id) VALUES ($1)`, [who]);
+    const c = await pool.connect();
+    const obs: Observation = { provider: "stripe", externalId: `sub_${RUN}`, tier: "supporter", status: "active", providerStatus: "trialing",
+      renews: true, periodEnd: trialEnd, accessUntil: trialEnd, observedAt: new Date() };
+    try { await c.query("BEGIN"); await writeTransition(c, { via: "webhook", viewer: who, observations: [obs], sources: SOURCES }); await c.query("COMMIT"); }
+    finally { c.release(); }
+    assert.equal((await pool.query(`SELECT ${paidThroughSql("$1", "$2")} AS t`, [who, SOURCES])).rows[0].t, null, "a trial is not a paid period");
+    // The gift clock grantGift runs: GREATEST(now, last gift end, paid-through) — now, not the trial end.
+    const start = (await pool.query(
+      `SELECT GREATEST(now(), COALESCE(${paidThroughSql("$1", "$2")}, now())) AS t`, [who, SOURCES])).rows[0].t as Date;
+    assert.ok(new Date(start).getTime() < Date.now() + 60_000, "the gift starts now");
+    const entitled = (await pool.query(`SELECT u.matrix_id FROM site.users u WHERE u.matrix_id = $1 AND ${columnEntitledSql("u.matrix_id", "$2")}`, [who, SOURCES])).rows;
+    assert.equal(entitled.length, 1, "the trial record still entitles");
+  } finally {
+    await pool.query(`DELETE FROM site.subscription_records WHERE external_id = $1`, [`sub_${RUN}`]);
+    await pool.query(`DELETE FROM site.users WHERE matrix_id = $1`, [who]);
+    await pool.end();
+  }
+});

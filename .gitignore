@@ -26,7 +26,14 @@ id_ed25519*
 # local working notes / harness state — never track
 # (⚠ this also un-tracks .claude/hooks/, which gate turn completion and
 # hand-list build gates. They can drift from package.json with no diff.)
-.claude/
+# EXCEPT .claude/agents/: the reviewer + builder definitions and the review-gate
+# trigger list are the deploy procedure (ENGINEERING-STANDARD §5, 2026-10-22).
+.claude/*
+!.claude/agents/
+# …and .claude/rules/: path-scoped project rules (load when a matching file is read or edited).
+!.claude/rules/
+# …and .claude/settings.json: project plugin switches (supabase, code-modernization, playwright OFF here — they compete with our Postgres rules, run hooks on every turn, or duplicate chrome-devtools).
+!.claude/settings.json
 .superpowers/
 
 # Browser-test output (Playwright MCP screenshots + page snapshots) and loose

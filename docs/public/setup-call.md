@@ -1,4 +1,4 @@
-# The paid setup call — checklist
+# The paid setup call: checklist
 
 A streamer can install Black Branch alone from [install.md](install.md), or pay one of the team for a
 setup call: we install it **with** them, on **their** server, and at the end they own and run it. This
@@ -15,7 +15,7 @@ never takes a copy of any of them.
 - [ ] The front door is chosen: a free Cloudflare account with the domain on it (tunnel), or the
       server's ports 80 and 443 open (direct).
 - [ ] They are signed in, in their own browser, to every account the site will use: Twitch, Kick,
-      YouTube/Google, Stripe, PayPal, Ko-fi/Patreon/Streamlabs — whichever apply. Two-factor sign-in is
+      YouTube/Google, Stripe, PayPal, Ko-fi/Patreon/Streamlabs, whichever apply. Two-factor sign-in is
       on for Twitch and Kick (the developer consoles require it).
 - [ ] They have somewhere safe, off the server, to keep the recovery sheet (a password manager is
       ideal).
@@ -37,14 +37,18 @@ never takes a copy of any of them.
 4. [ ] The streamer opens the setup link in their own browser and makes their account (page 1).
 5. [ ] **Recovery sheet:** the streamer saves the backup passphrase in their password manager now, and
        ticks the box only after it is saved. Explain: without it no backup can ever be read.
-6. [ ] Your site, Points: their words, their legal details (who runs the site, a contact address).
-7. [ ] Modules: switch on only what they will use today; everything can be added later.
+6. [ ] Your site, Points: their words, their legal details (who runs the site, a contact address),
+       their time zone from the list, and the site icon if they have one.
+7. [ ] Modules: switch on only what they will use today; everything can be added later. OBS is set
+       up after setup, in Admin Panel → Utility → OBS and → Overlays.
 8. [ ] Each platform and payment page: open the provider's page from the link on the setup page, paste
-       the values it shows, fill the fields, press **Test** until it passes. Stripe: make the
-       **restricted** key with exactly the listed permissions — never the full secret key. Behind
-       Cloudflare, add the skip rule for Stripe's webhook (the Stripe page shows how).
+       the values it shows, fill the fields, press **Check** on each value until it passes. Stripe: make the
+       **restricted** key with exactly the listed permissions, never the full secret key. Behind
+       Cloudflare on the Free plan, turn Bot Fight Mode off, because no rule can let Stripe's webhook
+       past it. On Pro or higher, use Super Bot Fight Mode with a skip rule for `/api/billing/webhook`
+       (the Stripe page shows how).
 9. [ ] Community: create the space, `#general` and `#forum`. Leave federation off unless they ask for it.
-10. [ ] Finish: the quiet hour (a time they are never live — security updates run then), backups to a
+10. [ ] Finish: the quiet hour (a time they are never live: security updates run then), backups to a
         bucket or another server if they have one, and wait for the test backup to pass.
 11. [ ] Sign in on the site; post in site chat and in `#general`; check the site's name.
 12. [ ] Open the Doctor together (`sudo blackbranch doctor`, or Admin Panel → Doctor). Go through every
@@ -57,7 +61,7 @@ never takes a copy of any of them.
       button), how to reset a password.
 - [ ] They know where `.env` is (`/opt/blackbranch/.env`) and that it holds every secret: back it up
       off the server with the recovery sheet, never share it.
-- [ ] They know how to get help: a setup-help issue, with `blackbranch doctor --report` attached (it
+- [ ] They know how to get help: the Discord or a setup-help issue, with `sudo blackbranch doctor --report` attached (it
       holds no secrets).
 - [ ] Sign out of the server. If you were given a temporary account or an SSH key, remove it while
       they watch (`sudo deluser <name>`, or the key's line in `~/.ssh/authorized_keys`).

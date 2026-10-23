@@ -271,9 +271,9 @@ export default function LockdownSection({ note }: { note: (m: string) => void })
           label="Cross-posting"
           on={crosspost}
           busy={busy || state === null}
-          // Names the actual risk. Without this the lever reads as a chat nicety rather than "we
-          // are a megaphone pointed at four platforms".
-          detail={`Blocks sending to Twitch/Kick/Streamplace/YouTube. Messages still post on ${siteName()}.`}
+          // Names the actual risk: site chat sent on to the platforms. YouTube is not one of them
+          // (posting into YouTube chat is a later release).
+          detail={`Stops site chat being sent on to Twitch, Kick and Streamplace. Messages still post on ${siteName()}.`}
           onToggle={() => apply(
             { crosspostDisabled: !crosspost },
             !crosspost ? "Cross-posting to platforms is now BLOCKED." : "Cross-posting re-enabled.",

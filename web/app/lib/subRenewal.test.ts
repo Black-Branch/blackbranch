@@ -52,3 +52,14 @@ test("tenure floors at two — a cycle invoice means the first AND this one were
   assert.equal(tenureMonths(7), 7);
   assert.equal(tenureMonths(NaN), 2);
 });
+
+// A subscription that started with a trial (a card bought during a gift: checkout's trial_end) has a
+// $0 "paid" trial invoice first, and its first REAL charge is a subscription_cycle invoice — so a
+// cycle invoice means only that this one was paid, and the trial invoice is not a month.
+test("tenure after a trial: the $0 trial invoice is not a month, and the first charge is month one", () => {
+  assert.equal(tenureMonths(2, true), 1, "trial invoice + first charge = 1 month");
+  assert.equal(tenureMonths(3, true), 2);
+  assert.equal(tenureMonths(0, true), 1, "a failed listing still announces month one, never 0");
+  assert.equal(tenureMonths(NaN, true), 1);
+  assert.equal(tenureMonths(2, false), 2, "no trial: unchanged");
+});

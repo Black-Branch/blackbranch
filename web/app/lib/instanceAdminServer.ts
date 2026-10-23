@@ -22,6 +22,7 @@ import { instanceResolve, lastFour } from "./instanceConfigServer";
 import { INSTANCE_KEYS, instanceEntry, normalizeCheckResult, describeCheck, runProviderCheck, parseInstanceValue } from "./instanceSchema.generated.mjs";
 import { sameOriginRequest, buildInstanceView, type InstanceView, type StreamApiSnapshot } from "./instanceAdminView";
 import { buildAiView, type AiView, type AiRoutesSnapshot, type ContentSnapshot } from "./aiAdminView";
+import { findDerivedId, idsFoundFrom } from "./derivedIds";
 
 /** The signed-in admin's Matrix id, or the Response to return. */
 export async function requireAdminResponse(): Promise<string | Response> {
@@ -183,6 +184,23 @@ export async function writeInstanceValue(key: string, value: unknown, updatedBy:
   const parsed = parseInstanceValue(e, value);
   if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
   return forward(`/config/${encodeURIComponent(key)}`, "PUT", { value: parsed.value, updatedBy });
+}
+
+/** After `saved` changed (one key or several): find again each platform id that comes from it (derivedIds.ts), and save
+ *  the one found when it differs. → what happened to each, for the page's note. */
+export async function refindDerivedIds(saved: string | readonly string[], updatedBy: string): Promise<{ key: string; ok: boolean; id?: string; why?: string }[]> {
+  const out: { key: string; ok: boolean; id?: string; why?: string }[] = [];
+  for (const idKey of new Set((typeof saved === "string" ? [saved] : saved).flatMap(idsFoundFrom))) {
+    const get = (k: string) => instanceResolve(k).value;
+    const r = await findDerivedId(idKey, get, runProviderCheck as never, fetch);
+    if (!r.ok) { out.push({ key: idKey, ok: false, why: r.why }); continue; }
+    if (String(get(idKey) ?? "") !== r.id) {
+      const w = await writeInstanceValue(idKey, r.id, updatedBy);
+      if (w.status !== 200) { out.push({ key: idKey, ok: false, why: "found, but could not be saved" }); continue; }
+    }
+    out.push({ key: idKey, ok: true, id: r.id });
+  }
+  return out;
 }
 
 export async function clearInstanceValue(key: string, updatedBy: string): Promise<{ status: number; body: unknown }> {

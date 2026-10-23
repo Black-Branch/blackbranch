@@ -45,6 +45,9 @@ const fill = (v) => v.replace(/\{([a-zA-Z]+)\}/g, (_, k) => EXAMPLE[k] ?? `{${k}
  * Every setup list the public docs describe: each product module that has one, then the core lists.
  * @returns {{ id: string, label: string, description: string, kind: "module" | "core", release: string, defaultOn?: boolean, steps: any[] }[]}
  */
+// Where each module's switch sits in the Admin Panel (web/app/features/instance/adminLayout.ts).
+const SWITCH_PLACE = { obs: "Utility → OBS", youtube: "Platforms → YouTube", stripe: "Payments → Connections", paypal: "Payments → Connections" };
+
 export function setupLists() {
   const modules = MODULES.filter((m) => m.kind === "module" && Array.isArray(m.setup)).map((m) => ({
     id: m.id, label: m.label, description: m.description, kind: /** @type {const} */ ("module"),
@@ -71,7 +74,7 @@ export function renderPage(list) {
   if (list.release === "later") lines.push("> This part arrives in a later release.", "");
   if (list.kind === "module") {
     lines.push(
-      `This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel → Site → Modules${list.defaultOn ? "" : " — it is off on a new install"}. Its setup page then appears with the steps below.`,
+      `This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel, at the top of its own page (${SWITCH_PLACE[list.id] ?? "its own page"})${list.defaultOn ? "" : ". It is off on a new install"}. Its setup steps are below.`,
       "",
     );
   } else {

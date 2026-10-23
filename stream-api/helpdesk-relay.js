@@ -16,6 +16,10 @@
 // helpdesk.enabled is on and the task resolves (stream-ingest/lib/helpdesk).
 const BRAIN_SEEN_MS = 90_000;
 
+// What a poll gets while this process is going away: no job, and the reason (the help desk in
+// stream-ingest stays quiet about the closed port that follows).
+const RESTARTING = Object.freeze({ restarting: true });
+
 function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQueue = 20, now = () => Date.now() } = {}) {
   const queue = [];            // jobs waiting for the brain
   const pending = new Map();   // requestId -> { res, timer } — held web responses
@@ -69,9 +73,10 @@ function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQu
   }
 
   function next(res) {
-    // Draining: reply empty so the brain re-polls against the NEW process instead
-    // of parking a 25s request on a socket this one is trying to close.
-    if (draining) { res.json({}); return; }
+    // Draining: reply at once, saying so, so the brain re-polls against the NEW process instead
+    // of parking a 25s request on a socket this one is trying to close, and does not log the
+    // closed port in between as an error.
+    if (draining) { res.json(RESTARTING); return; }
     brainSeenAt = now();
     const job = queue.shift();
     if (job) { deliver(job, res); return; }
@@ -129,9 +134,9 @@ function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQu
   // Without this, every restart waits out the poll — most of the 30s grace, a
   // dark site meanwhile.
   //
-  // The brain gets the same empty body its poll timeout would have produced, so
-  // it simply polls again against the new process. Held web asks get 503 rather
-  // than being left to hang until the browser gives up.
+  // The brain gets no job and { restarting: true }, so it polls again against the new
+  // process and treats the closed port in between as the restart, not a failure. Held web
+  // asks get 503 rather than being left to hang until the browser gives up.
   function release() {
     // Latch: after this, no caller may park a NEW socket. Without the latch the
     // brain answers its released poll by immediately re-polling, which parks a
@@ -141,7 +146,7 @@ function createSupportRelay({ askTimeoutMs = 30000, pollTimeoutMs = 25000, maxQu
       const w = waiter;
       waiter = null;
       clearTimeout(w.timer);
-      try { w.res.json({}); } catch { void 0; }
+      try { w.res.json(RESTARTING); } catch { void 0; }
     }
     for (const held of pending.values()) {
       clearTimeout(held.timer);

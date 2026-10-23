@@ -65,10 +65,10 @@ Everything optional is a module, off until you switch it on.
 On the server, signed in as your ordinary user:
 
 ```bash
-curl -fsSL https://blackbranch.app/install-beta.sh | sudo bash
+curl -fsSL https://blackbranch.app/install.sh | sudo bash
 ```
 
-This fetches the newest preview release, checks it against the checksum written into the script, and
+Until the first stable release, this installs the beta. It fetches the newest preview release, checks it against the checksum written into the script, and
 runs the installer from it (read a script before you pipe it into a root shell). It asks two
 questions — the domain, and Cloudflare tunnel or direct — then installs Docker if it is missing,
 generates every secret, downloads the site's prebuilt image and starts everything. It ends by

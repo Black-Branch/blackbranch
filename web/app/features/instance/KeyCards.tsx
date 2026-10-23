@@ -18,8 +18,16 @@ import { card, h2, btn, input, chip, ago, Fold } from "./parts";
 import {
   splitHint, pendingRestarts, desiredSwitch, currentList, listAdd, listRemove, draftOf, hostApplyState, MANAGED_ELSEWHERE,
 } from "./keyRowText";
-import { serviceName, type KeyGroup } from "./adminLayout";
+import { serviceName, shownKeys, type KeyGroup } from "./adminLayout";
 import { keyInstalled } from "@/app/lib/plugins/installed";
+import { DERIVED_IDS } from "@/app/lib/derivedIds";
+import { FACES } from "@/app/lib/boardFaces";
+
+type FoundId = { key: string; ok: boolean; id?: string; why?: string };
+/** What a save found of the platform ids behind it, in words for the note. */
+function foundWords(found: FoundId[] | undefined): string {
+  return (found ?? []).map((f) => (f.ok ? ` Its id ${f.id} was found and saved.` : ` Its id was not found: ${f.why}.`)).join("");
+}
 
 type KeyView = InstanceView["keys"][number];
 type Render = InstanceView["render"];
@@ -79,15 +87,42 @@ function HostApplyLine({ k, render, onChanged }: { k: KeyView; render: Render; o
   return <p className="mt-1 text-xs text-secondary" data-host-apply="applied">Applied by the server {ago(st.at)}.</p>;
 }
 
-function KeyRow({ k, onChanged, note, bundle, render }: {
+/** Choices a plain text setting is picked from rather than typed (the time zone is a name the
+ *  site must know). Read in the browser, which has the same list the server checks against. */
+function choicesFor(key: string): string[] | null {
+  if (key !== "site.timeZone") return null;
+  try { return Intl.supportedValuesOf("timeZone"); } catch { return null; }
+}
+
+/** A list of things switched OFF, shown as one switch per thing (on = offered): the words for each. */
+const OFF_LISTS: Record<string, Record<string, string>> = {
+  "player.embedsOff": { native: "The site's own player", streamplace: "Streamplace", youtube: "YouTube", twitch: "Twitch" },
+  // Each board by the name Home shows it under.
+  "leaderboard.hidden": Object.fromEntries(FACES.map((f) => [f.id, f.label])),
+};
+
+/** Plain words for a choice's stored values, where the value itself reads as jargon. */
+const VALUE_WORDS: Record<string, Record<string, string>> = {
+  "matrix.registration": { open: "Yes", closed: "No" },
+};
+
+function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnlyNote }: {
   k: KeyView; onChanged: () => void; note: (m: string) => void; bundle: boolean; render: Render;
+  /** Shown with its value and a lock, never edited here (the Install values card). */
+  readOnly?: boolean;
+  /** The card's own line for a read-only row, in place of how to set it on the server. */
+  readOnlyNote?: string;
 }) {
   // A plain setting starts from its value; a credential and a list's "add" box start empty.
   const [draft, setDraft] = useState(() => (k.secret || k.kind === "list" ? "" : draftOf(k)));
   const [busy, setBusy] = useState(false);
   // A setting the host applies, on a homeserver the bundle does not run: nothing here reaches it.
   const managedOutside = k.hostApplied && !bundle;
-  const editable = k.tier !== "install" && !managedOutside;
+  // A platform id the site finds from its channel: shown, never typed.
+  const derived = DERIVED_IDS[k.key];
+  const editable = k.tier !== "install" && !managedOutside && !readOnly && !derived;
+  const locked = k.tier === "install" || readOnly || !!derived;
+  const choices = k.kind === "string" ? choicesFor(k.key) : null;
   const envOver = k.packages.filter((p) => p.envOverrides).map((p) => serviceName(p.package));
   const list = k.kind === "list" ? currentList(k) : [];
   const start = k.secret || k.kind === "list" ? "" : draftOf(k);
@@ -105,8 +140,8 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
     setBusy(true);
     try {
       const res = await postJson(`/api/admin/instance/${encodeURIComponent(k.key)}`, { value }, "PUT");
-      const j = (await res.json().catch(() => ({}))) as { error?: string };
-      if (res.ok) { note(`${k.label}: ${done}`); onChanged(); return true; }
+      const j = (await res.json().catch(() => ({}))) as { error?: string; found?: FoundId[] };
+      if (res.ok) { note(`${k.label}: ${done}${foundWords(j.found)}`); onChanged(); return true; }
       note(`${k.label}: ${j.error ?? "not saved"}`);
     } catch { note(`${k.label}: not saved (network)`); }
     finally { setBusy(false); }
@@ -123,6 +158,11 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
     if (await put(raw, "saved.") && k.secret) setDraft("");
   }
   const remove = (item: string) => void put(listRemove(list, item), `${item} removed.`);
+  const offWords = OFF_LISTS[k.key];
+  const flipItem = (item: string) => {
+    const on = !list.includes(item);
+    void put(on ? [...list, item] : list.filter((x) => x !== item), `${offWords?.[item] ?? item} ${on ? "off" : "on"}.`);
+  };
   async function clear() {
     setBusy(true);
     try {
@@ -131,6 +171,17 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
       note(res.ok ? `${k.label}: saved value removed.` : `${k.label}: ${j.error ?? "not removed"}`);
       if (res.ok) onChanged();
     } catch { note(`${k.label}: not removed (network)`); }
+    finally { setBusy(false); }
+  }
+  async function find() {
+    setBusy(true);
+    try {
+      const res = await postJson(`/api/admin/instance/${encodeURIComponent(k.key)}/find`);
+      const j = (await res.json().catch(() => ({}))) as { error?: string; found?: FoundId[] };
+      const f = j.found?.[0];
+      note(`${k.label}: ${!res.ok ? j.error ?? "not found" : f?.ok ? `found ${f.id}${f.id === String(k.packages[0]?.display ?? "") ? " (unchanged)" : ", saved"}.` : `not found: ${f?.why ?? "no answer"}.`}`);
+      if (res.ok && f?.ok) onChanged();
+    } catch { note(`${k.label}: not found (network)`); }
     finally { setBusy(false); }
   }
   async function test() {
@@ -168,20 +219,38 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
             <span aria-hidden="true">🔒 </span>Managed outside Black Branch
           </span>
         )}
-        {k.tier === "install" && (
-          <span className="min-w-0 text-xs text-secondary break-all">
+        {derived && <button type="button" className={btn} disabled={busy} onClick={() => void find()} data-find-id>Find again</button>}
+        {locked && (
+          <span className="min-w-0 text-xs text-secondary break-all" data-locked-value>
             <span aria-hidden="true">🔒 </span>{emptyEverywhere(k) ? "not set" : shown(webView?.display)}
           </span>
         )}
       </div>
       {hint && <p className="mt-0.5 text-xs text-secondary">{hint}</p>}
+      {derived && <p className="mt-0.5 text-xs text-muted" data-derived-from>Found from the channel when it is saved.</p>}
       {managedOutside && (
         <p className="mt-0.5 text-xs text-muted">
           This install&apos;s homeserver is not run by the bundle, so this switch would change nothing. {MANAGED_ELSEWHERE[k.key] ?? "Change it in the homeserver's own config."}
         </p>
       )}
 
-      {editable && k.kind === "list" && (
+      {editable && offWords && (
+        <ul className="mt-2 space-y-1.5" aria-label={k.label} data-off-list>
+          {(k.values ?? Object.keys(offWords)).map((item) => {
+            const on = !list.includes(item);
+            // The last one on stays on: switching every one off is ignored by the page that reads it.
+            const last = on && (k.values ?? []).every((v) => v === item || list.includes(v));
+            return (
+              <li key={item} className="flex items-center gap-2 text-xs text-body" data-item={item}>
+                <Toggle on={on} onToggle={() => flipItem(item)} disabled={busy || last} label={offWords[item] ?? item} />
+                <span>{offWords[item] ?? item}</span>
+                {last && <span className="text-muted">the last one on stays on</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {editable && k.kind === "list" && !offWords && (
         <ul className="mt-2 flex flex-wrap items-center gap-1.5" aria-label={`${k.label} now`}>
           {list.length === 0 && <li className="text-xs text-muted">None yet.</li>}
           {list.map((item) => (
@@ -193,14 +262,14 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
         </ul>
       )}
 
-      {editable && k.kind !== "bool" && (
+      {editable && k.kind !== "bool" && !offWords && (
         // A form (not a div) so Enter saves, and password managers see a real form — but it
         // never posts natively: onSubmit always prevents it and goes through save().
         <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(ev) => { ev.preventDefault(); void save(); }}>
-          {k.kind === "enum" ? (
+          {k.kind === "enum" || choices ? (
             <select className={input} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label={`${k.label}`}>
-              {start === "" && <option value="">not set — choose…</option>}
-              {(k.values ?? []).map((v) => <option key={v} value={v}>{v}</option>)}
+              {start === "" && <option value="">not set, choose…</option>}
+              {(choices ?? k.values ?? []).map((v) => <option key={v} value={v}>{VALUE_WORDS[k.key]?.[v] ?? v}</option>)}
             </select>
           ) : (
             <input
@@ -217,7 +286,7 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
           )}
           <button type="submit" className={btn} disabled={busy || !changed}>{k.kind === "list" ? "Add" : "Save"}</button>
           {k.stored && <button type="button" className={btn} disabled={busy} onClick={clear}>Clear saved</button>}
-          {k.testable && <button type="button" className={btn} disabled={busy} onClick={test}>Test</button>}
+          {k.testable && <button type="button" className={btn} disabled={busy} onClick={test}>Check</button>}
         </form>
       )}
 
@@ -237,7 +306,7 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
         {rest && <p className="text-xs text-secondary">{rest}</p>}
         <p className="text-2xs text-muted"><span className="font-mono break-all">{k.key}</span></p>
         {/* A setting a service takes when it starts: when it takes effect in each one that reads it. */}
-        {k.reload === "restart" && k.tier !== "install" && !managedOutside && (
+        {k.reload === "restart" && !locked && !managedOutside && (
           <ul className="space-y-0.5 text-xs text-secondary" aria-label="When it applies">
             {k.packages.map((p) => {
               const stale = pendingRestarts([{ ...k, packages: [p] }]).length > 0;
@@ -276,11 +345,15 @@ function KeyRow({ k, onChanged, note, bundle, render }: {
               ))}
           </p>
         )}
+        {readOnly && readOnlyNote && <p className="text-xs text-muted" data-readonly-note>🔒 {readOnlyNote}</p>}
+        {readOnly && !readOnlyNote && k.tier !== "install" && (
+          <p className="text-xs text-muted" data-install-row>🔒 Made when the site was installed. To change it, set <span className="font-mono">{k.envNames[0] ?? k.key}</span> on the server, then restart the site.</p>
+        )}
         {k.tier === "install" && (
           // An install key: by design not editable here.
           <div className="space-y-0.5 text-xs text-muted" data-install-row>
             {k.packages.some((p) => p.package === "web") ? (
-              <p>🔒 Set in the website&apos;s environment, so it can&apos;t be changed here. To change it: set <span className="font-mono">{k.envNames[0]}</span> there (on a bundled install: <span className="font-mono">blackbranch set {k.envNames[0]} …</span>, for the display values), then restart the website.</p>
+              <p>🔒 Set in the website&apos;s environment, so it can&apos;t be changed here. To change it: set <span className="font-mono">{k.envNames[0]}</span> there (on a bundled install: <span className="font-mono">sudo blackbranch set {k.envNames[0]} …</span>, for the display values), then restart the website.</p>
             ) : (
               // A server-only install key (an address a credential is sent to): never edited here.
               <p>🔒 Set on the server only, so it can&apos;t be changed here. To change it: set <span className="font-mono">{k.envNames[0]}</span> in the {k.packages.map((p) => serviceName(p.package)).join(" and ")}&apos;s environment, then restart it.</p>
@@ -315,7 +388,7 @@ function PendingRestart({ pending, canRestart, note }: { pending: ReturnType<typ
           <span><span className="first-letter:uppercase inline-block">{serviceName(p.service)}</span> still runs the old value of {p.labels.join(", ")}.</span>
           {canRestart
             ? <button type="button" className={btn} disabled={busy} onClick={() => void restart(p.service)}>Restart the {serviceName(p.service)}</button>
-            : <span className="text-amber-200/80">Restart it on the server: <span className="font-mono">blackbranch restart {p.service}</span> on a bundle install, else restart its service.</span>}
+            : <span className="text-amber-200/80">Restart it on the server: <span className="font-mono">sudo blackbranch restart {p.service}</span> on a bundle install, else restart its service.</span>}
         </div>
       ))}
     </div>
@@ -336,18 +409,25 @@ export default function KeyCards({ view, groups, onChanged, note, placeLabel }: 
   return (
     <>
       {groups.map((g) => {
-        // A key of an owner-only module this install does not have is not shown.
-        const keys = g.keys.filter(keyInstalled).map((key) => view.keys.find((k) => k.key === key)).filter((k): k is KeyView => !!k);
+        const keys = shownKeys(g, view.keys, keyInstalled);
         if (!keys.length) return null;
-        return (
-          <section key={g.title} className={card} aria-label={g.title}>
-            <h2 className={h2} data-repeats-place={g.title === placeLabel ? "" : undefined}>{g.title}</h2>
+        const title = <h2 className={h2} data-repeats-place={g.title === placeLabel ? "" : undefined}>{g.title}</h2>;
+        const body = (
+          <>
             {g.blurb && <p className="mt-0.5 text-xs text-muted">{g.blurb}</p>}
-            {(() => { const pend = pendingRestarts(keys); return pend.length ? <PendingRestart pending={pend} canRestart={view.canRestart === true} note={note} /> : null; })()}
+            {!g.readOnly && (() => { const pend = pendingRestarts(keys); return pend.length ? <PendingRestart pending={pend} canRestart={view.canRestart === true} note={note} /> : null; })()}
             <ul className="mt-3 space-y-3">
-              {keys.map((k) => <KeyRow key={rowKey(k)} k={k} onChanged={onChanged} note={note} bundle={bundle} render={view.render ?? null} />)}
+              {keys.map((k) => <KeyRow key={rowKey(k)} k={k} onChanged={onChanged} note={note} bundle={bundle} render={view.render ?? null} readOnly={g.readOnly} readOnlyNote={g.readOnlyNote} />)}
             </ul>
-          </section>
+          </>
+        );
+        return g.folded ? (
+          <details key={g.title} className={card} aria-label={g.title} data-folded-card>
+            <summary className="cursor-pointer select-none">{title}</summary>
+            {body}
+          </details>
+        ) : (
+          <section key={g.title} className={card} aria-label={g.title}>{title}{body}</section>
         );
       })}
     </>

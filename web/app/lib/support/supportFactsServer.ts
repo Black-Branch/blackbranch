@@ -7,7 +7,8 @@
 // 30 s, then "I can't reach my brain". Each fact below gates the answers that depend on it.
 //
 //   purchasable    points can be bought: the `currency.purchasable` switch AND a payment provider
-//   subscriptions  a usable Supporter price at Stripe (supporterPrice.ts)
+//   subscriptions  a subscription is for sale through EITHER provider: a usable Stripe Supporter
+//                  price or a PayPal plan PayPal prices (supporterPrice.ts subscriptionOffer)
 //   tts            stream-api speaks: GET /tts/status (contract 2) → enabled && keySet && voiceSet;
 //                  before that route exists (404), the saved `tts.enabled` switch
 //   freeText       a typed question gets an AI answer: GET /bot/support/status → { aiFreeText }
@@ -18,7 +19,7 @@ import { streamApiFetch } from "../streamApi.ts";
 import { instanceBool } from "../instanceConfigServer.ts";
 import { stripeConfigured } from "../stripe.ts";
 import { paypalConfigured } from "../paypalClient.ts";
-import { supporterPrice } from "../supporterPrice.ts";
+import { subscriptionOffer } from "../supporterPrice.ts";
 import type { SupportFacts } from "./flows.ts";
 
 const CACHE_MS = 30_000;
@@ -40,7 +41,7 @@ const realDeps: Deps = {
   fetch: (path) => streamApiFetch(path, { cache: "no-store" }, TIMEOUT_MS),
   bool: instanceBool,
   providerOn: () => stripeConfigured() || paypalConfigured(),
-  subscriptions: async () => (await supporterPrice()) !== null,
+  subscriptions: async () => (await subscriptionOffer()) !== null,
   now: () => Date.now(),
 };
 

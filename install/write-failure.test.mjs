@@ -62,12 +62,12 @@ test("apply-install: the copy kept for going back is written, then a value's wri
   const h = fakeHome();
   try {
     mkdirSync(path.join(h.home, "requests")); mkdirSync(path.join(h.home, "results"), { mode: 0o755 });
-    // .env 20 bytes under 4 KiB: its copy fits; the first value it gains does not.
-    padEnv(h, 4096 - 20);
+    // .env 20 bytes under 8 KiB: its copy fits; the first value it gains does not.
+    padEnv(h, 8192 - 20);
     writeFileSync(path.join(h.fake, "install.tsv"), "SITE_TAGLINE\tA tagline long enough to cross the limit\n");
     const before = h.env();
     writeFileSync(path.join(h.home, "requests/apply-install.req"), "");
-    const r = runLimited(h, 4, ["process-requests"]);
+    const r = runLimited(h, 8, ["process-requests"]);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(h.env(), before, ".env changed by a failed write");
     const res = result(h, "apply-install");

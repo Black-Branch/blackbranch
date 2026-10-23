@@ -10,10 +10,15 @@ import { escapeLeadingCommand } from "@/app/lib/outgoingText";
 import { getManifest } from "@/app/api/emotes/route";
 import { instanceString } from "@/app/lib/instanceConfigServer";
 import {
-  twitchSendOutcome, kickSendOutcome, kickErrorOutcome, httpUnavailable, youtubeErrorOutcome, thrownFailure,
-  kickKnownRefusal, kickForbiddenOutcome, bodyShape,
+  twitchSendOutcome, kickSendOutcome, refusalByClass, httpUnavailable, youtubeErrorOutcome, thrownFailure,
+  kickForbiddenOutcome, bodyShape,
   type Unavailable,
 } from "@/app/lib/sendDelivery";
+
+/** An answer body as JSON, or null when it is not JSON (then it carries no words to show). */
+function parseJson(text: string): unknown {
+  try { return JSON.parse(text); } catch { return null; }
+}
 
 // Instance keys, read per call (env first, then the stored values).
 const streamplaceDid = () => instanceString("platform.streamplace.did");
@@ -105,10 +110,14 @@ async function sendTwitch(
   });
 
   if (!res.ok) {
-    // 429/5xx: Twitch, not the viewer — logged rate-limited by the route.
+    const text = await res.text().catch(() => "");
+    // A 4xx in Twitch's own words is Twitch declining the message: the sender reads them.
+    const refusal = refusalByClass(res.status, parseJson(text));
+    if (refusal) return { ok: false, error: "refused", reason: refusal.reason };
+    // 429/5xx without words: Twitch, not the viewer — logged rate-limited by the route.
     const down = httpUnavailable("twitch", res.status);
     if (down) return { ok: false, ...down };
-    console.error("[platformChat:twitch]", res.status, await res.text().catch(() => ""));
+    console.error("[platformChat:twitch]", res.status, text);
     return { ok: false, error: "send_failed" };
   }
   // A 200 is not delivery: Helix answers is_sent:false (with a drop_reason) for a
@@ -217,27 +226,20 @@ async function sendKick(
     return { ok: false, error: "not_live" };
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let body: unknown = null;
-    try { body = JSON.parse(text); } catch { /* not JSON — a failure to reach it */ }
-    // A KNOWN refusal sentence first — a 429 can say "slow mode", which is the channel's mode,
-    // not Kick failing.
-    const known = kickKnownRefusal(body);
-    if (known) return { ok: false, error: "refused", reason: known };
-    // 429/5xx with no such sentence: Kick, not the viewer.
+    const body = parseJson(await res.text().catch(() => ""));
+    logKickShape(res.status, body);
+    // Any 4xx in Kick's own words is Kick declining the message — a 429 saying "slow mode" too.
+    const refusal = refusalByClass(res.status, body);
+    if (refusal) return { ok: false, error: "refused", reason: refusal.reason };
+    // 429/5xx without words: Kick, not the viewer.
     const down = httpUnavailable("kick", res.status);
-    if (down) { logKickShape(res.status, body); return { ok: false, ...down }; }
+    if (down) return { ok: false, ...down };
     // A bare 403 ("Forbidden"): followers-only on THIS channel, or not known (contract 10).
-    if (res.status === 403 && kickKnownRefusal(body) === null) {
+    if (res.status === 403) {
       const out = kickForbiddenOutcome(await kickFollowersOnly(slug ?? instanceString("platform.kick.slug")));
       if ("refused" in out) return { ok: false, error: "refused", reason: out.reason };
-      logKickShape(res.status, body);
       return { ok: false, ...out };
     }
-    logKickShape(res.status, body);
-    // A 4xx with a sentence is the channel declining the message.
-    const err = kickErrorOutcome(res.status, body);
-    if (err.refused) return { ok: false, error: "refused", ...(err.reason ? { reason: err.reason } : {}) };
     return { ok: false, error: "send_failed" };
   }
   // Kick's v1 chat POST returns { data: { is_sent, message_id } }; is_sent:false is a refusal.

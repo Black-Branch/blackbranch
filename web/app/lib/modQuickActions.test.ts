@@ -35,8 +35,8 @@ test("ONE menu component on both rows, its actions from the one helper", () => {
   const live = stripComments(read("app/features/chat/ChatMessage.tsx"));
   // The canonical comes from the mod lookup (useModIds): a live line carries only its public id.
   assert.match(live, /const modIds = useModIds\(msg, !!onModDelete\);/);
-  assert.match(live, /msg=\{onModDelete && msg\.id != null && !msg\.system \? \{ id: msg\.id, platform: msg\.platform, matrixId: msg\.matrixId, canonicalId: modIds\.canonicalId \} : undefined\}/,
-    "the live row hands the menu its message — mods only (onModDelete), real lines only");
+  assert.match(live, /msg=\{onModDelete && msg\.id != null && hasSender \? \{ id: msg\.id, platform: msg\.platform, matrixId: msg\.matrixId, canonicalId: modIds\.canonicalId \} : undefined\}/,
+    "the live row hands the menu its message — mods only (onModDelete), wherever there is a sender (a highlight card too)");
   const hist = stripComments(read("app/features/moderation/sections/ChatHistorySection.tsx"));
   assert.match(hist, /<MessageContextMenu[\s\S]{0,200}msg=\{\{ id: menu\.m\.id, platform: menu\.m\.platform, matrixId: menu\.m\.matrixId, canonicalId: menu\.m\.canonicalId \}\}/);
   assert.match(hist, /<MessageContextMenu[\s\S]{0,600}inModPanel/, "the Chat history's menu knows it is in the mod panel");

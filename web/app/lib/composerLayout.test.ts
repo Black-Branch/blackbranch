@@ -242,8 +242,8 @@ test("exactly the excepted controls survive while composing", () => {
   // tall, and clicking back in with text expands it again.
   assert.match(input, /const composing = focused && input\.trim\(\)\.length > 0;/,
     "expansion must require focus AND text");
-  assert.match(input, /onFocus=\{\(\) => setFocused\(true\)\}/, "focus must be tracked");
-  assert.match(input, /onBlur=\{\(\) => setFocused\(false\)\}/, "and released on blur");
+  assert.match(input, /onFocus=\{onFieldFocus\}/, "focus must be tracked (useComposerFocus)");
+  assert.match(input, /onBlur=\{onFieldBlur\}/, "and released on blur");
   assert.match(input, /collapsed=\{composing\}/, "the tools control folds");
   // The destination folds first. (The terminal's `>_` lives on the chat's top bar —
   // ChatTabBar.tsx, chatTakeover.test.ts.)

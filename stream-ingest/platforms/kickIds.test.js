@@ -50,15 +50,15 @@ test('both lookups refused: the error names the two settings and where to read t
   } finally { console.warn = realWarn; }
   assert.equal(r.ids, null);
   assert.equal(r.error, KICK_IDS_HELP);
-  assert.match(r.error, /"Kick chatroom id" and "Kick channel id"/);
+  assert.match(r.error, /"Kick chatroom id" to chatroom\.id, "Kick channel id" to id/);
   assert.equal(lines.length, 2, lines.join('\n'));
-  assert.match(lines[1], /Kick refused the chatroom lookup/, 'the journal says the fix too');
+  assert.match(lines[1], /Kick refused the lookup\. Open kick\.com\/api\/v2\/channels\//, 'the journal says the fix too');
   assert.doesNotMatch(lines.join('\n') + r.error, /\.env/);
 });
 
 test('no browser to retry in: said, beside the settings to set', async () => {
   const r = await resolveIds('casey-test', { get: settings({}), viaApi: refuse('HTTP 403'), viaBrowser: refuse('browser missing: Executable doesn\'t exist at /x') });
-  assert.match(r.error, /^Kick refused the chatroom lookup .*; no browser to retry in$/);
+  assert.match(r.error, /^Kick refused the lookup\. .*; no browser to retry in$/);
 });
 
 test('keyless live status: kick.com refusing = unknown, said once per episode, with the fix', async () => {

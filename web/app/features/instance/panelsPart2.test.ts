@@ -35,13 +35,13 @@ test("the moved places are in the Admin Panel, once each", () => {
   }
   // Timer, Support bar and Effects are OBS's own places (nested under it).
   const util = adminRail([]).filter((x) => x.section === "utility");
-  assert.deepEqual(util.map((x) => [x.sub, x.depth]), [["obs", 0], ["timer", 1], ["bar", 1], ["effects", 1], ["tts", 0], ["overlays", 0]]);
+  assert.deepEqual(util.map((x) => [x.sub, x.depth]), [["obs", 0], ["timer", 1], ["bar", 1], ["effects", 1], ["tts", 0]]);
   const panel = stripComments(read("app/features/instance/AdminPanel.tsx"));
   for (const [cond, el] of [
     ['section === "payments" && sub === "history"', '<PaymentHistory onSetup={() => go("payments/connections")} />'],
     ['section === "utility" && sub === "timer"', "<TimerControls note={note} />"],
-    ['section === "utility" && sub === "bar"', "<SupportBarControls note={note} />"],
-    ['section === "utility" && sub === "effects"', "<EffectsControls note={note} />"],
+    ['section === "utility" && sub === "bar"', '<><SupportBarControls note={note} /><OverlayAddresses ids={["support-bar"]} /></>'],
+    ['section === "utility" && sub === "effects"', '<><EffectsControls note={note} /><OverlayAddresses ids={["alert"]} /></>'],
     ['section === "site" && sub === "badges"', "<BadgesAdmin />"],
     ['section === "site" && sub === "tickets"', "<SupportTickets note={note} />"],
   ]) assert.ok(panel.includes(`if (${cond}) return ${el};`), `${cond} renders ${el}`);
@@ -112,7 +112,7 @@ test("a place switch is client state + pushState, never a router navigation", ()
   assert.doesNotMatch(panel, /router\.push|useRouter/);
   assert.match(panel, /if \(syncUrl\) window\.history\.pushState\(null, "", adminHref\(it\)\);/);
   assert.match(panel, /window\.addEventListener\("popstate", onPop\);/);
-  assert.match(raw, /<KeyCards view=\{inst\} groups=\{keyGroupsFor\(section, sub, inst\.ownerPlugin !== false\)\} onChanged=\{loadInst\} note=\{note\} placeLabel=\{item\.label\} \/>\s*<\/>\s*\);\s*\}\s*$/, "read to its end");
+  assert.match(raw, /<KeyCards view=\{inst\} groups=\{groups\.filter\(\(g\) => !isSwitch\(g\)\)\} onChanged=\{loadInst\} note=\{note\} placeLabel=\{item\.label\} \/>\s*<\/>\s*\);\s*\}\s*$/, "read to its end");
 });
 
 test("the pages render the same windows, never a bare page of links", () => {
@@ -141,4 +141,14 @@ test("Mod history: shows 8, then 16, then pages of 16, with a search", () => {
   const route = stripComments(read("app/api/mod/log/route.ts"));
   assert.match(route, /LIMIT \$1 OFFSET \$2/);
   assert.match(route, /COALESCE\(l\.reason, ''\) ILIKE '%' \|\| \$\$\{n\}::text \|\| '%'/);
+});
+
+test("the panel shell has no pinned service strip at the top: those facts are the Doctor's rows", () => {
+  const raw = read("app/features/instance/AdminPanel.tsx");
+  // Vacuity: the whole file was read (it ends with the place's last return).
+  assert.match(raw, /\s*<\/>\s*\);\s*\}\s*$/);
+  assert.doesNotMatch(stripComments(raw), /ProcessStrip|inst\.processes|aria-label="Service state"/);
+  assert.doesNotMatch(stripComments(read("app/features/instance/parts.tsx")), /ProcessStrip/);
+  // The same facts stay in the Doctor: each service answers and has loaded the saved settings.
+  assert.match(read("../config/doctor.mjs"), /answers, saved settings loaded/);
 });

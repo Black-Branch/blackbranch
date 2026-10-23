@@ -291,6 +291,25 @@ test("subscriptions are described only when a subscription price is set", () => 
   assert.match(render(EVERYTHING), /a customer or payment identifier and your subscription status/);
 });
 
+test("a site that sells subscriptions through PayPal only states the subscription terms (renewal, cancelling, refunds), and no gift subscriptions", () => {
+  const html = render({ ...DEFAULT, paypal: true, subscriptions: true });
+  assert.ok(html.length > 8000, "vacuity: the page rendered");
+  assert.match(html, /Subscriptions<\/strong> renew automatically each billing period until cancelled\./);
+  assert.match(html, /Subscriptions:<\/strong> you can cancel at any\s+time/);
+  assert.match(html, /a customer or payment identifier and your subscription status/);
+  assert.doesNotMatch(html, /Gift subscriptions/, "gifts are card checkouts: none without Stripe");
+  // Nothing changes without a plan.
+  assert.doesNotMatch(render({ ...DEFAULT, paypal: true, subscriptions: false }), /renew automatically|subscription status/);
+});
+
+test("wiring: the legal facts read subscriptions from either provider's settings", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./legalFactsServer.ts", import.meta.url), "utf8");
+  assert.match(src.trimEnd(), /\}$/, "vacuity anchor: read to the end");
+  assert.match(src, /subscriptions: subscriptionsSetUp\(\),/);
+  assert.doesNotMatch(src, /subscriptions: !!TIERS\.supporter\.priceId/);
+});
+
 test("a switched-on feature whose task has no model is not claimed", () => {
   const facts = legalFactsFrom({ ...DEFAULT, cfg: snapshot({ "automod.enabled": true, "memory.enabled": true }) });
   assert.equal(facts.ai.automod, false);

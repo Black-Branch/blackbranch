@@ -10,7 +10,7 @@ The addresses below are for a site at `example.com`; your setup page shows your 
 
 ## 1. Your stream.place account
 
-Paste your account's DID (did:plc:…, shown on your Bluesky or stream.place profile settings) and the handle the player opens. There is no app to register: stream.place reads this site's own sign-in description at the first address below, and sends people back to the second. The Test finds the account and fetches that description.
+Paste your handle, as in you.bsky.social, without the @. When you save, the site finds your account's DID (did:plc:…) from it. There is no app to register: stream.place reads this site's own sign-in description at the first address below, and sends people back to the second. Check finds the account and fetches that description.
 
 Links:
 
@@ -25,7 +25,4 @@ Copy into the provider's page:
 
 This step fills:
 
-- **Streamplace account**. The streamer's stream.place DID (did:plc:…) — the player and its chat.
 - **Streamplace handle**. The handle the Streamplace player opens.
-
-Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.

@@ -360,7 +360,7 @@ test("the platform senders treat is_sent:false as a refusal", () => {
   const chat = stripComments(readFileSync(new URL("./platformChat.ts", import.meta.url), "utf8"));
   assert.equal((chat.match(/if \(!outcome\.sent\) return \{ ok: false, error: "refused"/g) ?? []).length, 2,
     "both Twitch and Kick map a dropped message to `refused`");
-  assert.match(chat, /const err = kickErrorOutcome\(res\.status, body\);/);
+  assert.match(chat, /const refusal = refusalByClass\(res\.status, body\);/);
   // END anchor.
   assert.match(chat.trimEnd(), /\n\}$/);
 });

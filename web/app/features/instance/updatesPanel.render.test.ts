@@ -58,3 +58,13 @@ test("while the stream is live, Apply is held back and the page says why", async
   assert.match(el.querySelector("[data-live-hold]")?.textContent ?? "", /The stream is live: an update takes the site down for a few minutes, so Apply waits until the stream ends\./);
   await unmount();
 });
+
+test("the release on offer shows its notes from the signed feed (the host's check carries them through)", async () => {
+  current = viewOf(false);
+  current.check.available.notes = "Fixes the player.\nAdds a Leaderboard switch.";
+  const { el, unmount } = await mount();
+  assert.ok(el.textContent?.includes("Fixes the player."), "the first line of the notes");
+  assert.ok(el.textContent?.includes("Adds a Leaderboard switch."), "every line");
+  await unmount();
+  current = viewOf(false);
+});

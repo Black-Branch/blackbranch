@@ -24,6 +24,13 @@ function capMap(map, max) {
 // zero-widths (200B-200D), BOM and the TAG block (E0000-E007F) are
 // presentation-only, so removing them from the KEY (both arm and echo sides)
 // can't over-match visible-different text.
+// Unicode NFC, after that strip: one text can arrive as different code points. A
+// site line typed as ba · shadda · fatha comes back from Twitch and YouTube as
+// ba · fatha · shadda (canonical order), and an unnormalised key let each echo post
+// as a new line (ticket #126). NFC and not NFKC: NFKC also folds compatibility
+// characters (a "ﬁ" ligature, fullwidth letters, superscripts), which look different
+// on screen, and two different lines must never share a key. The strip comes first so
+// a zero-width character one platform dropped cannot keep a letter and its mark apart.
 // The TAG block is ADDED, not incidental: web escapes a leading `.`/`/` with
 // U+E0000 so Twitch stops command-parsing it (web/app/lib/outgoingText.ts).
 // We arm on the unescaped text, so without this the escaped echo comes back
@@ -35,6 +42,7 @@ function capMap(map, max) {
 function normText(s) {
   return decodeHtmlEntities(String(s || ''))
     .replace(/[\u{FE00}-\u{FE0F}\u{200B}-\u{200D}\u{FEFF}\u{E0000}-\u{E007F}]/gu, '')
+    .normalize('NFC')
     .replace(/\b(?:https?:\/\/)?(?:www\.)?([^\s/]+\.[^\s/]{2,})\S*/gi, (_, host) => `https://${host}`)
     .toLowerCase().replace(/\s+/g, ' ').trim();
 }
@@ -64,6 +72,7 @@ function isWeakDedupKey(key) {
 function normTextWithPath(s) {
   return decodeHtmlEntities(String(s || ''))
     .replace(/[\u{FE00}-\u{FE0F}\u{200B}-\u{200D}\u{FEFF}\u{E0000}-\u{E007F}]/gu, '')
+    .normalize('NFC')
     .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
     .replace(/[….]{1,3}$/, '')
     .toLowerCase().replace(/\s+/g, ' ').trim();

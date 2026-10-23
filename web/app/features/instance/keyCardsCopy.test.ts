@@ -8,7 +8,7 @@ import { join } from "node:path";
 const src = readFileSync(join(import.meta.dirname, "KeyCards.tsx"), "utf8");
 
 test("read to the end (anchor)", () => {
-  assert.match(src, /render=\{view\.render \?\? null\} \/>\)\}\s*<\/ul>\s*<\/section>\s*\);\s*\}\)\}\s*<\/>\s*\);\s*\}\s*$/);
+  assert.match(src, /<section key=\{g\.title\} className=\{card\} aria-label=\{g\.title\}>\{title\}\{body\}<\/section>\s*\);\s*\}\)\}\s*<\/>\s*\);\s*\}\s*$/);
 });
 
 test("an install key says, on the row, that it is set in the environment and how to change it", () => {

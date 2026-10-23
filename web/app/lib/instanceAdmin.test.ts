@@ -78,7 +78,8 @@ const routes = readdirSync(ADMIN_DIR, { recursive: true, encoding: "utf8" })
   .map((p) => ({ path: p, src: stripComments(readFileSync(join(ADMIN_DIR, p), "utf8")) }));
 
 test("every /api/admin/instance handler checks admin first; every MUTATION checks same-origin too", () => {
-  assert.equal(routes.length, 3, `expected the three admin routes, found ${routes.length}`);
+  // The value, its Test, and finding a platform id again from its channel.
+  assert.equal(routes.length, 4, `expected the four admin routes, found ${routes.length}`);
   let handlers = 0;
   for (const { path, src } of routes) {
     for (const m of src.matchAll(/export async function (GET|PUT|DELETE|POST)\([^)]*\)[^{]*\{([\s\S]*?)\n\}/g)) {
@@ -90,7 +91,7 @@ test("every /api/admin/instance handler checks admin first; every MUTATION check
       assert.match(body!, /if \(admin instanceof Response\) return admin;/, `${path} ${method} ignores the refusal`);
     }
   }
-  assert.equal(handlers, 4, "GET + PUT + DELETE + POST");
+  assert.equal(handlers, 5, "PUT + DELETE, the Test's POST, the find's POST");
 });
 
 test("the Admin Panel page is admin-gated on the server, and its key cards import no server module", () => {

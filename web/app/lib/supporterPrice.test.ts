@@ -4,7 +4,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createSupporterPrice, type PriceLike } from "./supporterPrice.ts";
+import { createSupporterPrice, createSubscriptionOffer, type PriceLike, type SupporterPrice } from "./supporterPrice.ts";
+import type { PaypalPlanState } from "./paypalSubscriptions.ts";
 
 const MONTHLY: PriceLike = { id: "price_a", active: true, type: "recurring", currency: "eur", unit_amount: 700, recurring: { interval: "month", interval_count: 1 } };
 
@@ -91,11 +92,83 @@ test("concurrent first reads share one Stripe request", async () => {
   assert.equal(h.calls.length, 1);
 });
 
+
+// ── Subscriptions exist when EITHER provider sells them (k, 2026-10-21) ──────────────────────
+// The one server answer for "is a subscription for sale here, and at what price": a usable Stripe
+// Supporter price, or a PayPal plan for the Supporter tier that PayPal prices as an active monthly
+// plan. The price shown is Stripe's when there is one (nothing changes for a Stripe-only or a
+// both-providers site), else the PayPal plan's as PayPal stores it.
+
+const STRIPE_PRICE: SupporterPrice = { id: "price_a", amount: 700, currency: "eur" };
+const PLAN_PRICE: PaypalPlanState = { planId: "P-CASEY123", amount: 500, currency: "usd" };
+
+function offerHarness(over: Partial<{ stripe: SupporterPrice | null; paypalOn: boolean; plan: string | undefined; state: () => Promise<PaypalPlanState> }> = {}) {
+  const asked: string[] = [];
+  const s = {
+    stripe: over.stripe === undefined ? null : over.stripe,
+    paypalOn: over.paypalOn ?? true,
+    plan: "plan" in over ? over.plan : "P-CASEY123",
+    state: over.state ?? (async () => PLAN_PRICE),
+  };
+  const read = createSubscriptionOffer({
+    stripe: async () => s.stripe,
+    paypalOn: () => s.paypalOn,
+    paypalPlanId: () => s.plan,
+    planState: async (id) => { asked.push(id); return s.state(); },
+  });
+  return { read, asked, s };
+}
+
+test("a site that sells subscriptions through PayPal only offers them, at the PayPal plan's price", async () => {
+  const h = offerHarness();
+  assert.deepEqual(await h.read(), { amount: 500, currency: "usd", stripe: false, paypal: true });
+});
+
+test("Stripe only: unchanged, Stripe's price, and PayPal is never asked", async () => {
+  const h = offerHarness({ stripe: STRIPE_PRICE, paypalOn: false });
+  assert.deepEqual(await h.read(), { amount: 700, currency: "eur", stripe: true, paypal: false });
+  assert.deepEqual(h.asked, []);
+});
+
+test("both providers: Stripe's price is the one shown, and both are offered", async () => {
+  const h = offerHarness({ stripe: STRIPE_PRICE });
+  assert.deepEqual(await h.read(), { amount: 700, currency: "eur", stripe: true, paypal: true });
+});
+
+test("no Stripe price and no PayPal plan (or PayPal off, or a plan PayPal will not sell): no subscription", async () => {
+  assert.equal(await offerHarness({ plan: undefined }).read(), null);
+  const off = offerHarness({ paypalOn: false });
+  assert.equal(await off.read(), null);
+  assert.deepEqual(off.asked, [], "PayPal switched off is never asked about its plan");
+  assert.equal(await offerHarness({ state: async () => "inactive" }).read(), null);
+});
+
+test("retry: a PayPal read that fails hides the PayPal subscription (never invents a price); the next read recovers", async () => {
+  let fail = true;
+  const h = offerHarness({ state: async () => { if (fail) throw new Error("paypal get plan: 503"); return PLAN_PRICE; } });
+  assert.equal(await h.read(), null);
+  fail = false;
+  assert.deepEqual(await h.read(), { amount: 500, currency: "usd", stripe: false, paypal: true });
+  const both = offerHarness({ stripe: STRIPE_PRICE, state: async () => { throw new Error("down"); } });
+  assert.deepEqual(await both.read(), { amount: 700, currency: "eur", stripe: true, paypal: false }, "a PayPal outage leaves the card subscription alone");
+});
+
+test("restart: the settings are read on every call, so a plan set or cleared shows on the next read", async () => {
+  const h = offerHarness({ plan: undefined });
+  assert.equal(await h.read(), null);
+  h.s.plan = "P-CASEY123";
+  assert.equal((await h.read())?.paypal, true);
+  h.s.paypalOn = false;
+  assert.equal(await h.read(), null);
+});
+
 const read = (p: string) => readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
 
-test("wiring: every Subscribe and Gift entry point is gated on the Supporter offer, not on Stripe alone", () => {
+test("wiring: every Gift entry point is gated on Stripe's Supporter price, not on Stripe alone", () => {
   assert.match(read("app/components/SupportContent.tsx"), /const subsOn = stripeOn && supporter !== null;/);
-  assert.match(read("app/components/StreamView.tsx"), /const subscribeInPlace = stripeReady && billing\.supporter !== null;/);
+  // The player's Subscribe button reads the either-provider answer (subscribeButton.test.ts pins it);
+  // its Gift side still needs Stripe's price.
+  assert.match(read("app/features/support/subscribeButton.ts"), /const giftsOn = a\.billing\.stripe && a\.billing\.supporter !== null;/);
   const card = read("app/components/UserCard.tsx");
   assert.match(card, /const giftsOn = billing\.stripe && billing\.supporter !== null;/);
   assert.match(card, /\{giftsOn && <button/);

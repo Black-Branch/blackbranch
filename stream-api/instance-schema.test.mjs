@@ -260,7 +260,7 @@ test("the setup lists are well-formed, and a bad shape fails check:instance-sche
 
 test("the platform and payment lists — every product list released, paste values only from this install's addresses", () => {
   const ids = SETUP_CORE.map((c) => c.id);
-  assert.deepEqual(ids, ["twitch", "kick", "streamplace", "donations"]);
+  assert.deepEqual(ids, ["twitch", "kick", "streamplace", "donations", "voice"]);
   for (const c of SETUP_CORE) assert.equal(c.release, "now", `${c.id} is released`);
   for (const id of ["youtube", "stripe", "paypal"]) {
     const m = MODULES.find((x) => x.id === id);

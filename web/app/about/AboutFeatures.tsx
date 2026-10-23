@@ -1,7 +1,7 @@
 // The About page's feature list — each item only when this install runs what it names: the radio
 // and YouTube chat by the module rule (config/modules.mjs "ONE RULE"), the other chat platforms
 // when they are set up (streamPlatformsServer.ts chatPlatformsSetUp), payments by the providers
-// configured and subscriptions by the tier price. aboutFeatures.render.test.ts and
+// configured and subscriptions by either provider selling the tier (a Stripe price or a PayPal plan). aboutFeatures.render.test.ts and
 // lib/moduleMentions.render.test.ts render it.
 
 import type { ReactNode } from "react";
@@ -11,7 +11,8 @@ export type AboutFacts = {
   shown: Record<string, boolean>;
   /** Card payments (gifts are card-only) and PayPal, as configured. */
   stripe: boolean;
-  /** A subscription can be bought: card payments and the tier's price (lib/tiers.ts). */
+  /** A subscription can be bought: a Stripe price for the tier or a PayPal plan for it
+   *  (supporterPrice.ts subscriptionsSetUp). */
   subscriptions: boolean;
   paypal: boolean;
   /** The chat platforms this install is set up to read (streamPlatformsServer.ts). */
@@ -28,9 +29,10 @@ export function AboutFeatures({ siteName, facts }: { siteName: string; facts: Ab
     ...(facts.platforms.streamplace ? ["Streamplace"] : []),
   ];
   const processors = [...(facts.stripe ? ["Stripe"] : []), ...(facts.paypal ? ["PayPal"] : [])];
+  // Gifts are card checkouts, so they come with Stripe only.
   const paid = facts.stripe
     ? facts.subscriptions ? "optional subscriptions, donations and gifts" : "optional donations and gifts"
-    : "optional donations";
+    : facts.subscriptions ? "optional subscriptions and donations" : "optional donations";
   return (
     <ul className="my-3 ml-5 list-disc space-y-1.5 text-base leading-relaxed text-secondary marker:text-muted">
       <li>

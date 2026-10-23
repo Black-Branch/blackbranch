@@ -3,7 +3,7 @@
 Everything one community's site needs, on one Linux box, as one Docker Compose project.
 
 **Box:** Debian stable or Ubuntu LTS, x86-64, 4 GB memory, 2 cores, 40 GB disk at minimum. A rented
-VPS or a Linux machine at home. The site arrives as one prebuilt image — the same for every install —
+VPS or a Linux machine at home. The site arrives as one prebuilt image, the same for every install,
 so the box never builds it. (Installed from a checkout instead of a release, the box does build the
 site's image, which takes most of a 4 GB box's memory; then a box under ~7.5 GB with no swap gets a
 2 GB swap file at install.)
@@ -21,13 +21,15 @@ The one-line form: `tools/release.mjs cut` writes the release's `install.sh` sta
 (version, size, sha256, `--base-url`, channel), published as `install.sh` for the stable channel and
 `install-<channel>.sh` for another; piped into bash it fetches the tarball, checks it, unpacks it as
 `/opt/blackbranch/releases/<version>` and runs the installer inside it, with `--update-feed` set to where
-it came from and the box following that channel. Every release so far is a preview on the beta
-channel, so today's one-line form is:
+it came from and the box following that channel. The one-line form is:
 
 ```bash
-curl -fsSL https://blackbranch.app/install-beta.sh | sudo bash
-curl -fsSL https://blackbranch.app/install-beta.sh | sudo bash -s -- --domain example.com --mode tunnel
+curl -fsSL https://blackbranch.app/install.sh | sudo bash
+curl -fsSL https://blackbranch.app/install.sh | sudo bash -s -- --domain example.com --mode tunnel
 ```
+
+Until the first stable release, blackbranch.app serves the beta installer at that address, so a box
+installed this way follows the beta channel.
 
 A checkout follows the stable channel, which has no release yet; `blackbranch update --channel beta`
 moves it to the previews.
@@ -40,20 +42,20 @@ The two questions:
 2. **The front door:**
    - `tunnel` (default): a Cloudflare tunnel. No open ports, works behind a home router. Needs a free
      Cloudflare account with the domain on it. The installer prints one link to sign in, then creates
-     the tunnel and its three DNS records — every one of them, or it stops and says which (a name that
+     the tunnel and its three DNS records: every one of them, or it stops and says which (a name that
      already has a record: remove it in Cloudflare's dashboard and run it again; the tunnel is kept).
      Once the routes are in, it removes the sign-in certificate (`cloudflared/cert.pem`, the Cloudflare
      account's, not the tunnel's): the tunnel runs on its own credentials, and that folder is mounted into
      cloudflared and backed up. Changing the tunnel later starts with a new sign-in. Already made a tunnel
      in the Cloudflare dashboard? Pass `--tunnel-token` (it asks for the token, not shown) or
-     `--tunnel-token-file <file>` — never the token itself on the command line, where every account on the
-     box can read it and sudo logs it — and route the three names to `http://caddy:80` there. A wrong
+     `--tunnel-token-file <file>` (never the token itself on the command line, where every account on the
+     box can read it and sudo logs it), and route the three names to `http://caddy:80` there. A wrong
      token stops the install at once with cloudflared's reason; given again on a re-run (`--tunnel-token`
      or `--tunnel-token-file`), it replaces the one in `.env`.
    - `direct`: the box takes ports 80 and 443 and gets Let's Encrypt certificates. Point the three
      names at the box first; the installer checks they resolve, and warns (and still finishes) when one
      resolves to an address that is not one of this server's.
-   - `internal` — **lab mode, not for production.** Caddy issues certificates from its own local
+   - `internal`: **lab mode, not for production.** Caddy issues certificates from its own local
      certificate authority, which no browser trusts until you add its root
      (`docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt .`). For a test box with no
      public DNS: put the three names in your own hosts file. Inside the box the apps trust that root
@@ -63,7 +65,7 @@ The two questions:
 
 In `direct` and `internal` mode every container resolves the three names to caddy (network aliases in
 `compose.public.yaml`), so the site's own calls to them stay on the box. In `tunnel` mode they resolve
-publicly and go through the tunnel — there are no certificates inside the box to answer with.
+publicly and go through the tunnel. There are no certificates inside the box to answer with.
 
 The installer installs Docker Engine if it is missing, writes `/opt/blackbranch/.env` with a random
 value for every secret (mode 600, never printed), pulls the site's image and builds the other apps'
@@ -75,22 +77,22 @@ The installer ends by printing **one setup link**, `https://<domain>/setup?token
 browser. Until setup is finished every page of the site shows "this site is being set up" and every
 other API answers 503; sign-in, the setup pages and the Matrix discovery files stay open.
 
-The setup pages, in order — each saves as you go, so a closed browser comes back to the same page
+The setup pages come in this order. Each one saves as you go, so a closed browser comes back to the same page
 (open `https://<domain>/setup` again; you are still signed in):
 
-1. **Your account** — a user name and a password. The account is made on the homeserver and becomes
+1. **Your account**: a user name and a password. The account is made on the homeserver and becomes
    the site's admin and the streamer's account; you then sign in with it.
-2. **Recovery sheet** — the backup passphrase and where `.env` lives. Shown once.
-3. **Your site** — the name, short name, share line, description, the legal details, the time zone
+2. **Recovery sheet**: the backup passphrase and where `.env` lives. Shown once.
+3. **Your site**: the name, short name, share line, description, the legal details, the time zone
    and the date the site's history starts. The domain and the server name are permanent.
-4. **Points** — what the community's points are called.
-5. **Modules** — one switch per optional part. A module you switch on gets its own page next, made
+4. **Points**: what the community's points are called.
+5. **Modules**: one switch per optional part. A module you switch on gets its own page next, made
    from its manifest's `setup` steps (explanation, links, values to paste, fields, a Test button).
-6. **Community** — makes the community space, `#general` and `#forum` as your account, and the federation
+6. **Community**: makes the community space, `#general` and `#forum` as your account, and the federation
    switch (off by default).
-7. **Finish** — the quiet hour, opt-in bug reports (off), and where backups go (this server, an
+7. **Finish**: the quiet hour, opt-in bug reports (off), and where backups go (this server, an
    S3-compatible bucket or an SFTP server). **Finish waits for a test backup**: one backup, then a
-   restore of it into a scratch database on the server — it must pass. The site is then rebuilt once
+   restore of it into a scratch database on the server. It must pass. The site is then rebuilt once
    with the values from pages 3 and 4, and setup is done.
 
 **The link works once.** It is good until the first admin account exists, then it is dead.
@@ -108,8 +110,8 @@ the baseline shows the setup pages.
 |---|---|
 | `/opt/blackbranch/.env` | The one place for this install's values and secrets. **Back it up**: its secrets exist nowhere else |
 | `/opt/blackbranch/compose.yaml` | The bundle (`compose.public.yaml` adds ports 80/443 in direct/internal mode) |
-| `/opt/blackbranch/releases/<version>/` | Each release's source — the images and the site are built from it. `release/` points at the one in use; an update keeps the one before it to go back to |
-| `/opt/blackbranch/rendered/` | Generated from `.env` (and the federation switch) — never edit by hand, the next render overwrites it: `Caddyfile` (the router), `synapse/homeserver.yaml` + `log.config`, `mas/config.yaml` |
+| `/opt/blackbranch/releases/<version>/` | Each release's source; the images and the site are built from it. `release/` points at the one in use; an update keeps the one before it to go back to |
+| `/opt/blackbranch/rendered/` | Generated from `.env` (and the federation switch). Never edit by hand: the next render overwrites it. It holds `Caddyfile` (the router), `synapse/homeserver.yaml` + `log.config`, `mas/config.yaml` |
 | `/opt/blackbranch/matrix/mas-keys.yaml` | The sign-in service's signing keys, generated once. **Back it up** with `.env` |
 | `/opt/blackbranch/requests/`, `results/` | Where the site asks the host for a fixed action, and reads the answer (below) |
 | `/usr/local/bin/blackbranch` | The host command |
@@ -123,7 +125,7 @@ service). The Discord bridge is declared under the Compose profile `discord`, of
 The site is **one image for every install**: nothing about an install is built into it. Its name,
 addresses, legal details and points words are read from `.env` when it starts, so a release pulls it by
 digest and a changed display value applies when the site restarts (`blackbranch set`). An install's
-own files — its icons and its points icon — go in `/opt/blackbranch/site-files/`, which the site serves
+own files (its icons and its points icon) go in `/opt/blackbranch/site-files/`, which the site serves
 at `/site-files/` (set `SITE_ICON_SET=/site-files` for icons named `icon.png`, `icon-192.png`,
 `icon-512.png`, `icon-maskable-512.png` and `apple-touch-icon.png`; `CURRENCY_ICON=/site-files/<file>`).
 
@@ -138,7 +140,7 @@ service at `https://matrix.example.com/auth/`.
   service's config from `.env`: the database, the shared secret between the two, message retention
   (180 days by default; a room may choose 1 day–1 year; `#general` keeps 30 days), the site's sign-in
   client and its return address, and the site's right to delete an account when its owner asks. The
-  homeserver's signing key is made once, in the `synapse-data` volume, and never replaced — **losing it
+  homeserver's signing key is made once, in the `synapse-data` volume, and never replaced. **Losing it
   cannot be undone**, which is why backups include it.
 - **Federation is off** on a new install: no other Matrix server can reach this one, and it reaches
   none. `blackbranch federation on` turns it on (it re-renders and restarts Synapse; the server name
@@ -146,10 +148,10 @@ service at `https://matrix.example.com/auth/`.
   The setting lives with the site's other settings (`matrix.federation`), so the Admin Panel can switch
   it too.
 - **Sign-up is closed until setup is finished.** The setup pages make your account through the
-  sign-in service's admin API, so nobody needs sign-up before then — and keeping it shut means no one
+  sign-in service's admin API, so nobody needs sign-up before then, and keeping it shut means no one
   can claim the community's room names first. Once setup is finished it follows the Admin Panel's
-  switch (Site → Community server → *Sign-up on the bundled homeserver*): unset means **closed** —
-  set it to `open` when you want viewers to make accounts — and the site re-renders the config when it
+  switch (Site → Community → *Let people make accounts*): unset means **closed**.
+  Set it to Yes when you want viewers to make accounts. The site re-renders the config when it
   changes. With the database down a render keeps
   what the last one wrote. No email address is required: this release sends no mail, and requiring
   an address nothing can verify would lock everyone out. The site's raid switch closes sign-ups too.
@@ -163,12 +165,29 @@ service at `https://matrix.example.com/auth/`.
   made by the setup pages' first page, and their Community page runs the bootstrap. Both rooms are
   listed in the server's public room list: the rendered Synapse config allows listing exactly those
   two aliases and nothing else, and listing a room still takes that room's own power.
+- **The rooms are kept in place.** Once the Community page has made them, every start runs
+  `blackbranch matrix ensure`. That covers `blackbranch up` (the installer, every update, every
+  restore) and every boot (`blackbranch-matrix.service`). It reads Synapse's own tables once, with no
+  sign-in and no container. It runs the bootstrap only when something the bootstrap makes is missing:
+  a room, a space link, a public-list entry, or the forum reader's place in `#forum`. After a restore
+  it may replace a recorded room the restored homeserver does not hold. A plain start never does
+  that by itself. It prints `sudo blackbranch matrix bootstrap --recreate` instead. A check that
+  fails never stops the start. It says what failed and the command to run, and the next start tries
+  again.
+- **The forum reader.** The Forums tab and Home's active threads read the forum rooms as a
+  read-only account, `@forum-reader:<domain>` (web `app/lib/forumReader.ts`). `blackbranch up` makes
+  it once, before the site starts. Sign-up is still closed then, so nobody can take the name first.
+  Its sign-in is `MATRIX_READER_TOKEN` in `.env`, like the other secrets: mode 600, never printed,
+  never on a command line. Compose hands it to the site alone. The next start replaces a sign-in MAS
+  no longer knows (after a restore of an older snapshot). An account of that name this server did
+  not make (`state/forum-reader` records the one it did) is never signed in as. The reader joins
+  `#forum` when the bootstrap makes the rooms, and again at any start that finds it outside.
 - **It never adopts a room it did not make alone.** A room's creators (room version 12) keep their
-  power for good, so if `#community-hub` or `#general` already exists and was made by another account
-  — or names another account among its creators, or is of another room version — the bootstrap stops
+  power for good, so if `#community-hub`, `#general` or `#forum` already exists and was made by another account
+  (or names another account among its creators, or is of another room version), the bootstrap stops
   and says so instead of recording that room as the community's.
 
-**A community alias someone else made.** Remove that room — and with it its alias — as a server
+**A community alias someone else made.** Remove that room, and with it its alias, as a server
 admin, from inside the box, then run the Community page (or `blackbranch matrix bootstrap`) again.
 Use your own account's name for `<you>`, and the room id the bootstrap printed with its `!` written
 as `%21`:
@@ -198,14 +217,17 @@ The bootstrap signs in as that account for the length of the run only, and signs
 ## The `blackbranch` command
 
 ```
-blackbranch status                 what runs and whether it is healthy
+blackbranch status                 what runs and whether it is healthy; an Admin Panel setting waiting for a restart
+blackbranch help                   the commands, then every setting that applies only at a restart
 blackbranch logs <service> [-f]    recent logs
 blackbranch restart <service>
 blackbranch render                 regenerate the router, Synapse and sign-in config; restart what changed
 blackbranch set <KEY> <value>      change one display value (SITE_NAME, LEGAL_*, CURRENCY_*, …); the site restarts with it
 blackbranch migrate                apply database migrations now
 blackbranch up                     bring everything to its configured state
-blackbranch matrix bootstrap [--as <name>]   create the community space, #general and #forum (safe to repeat)
+blackbranch matrix bootstrap [--as <name>] [--recreate]   create the community space, #general and #forum (safe to repeat;
+                                   --recreate: replace a recorded room that is gone)
+blackbranch matrix ensure          check the community rooms are in place; make what is missing (every start runs it)
 blackbranch federation [on|off]    show or switch federation
 blackbranch setup-link [--new]     print the setup link while no admin exists (--new: a fresh one)
 blackbranch apply-install          write the setup pages' display values into .env and restart the site once
@@ -217,6 +239,7 @@ blackbranch restore <snapshot|latest> [--verify] [--with-env] [--from <address>]
 blackbranch update [--check|--dry-run]   read the update feed; apply a newer release (asks first)
 blackbranch update --channel stable|beta which releases this box takes
 blackbranch health                 the update's health check, on demand
+blackbranch alerts check|test      the daily check that alerts on low disk, certificates, a backup gone quiet; send a test alert
 ```
 
 `user` arrives in a later release; until then it says so and exits with an error.
@@ -225,48 +248,48 @@ blackbranch health                 the update's health check, on demand
 
 A **release** is one version that pins everything on the box: the source of the apps (a tarball the
 box checks by its sha256; stream-api, stream-ingest and the backup tool are built from it as at
-install) and every image — **the site's own, prebuilt**, the database, the chat server and its sign-in
-service, the router, the tunnel, the backup tool's and the build's base — by digest, so a re-published
+install) and every image (**the site's own, prebuilt**, the database, the chat server and its sign-in
+service, the router, the tunnel, the backup tool's and the build's base) by digest, so a re-published
 tag can never change what a release is. The project announces the newest
 release on each channel in a **signed feed** (`<BB_UPDATE_FEED>/<channel>.json`, by default
 `https://blackbranch.app/releases/stable.json`). The box checks the signature with the key it was
 installed with (`BB_RELEASE_KEY` in `.env`; `install/release-key.pub`), using the release it already
 runs; an update never changes that key. The box refuses a release older than the one it runs, a feed
 for another channel, a feed whose publisher has not signed it again before it expired, and any release
-that would move the database to another Postgres major version — that is always its own announced step.
+that would move the database to another Postgres major version. That is always its own announced step.
 
 **When:** the timer `blackbranch-update.timer` reads the feed every night at the quiet hour (Admin Panel
-→ Site → Running the site) plus up to ten minutes. A **security release** applies itself then — but
+→ Site → Running the site) plus up to ten minutes. A **security release** applies itself then, but
 never while the stream is live: it waits, checking every minute, until the stream ends (for up to six
 hours; after that, the next night). A **feature release** waits for you: the Admin Panel's Updates
 section shows it with an Apply button, or run `blackbranch update`. A box that cannot read its feed
 for three days says so on the doctor page and in `blackbranch doctor`.
 
-**What an update does, in order** — nothing live changes until step 6:
+**What an update does, in order.** Nothing live changes until step 6:
 
 1. read and check the signed feed;
 2. fetch the release's source and check its size and sha256 against the feed (only plain files, all in
    one folder), and unpack it as `releases/<version>/`;
-3. run the release's `.env` migrations on a **copy** of `.env` (`install/migrations/`) — it stops here,
+3. run the release's `.env` migrations on a **copy** of `.env` (`install/migrations/`). It stops here,
    naming the key, if `.env` would hold a key the release does not know or lack one it needs;
 4. fetch every image by digest (the site's among them), build the release's own images (tagged with
    its version), and check that its router, Synapse and sign-in templates render with the migrated
    `.env`;
 5. start the release's site beside the running one, with the migrated `.env`, and check it answers
-   (then remove it — the running site keeps serving);
+   (then remove it; the running site keeps serving);
 6. stop the site, the chat services and the chat server, and **back up** (so nothing written before
    the stop can be lost if it has to go back);
 7. switch: `release/` points at the new release, `.env` becomes the migrated copy, the new release's
-   host files go in place, and the new release brings itself up — migrations, the chat server (it
+   host files go in place, and the new release brings itself up: migrations, the chat server (it
    migrates itself), stream-api, stream-ingest, the site;
-8. **health check** — the new release's own (`blackbranch health`): every doctor check an update can
+8. **health check**: the new release's own (`blackbranch health`): every doctor check an update can
    affect, a WebSocket frame from stream-api, and a sign-in round trip (the site starts a sign-in the
    sign-in service accepts; a token it issues for the streamer works on the homeserver, then ends);
    then the apps are restarted twice and checked again.
    The front door is checked at this box's own router: direct and lab mode ask caddy on port 443 by
    each of the three names (direct mode with the real certificate), so a box behind a home router
    that cannot reach its own public address (no NAT loopback) still passes. Reaching the site from
-   outside is the doctor's `door.outside` row — a warning, never part of an update's verdict.
+   outside is the doctor's `door.outside` row: a warning, never part of an update's verdict.
 
 If the health check passes, the release is recorded and the release from two updates ago is removed
 (its images and folder). If anything after step 6 fails, the box **goes back**: the previous release's
@@ -278,11 +301,11 @@ folder, `.env` and host files, the databases and the chat server's media from th
 step 6 it starts the site again on the release in use; from step 7 on it goes back as above. The update
 units give it the time (`KillMode=mixed`, `TimeoutStopSec=30min`). **One cut off harder** (a power loss)
 is finished at the next boot by `blackbranch-reconcile.service` (`blackbranch update --reconcile`; every
-`blackbranch update` runs it first too): without it the stopped services would stay down — they are
-`restart: unless-stopped` — and `release/` would already name the new version, so nothing would notice.
+`blackbranch update` runs it first too): without it the stopped services would stay down (they are
+`restart: unless-stopped`), and `release/` would already name the new version, so nothing would notice.
 
 "Started again" means `docker compose up` succeeded **and** every service came back healthy. When it
-did not, the last update's result says so — *starting it again FAILED: the site is down* — and the
+did not, the last update's result says so (*starting it again FAILED: the site is down*), and the
 update's progress marker stays: the boot unit and every `blackbranch update` try again (the reconcile
 exits with an error until it works, so the boot unit shows failed), and no new update starts on top of
 it. An update that passed its health checks but whose clean-up of older releases failed is recorded as
@@ -292,20 +315,20 @@ it. An update that passed its health checks but whose clean-up of older releases
 
 ## Backups
 
-**What a backup holds:** the three databases (`stream`, `synapse`, `mas` — `pg_dump`, one after the
+**What a backup holds:** the three databases (`stream`, `synapse`, `mas`: `pg_dump`, one after the
 other in one run), the chat server's media store and **signing key**, and the install's own files:
 `.env`, MAS's keys (`matrix/mas-keys.yaml`) and the tunnel's credentials. A manifest inside records
 each dump's table count and hash and the keys' hashes. Not in it: the site's image (pulled again by
-the release), `site-files/` (your own icons — keep your copy of them), Caddy's certificates (fetched
+the release), `site-files/` (your own icons: keep your copy of them), Caddy's certificates (fetched
 again) and the chat service's sound scratch files.
 
 **Where:** [restic](https://restic.net) snapshots, encrypted with the **backup passphrase** on the
 recovery sheet (`BACKUP_PASSPHRASE` in `.env`). The target is a setting (setup's last page, or Admin
 Panel → Site → Backups): `local` (default, `/opt/blackbranch/backups/restic`), `s3`
-(`s3:https://<endpoint>/<bucket>[/<folder>]` with an access key id and secret key — Backblaze B2,
+(`s3:https://<endpoint>/<bucket>[/<folder>]` with an access key id and secret key: Backblaze B2,
 Cloudflare R2, …) or `sftp` (`sftp:<user>@<host>:<folder>`; put the key `blackbranch backup key`
 prints into that account's `authorized_keys`). Kept: 7 daily and 4 weekly snapshots (settings
-`backup.keepDaily`, `backup.keepWeekly`). A local target does not survive losing the disk — add a bucket.
+`backup.keepDaily`, `backup.keepWeekly`). A local target does not survive losing the disk. Add a bucket.
 
 **When:** every night at the quiet hour (`blackbranch-backup.timer`), and a check every Sunday half an
 hour later that the newest backup restores (`blackbranch-verify.timer`). Both are rendered from the
@@ -315,7 +338,7 @@ them (last good backup under 36 hours old, last check passed, the target answers
 
 **How the server reads the target's keys:** the bucket's keys are secret settings (encrypted in the
 database). `blackbranch` reads them itself, as root, by running this release's own settings code
-inside the stream-api image with `INSTANCE_MASTER_KEY` from `.env` — no web address hands a secret out,
+inside the stream-api image with `INSTANCE_MASTER_KEY` from `.env`. No web address hands a secret out,
 and the site only ever names a request. The last target used is kept root-only in
 `state/backup-target.env`, so a restore works while the database is gone. The keys reach restic
 through its container's environment, never a command line.
@@ -338,6 +361,48 @@ makes the empty database again with its passwords. When the box's `.env` passphr
 backups (the old `.env` was lost), it asks for the recovery sheet's (or reads `BB_RECOVERY_PASSPHRASE`);
 `--from <s3:…|sftp:…>` reads a bucket or SFTP server the new box has no settings for.
 
+## Alerts from the box
+
+The box tells whoever runs it about the problems only it can see:
+
+- the nightly backup or the weekly restore check failed. Only the timers' runs alert
+  (`blackbranch backup --scheduled`, `restore latest --verify --scheduled`); a run by hand does not;
+- an update went back, could not go back cleanly, or stopped before it finished (`u_record`);
+- the daily check found a problem. `blackbranch alerts check` runs from `blackbranch-check.timer` at
+  09:00, plus up to 30 minutes. It looks for less than 15 % free disk where the install or Docker's
+  data lives, a certificate within 14 days of its end in direct mode (or none read), and no good
+  backup for 36 hours. These are the doctor's floors, and `alerts.test.mjs` holds them equal.
+
+**One channel, in `.env`.** `BB_ALERT_NTFY_URL` is an ntfy topic address. It reaches curl through a
+config file on a descriptor, never on a command line. `BB_ALERT_EMAIL_COMMAND` is a command run by
+`bash -c`. It gets the whole message on its input, headers first, so `sendmail you@example.com`
+works. The subject is also in `$BB_ALERT_SUBJECT`. Write the command in single quotes, so Compose does
+not read a `$` in it. Neither value is ever printed, and `doctor --report` refuses a report that
+holds either.
+
+**No channel means the alert is logged only**: on stderr (the unit's journal) and through
+`logger -t blackbranch-alert`. A channel that fails is reported and never changes the outcome of what
+raised the alert. An ntfy topic has no password, so an alert holds only fixed words, versions,
+numbers and the site's public names. It never holds a tool's own error text. `blackbranch alerts
+test` sends one. Older boxes get the two keys, empty, from `.env` migration 003.
+
+## Settings that apply at a restart
+
+Some settings are read once, when the service that uses them starts (`reload: 'restart'` in
+`config/instance-schema.mjs`). `install/restart-settings.mjs` makes one list of the ones an operator
+of this bundle can change. It has three groups:
+
+- changed in the Admin Panel: restart the services named;
+- the `.env` display values: `blackbranch set` restarts what reads them;
+- the install's identity: permanent.
+
+The tool writes `install/restart-settings.tsv`, which `blackbranch help` prints (the box has no Node).
+It also writes the generated section of `docs/public/operate.md`. `install/restart-settings.test.mjs`
+fails when either drifts from the schema. `node tools/gen-instance-schema.mjs` runs the tool for you;
+on its own it is `node install/restart-settings.mjs --write`. `blackbranch status` compares when each
+Admin Panel setting was last written (`updated_at`) with when the services that read it last started.
+It names any change that is still waiting, with the `blackbranch restart` command to run.
+
 ## The doctor
 
 `blackbranch doctor` and the Admin Panel's **Doctor** page (`/admin/doctor`) show the same list of
@@ -356,10 +421,10 @@ page's **Check again** asks the box for fresh facts through the request folder (
 site down the command still prints the box's checks; the site's say "site unreachable".
 
 `blackbranch doctor --report` writes `doctor-report-<time>.txt` beside `.env`: the release, the module
-switches, every check and the failing checks' fix lines — no secret, no chat text, no viewer id, no
+switches, every check and the failing checks' fix lines. No secret, no chat text, no viewer id, no
 domain. Before it is kept, the report is searched for every `.env` value of six or more characters
-(the three keys that hold the product's own words — `COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES`,
-`BB_TLS_MODE` — excepted); a report that holds one is deleted and the command fails.
+(except the three keys that hold the product's own words: `COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES`,
+`BB_TLS_MODE`); a report that holds one is deleted and the command fails.
 
 ## Requests from the site
 
@@ -374,7 +439,7 @@ key's public half), `recovery-sheet.req` (setup's recovery page; see below), `up
 exactly that release; the update runs as `blackbranch-update@<version>.service`, and its answer is
 `results/update.json`). The systemd path
 unit `blackbranch-requests.path` runs the matching fixed verb, deletes the request and writes the
-result to `/opt/blackbranch/results/<name>.json` — a directory only root writes and the site only
+result to `/opt/blackbranch/results/<name>.json`, a directory only root writes and the site only
 reads, kept outside the drop box. Any other file name is refused and gets no answer (an answer named
 after it could overwrite one of the box's own records there); a request is never opened. While an update
 runs, only `update-check`, `doctor` and `backup-key` run; every other known request is answered "an
@@ -383,7 +448,7 @@ their turn).
 
 **The recovery sheet** is the one secret the site ever gets from the box, and never through its
 environment: the site also chooses where backups go, so a site that held the passphrase that opens them
-could send them to its own server and read every secret in them. While — and only while — setup's
+could send them to its own server and read every secret in them. While (and only while) setup's
 recovery page is current, `recovery-sheet.req` makes root write the passphrase into
 `results/recovery-passphrase.json`, readable by the site's user alone (group 1000, the image's `node`).
 Root takes it back on the first request after setup moves on (and at Finish, and at `blackbranch up`

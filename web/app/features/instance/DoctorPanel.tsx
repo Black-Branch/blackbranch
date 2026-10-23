@@ -42,27 +42,32 @@ export function DoctorRowItem({ r }: { r: Row }) {
 
 type Group = { status: Row["status"]; words: string; meaning: string; n: number };
 
-/** One line of the header: the group's count and words (the same as `blackbranch doctor` prints,
- *  from DOCTOR.summary), then what it asks of the reader. A count with rows behind it that need
- *  something (failing, to look at) jumps to the first of them: on a phone the list is long. */
-function GroupLine({ g }: { g: Group }) {
+/** The header's three lines' words: "Failing", "To look at", "OK" (the ok line carries the
+ *  not-checked count in brackets). */
+const HEAD: Record<string, string> = { fail: "Failing", warn: "To look at", ok: "OK" };
+
+/** One line of the header: the group's words and count, then what it asks of the reader. A count
+ *  with rows behind it that need something (failing, to look at) jumps to the first of them: on a
+ *  phone the list is long. The OK line carries the not-checked count. */
+function GroupLine({ g, grey }: { g: Group; grey?: Group }) {
   const cls = LOOK[g.status].cls;
   const jump = () => {
     const el = document.querySelector<HTMLElement>(`[data-check][data-status="${g.status}"]`);
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
     el?.focus({ preventScroll: true });
   };
-  const count = <span className="tabular-nums">{g.n}</span>;
+  const count = <>{HEAD[g.status]} <span className="tabular-nums">{g.n}</span>{grey ? <> ({grey.n} not checked)</> : null}</>;
   return (
-    <li className="flex flex-wrap items-baseline gap-x-2 text-xs" data-group={g.status} data-n={g.n}>
+    <li className="flex flex-wrap items-baseline gap-x-2 text-xs" data-group={g.status} data-n={g.n} data-grey={grey?.n}>
       {g.n > 0 && (g.status === "fail" || g.status === "warn") ? (
         <button type="button" onClick={jump} className={`${chip} ${cls} hover:bg-surface-2 outline-none focus-visible:ring-1 focus-visible:ring-edge-bright`}>
-          {count} {g.words} ↓
+          {count} ↓
         </button>
       ) : (
-        <span className={`${chip} ${g.n ? cls : "text-muted"}`}>{count} {g.words}</span>
+        <span className={`${chip} ${g.n ? cls : "text-muted"}`}>{count}</span>
       )}
       {g.n > 0 && g.meaning && <span className="min-w-0 text-secondary">{g.meaning}</span>}
+      {grey && grey.n > 0 && grey.meaning && <span className="min-w-0 text-muted" data-grey-meaning>Not checked: {grey.meaning}</span>}
     </li>
   );
 }
@@ -96,6 +101,8 @@ export default function DoctorPanel() {
   if (!view) return <p role="status" className="text-sm text-muted">Running the checks…</p>;
 
   const areas = [...new Set(view.rows.map((r) => r.area))];
+  const groups = DOCTOR.summary(view.rows) as Group[];
+  const grey = groups.find((g) => g.status === "grey");
   return (
     <>
       <section className={card} aria-label="Doctor">
@@ -103,13 +110,13 @@ export default function DoctorPanel() {
           <div className="min-w-0">
             <h2 className={h2}>Doctor</h2>
             <p className="mt-0.5 text-xs text-muted">
-              Every check only reads. The same list is printed on the server by <span className="font-mono">blackbranch doctor</span>.
+              Every check only reads. The same list is printed on the server by <span className="font-mono">sudo blackbranch doctor</span>.
             </p>
           </div>
           <button type="button" className={btn} disabled={busy} onClick={recheck}>{busy ? "Checking…" : "Check again"}</button>
         </div>
         <ul className="mt-3 space-y-1" role="status" aria-label="Summary">
-          {(DOCTOR.summary(view.rows) as Group[]).map((g) => <GroupLine key={g.status} g={g} />)}
+          {groups.filter((g) => g.status !== "grey").map((g) => <GroupLine key={g.status} g={g} grey={g.status === "ok" ? grey : undefined} />)}
         </ul>
         <p className="mt-2 text-2xs text-muted">
           {view.bundle

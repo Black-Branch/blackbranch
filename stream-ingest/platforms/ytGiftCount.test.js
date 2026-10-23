@@ -143,3 +143,66 @@ test('dom path: every gift banner in one mutation batch is delivered with its ow
   ]);
   assert.deepEqual(out.map((d) => normalizeYouTubeEvent(d).count), [2, 10]);
 });
+
+// ── Ticket #168: the 10-07 gift of ten, end to end ──────────────────────────
+// A gift of ten memberships (2026-10-07 02:21 PT) was booked as ONE: the parser of the
+// day read /gifted\s+(\d+)/ and the banner said "Sent 10 <channel> gift memberships".
+// These rebuild that banner as YouTube sends it (bold runs, the gifter's @handle in the
+// header, the channel name in the middle of the sentence) on both read paths, in both
+// wordings YouTube has used. stream-api's alert-gift-count.test.js takes it from /alert.
+
+const GIFT_ID = 'ChwKGkNKdTEwX2dpZnRfcHVyY2hhc2VfMTAwNw';
+const tenGiftRenderer = (runs, id = GIFT_ID) => ({
+  liveChatSponsorshipsGiftPurchaseAnnouncementRenderer: {
+    id,
+    timestampUsec: '1791364860000000',
+    authorExternalChannelId: 'UCabcdefghijklmnopqrstuv',
+    header: {
+      liveChatSponsorshipsHeaderRenderer: {
+        authorName: { simpleText: '@casey' },
+        authorPhoto: { thumbnails: [{ url: 'https://yt3.example.test/a.jpg', width: 64, height: 64 }] },
+        primaryText: { runs },
+        image: { thumbnails: [{ url: 'https://www.example.test/gift.png' }] },
+      },
+    },
+  },
+});
+const bold = (text) => ({ text, bold: true });
+const SENT_TEN = [bold('Sent '), bold('10'), bold(' '), bold('Gadget Live'), bold(' gift memberships')];
+
+test('#168 original path (api): the 10-07 "Sent 10 … gift memberships" banner credits 10', () => {
+  const a = viaApi(tenGiftRenderer(SENT_TEN));
+  assert.equal(a.username, '@casey');
+  assert.equal(a.count, 10, 'a ten-gift was credited as ' + a.count);
+  assert.equal(a.label, 'gifted 10 memberships');
+  assert.equal(a.countUnverified, undefined);
+});
+
+test('#168 original path (api): the older "Gifted 10 … memberships" wording credits 10', () => {
+  const a = viaApi(tenGiftRenderer([bold('Gifted '), bold('10'), bold(' '), bold('Gadget Live'), bold(' memberships')]));
+  assert.equal(a.count, 10);
+});
+
+test('#168 original path (dom): the 10-07 banner as the page renders it credits 10', () => {
+  const out = runObserver([domGift({ id: GIFT_ID, author: '@casey', primary: '\n      Sent 10 Gadget Live gift memberships\n    ' })]);
+  assert.equal(out.length, 1);
+  assert.equal(normalizeYouTubeEvent(out[0]).count, 10);
+});
+
+// stream-api's ledger refuses a second credit by event id. A gift with no id of its own
+// got one minted from the clock ("youtube:mvenyvlu.1" on 10-18), so the same banner read
+// twice — a second read path, a reconnect, a restart re-reading the page — was two events
+// and two credits. The renderer's own id is the event id.
+test('#168 retry: the same gift renderer read twice is the SAME event', () => {
+  const first = viaApi(tenGiftRenderer(SENT_TEN));
+  const again = viaApi(tenGiftRenderer(SENT_TEN));
+  assert.equal(first.eventId, `youtube:${GIFT_ID}`, 'the gift event id is not the renderer id');
+  assert.equal(again.eventId, first.eventId, 'reading the same banner twice made two events');
+});
+
+test('#168 restart: the page path gives the gift the same event id as the api path', () => {
+  const api = viaApi(tenGiftRenderer(SENT_TEN));
+  const out = runObserver([domGift({ id: GIFT_ID, author: '@casey', primary: 'Sent 10 Gadget Live gift memberships' })]);
+  assert.equal(normalizeYouTubeEvent(out[0]).eventId, api.eventId,
+    'after a restart onto the other read path the same gift would be credited again');
+});

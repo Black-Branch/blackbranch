@@ -48,14 +48,16 @@ test("the switch the Finish page names is where the Admin Panel really shows it,
   assert.equal(SIGNUP_SWITCH.place, `Admin Panel → ${section} → ${group.title}`);
 });
 
-test("alert topics: optional, both or neither, real addresses, never the same one twice", () => {
+test("alert topics: optional, one or both, real addresses, never the same one twice", () => {
   const none = { wake: false, quiet: false };
   assert.deepEqual(validateAlertTopics(undefined, none), { ok: true, write: {} }, "skipped");
   assert.deepEqual(validateAlertTopics({ wake: "", quiet: "  " }, none), { ok: true, write: {} }, "both left empty");
   const both = validateAlertTopics({ wake: " https://ntfy.sh/a-long-urgent-name ", quiet: "https://ntfy.sh/a-long-quiet-name" }, none);
   assert.deepEqual(both, { ok: true, write: { "ntfy.wakeUrl": "https://ntfy.sh/a-long-urgent-name", "ntfy.quietUrl": "https://ntfy.sh/a-long-quiet-name" } });
-  // One alone sends nothing (stream-api notify.js needs both), so it is refused rather than saved.
-  assert.match((validateAlertTopics({ wake: "https://ntfy.sh/only-one" }, none) as { error: string }).error, /both topics/);
+  // One alone is enough: stream-api notify.js sends every alert to the one topic that is set.
+  assert.deepEqual(validateAlertTopics({ wake: "https://ntfy.sh/only-one" }, none), { ok: true, write: { "ntfy.wakeUrl": "https://ntfy.sh/only-one" } });
+  assert.match(alertWords({ wake: true, quiet: false }), /every alert goes to the one topic you set/);
+  assert.match(readFileSync(join(import.meta.dirname, "../../../../stream-api/notify.js"), "utf8"), /const wakeUrl = \(\) => topicUrl\('ntfy\.wakeUrl'\) \|\| topicUrl\('ntfy\.quietUrl'\);/, "the runtime falls back to the other topic");
   // ...unless the other is already saved: a blank field keeps it.
   assert.deepEqual(validateAlertTopics({ wake: "https://ntfy.sh/new-urgent", quiet: "" }, { wake: true, quiet: true }),
     { ok: true, write: { "ntfy.wakeUrl": "https://ntfy.sh/new-urgent" } });

@@ -69,6 +69,10 @@ export type BillingAvailability = {
   /** The monthly Supporter price as Stripe has it; null = no subscriptions or gifts here.
    *  Only ever non-null while `stripe` is true. */
   supporter: SupporterOffer | null;
+  /** A subscription is for sale here, through EITHER provider (k, 2026-10-21), at this price:
+   *  Stripe's when set, else the PayPal plan's. null = no subscription here. What the Subscribe
+   *  button reads; gifts read `supporter`, because a gift is a card checkout. */
+  subscribe: SupporterOffer | null;
 };
 /** A month of Supporter: minor units (cents) and the lower-case currency code. */
 export type SupporterOffer = { amount: number; currency: string };
@@ -87,7 +91,7 @@ function readSupporter(v: unknown): SupporterOffer | null {
  *  First answer: a publishable key baked into the build (an older install's) and the PayPal id the
  *  caller already has from its server half (/donate's page.tsx), else none. Then the server's,
  *  read on mount AND again whenever the window regains focus — the server reads the switches at
- *  call time, so an operator's change (Site → Modules, a provider's setup page) shows on the next
+ *  call time, so an operator's change (its switch on Payments → Connections, a provider's setup page) shows on the next
  *  read, without a page reload. A recorded Stripe key goes to the card form. A failed request keeps
  *  the last answer: a hiccup must not hide a working checkout. */
 export function useBillingAvailability(initialPaypalClientId: string | null = null, initialPaypalSandbox = false): BillingAvailability {
@@ -98,16 +102,19 @@ export function useBillingAvailability(initialPaypalClientId: string | null = nu
   const [paypalClientId, setPaypalClientId] = useState<string | null>(initialPaypalClientId);
   // Unknown until the server answers: a subscription is never offered on a guess.
   const [supporter, setSupporter] = useState<SupporterOffer | null>(null);
+  const [subscribe, setSubscribe] = useState<SupporterOffer | null>(null);
   useEffect(() => {
     let alive = true;
     const read = () => {
-      getJson<{ publishableKey: string | null; paypalClientId?: string | null; paypalSandbox?: boolean; supporter?: unknown }>("/api/billing/stripe/config", { cache: "no-store" })
+      getJson<{ publishableKey: string | null; paypalClientId?: string | null; paypalSandbox?: boolean; supporter?: unknown; subscribe?: unknown }>("/api/billing/stripe/config", { cache: "no-store" })
         .then((d) => {
           if (!alive) return;
           const key = typeof d.publishableKey === "string" && /^pk_(live|test)_[A-Za-z0-9]+$/.test(d.publishableKey) ? d.publishableKey : null;
           if (key) setStripePublishableKey(key);
           setStripe(key !== null);
           setSupporter(key !== null ? readSupporter(d.supporter) : null);
+          // Not behind the card key: a PayPal plan sells the subscription with Stripe off.
+          setSubscribe(readSupporter(d.subscribe));
           setPaypalSandbox(d.paypalSandbox === true); // before the id: the button that mounts on it loads the SDK
           setPaypalClientId(typeof d.paypalClientId === "string" && d.paypalClientId ? d.paypalClientId : null);
         })
@@ -117,5 +124,5 @@ export function useBillingAvailability(initialPaypalClientId: string | null = nu
     window.addEventListener("focus", read);
     return () => { alive = false; window.removeEventListener("focus", read); };
   }, []);
-  return { stripe, paypalClientId, supporter };
+  return { stripe, paypalClientId, supporter, subscribe };
 }

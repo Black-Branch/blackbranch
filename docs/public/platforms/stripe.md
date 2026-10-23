@@ -2,15 +2,15 @@
 
 # Card payments (Stripe)
 
-Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers "not found" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them — cancel their subscriptions in Stripe first, or switch back on.
+Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers "not found" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them. Cancel their subscriptions in Stripe first, or switch back on.
 
-This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel → Site → Modules — it is off on a new install. Its setup page then appears with the steps below.
+This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel, at the top of its own page (Payments → Connections). It is off on a new install. Its setup steps are below.
 
 The addresses below are for a site at `example.com`; your setup page shows your own.
 
 ## 1. A restricted key and the publishable key
 
-In the Stripe Dashboard → Developers → API keys, make a RESTRICTED key (rk_…) for this site and set exactly the permissions listed below, everything else None. Paste it here with the publishable key (pk_…). Live keys take live money; test keys (rk_test_, pk_test_) take test cards only. The Test only reads: your account, then each kind of object the site reads, so a missing Read permission is named. It cannot check the Write permissions without making something, so it never tries: a green Test does not prove that checkout, the customer record or the billing portal will work. The last step below proves them.
+In the Stripe Dashboard → Developers → API keys, make a RESTRICTED key (rk_…) for this site and set exactly the permissions listed below, everything else None. Paste it here with the publishable key (pk_…). Live keys take live money; test keys (rk_test_, pk_test_) take test cards only. Check only reads: your account, then each kind of object the site reads, so a missing Read permission is named. It cannot check the Write permissions without making something, so it never tries: a passing Check does not prove that checkout, the customer record or the billing portal will work. The last step below proves them.
 
 Links:
 
@@ -26,14 +26,14 @@ Copy into the provider's page:
 
 This step fills:
 
-- **Stripe secret key** (kept encrypted). Card payments: subscriptions, gifts, tips, coins.
+- **Stripe secret key** (kept encrypted). Card payments: subscriptions, gifts, tips and points. A new key is used from the next payment, no restart.
 - **Stripe publishable key**. The pk_… key the card form in the browser uses. Public by design; pairs with the restricted key.
 
 Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.
 
 ## 2. The webhook
 
-Stripe tells the site about every payment through a webhook. Developers → Webhooks → Add destination: your account, the API version below (the one this release reads payment events in — not simply the newest), the events listed below, endpoint URL as below. Then reveal the signing secret (whsec_…) and paste it here. The Test checks that a destination for this address exists, is enabled and sends every event the site handles.
+Stripe tells the site about every payment through a webhook. Developers → Webhooks → Add destination: your account, the API version below (the one this release reads payment events in — not simply the newest), the events listed below, endpoint URL as below. Then reveal the signing secret (whsec_…) and paste it here. Check confirms that a destination for this address exists, is enabled and sends every event the site handles.
 
 Links:
 
@@ -53,12 +53,27 @@ This step fills:
 
 Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.
 
-## 3. Behind Cloudflare: let Stripe through (optional)
+## 3. The supporter subscription's price (optional)
 
-If your site is behind Cloudflare (the tunnel is), Bot Fight Mode blocks Stripe's webhooks until a skip rule exists. Cloudflare dashboard → your domain → Security → WAF → Custom rules → Create: when the URI path equals the path below, action Skip, and tick every bot and security feature. This site cannot check the rule without a Cloudflare token; the doctor reminds you.
+Subscriptions need a monthly Price in Stripe. Product catalogue → Add product: a name (Supporter), Recurring, Monthly, your amount and currency → Save. Open the price and copy its id (price_…). Leave it empty and the site offers no card subscriptions or gift subs; tips and points still work. Check asks Stripe that the price is active, recurring and monthly; the key needs Read on Prices for that.
 
 Links:
 
+- [Stripe: product catalogue](https://dashboard.stripe.com/products)
+
+This step fills:
+
+- **Supporter subscription price**. The Stripe Price id (price_…) of the monthly Supporter subscription. Its amount and currency are read from Stripe and shown on the site; gifts charge the same. Unset = card subscriptions and gift subscriptions are not offered (a PayPal plan can still sell the subscription).
+
+You can skip this step and come back to it from the Admin Panel.
+
+## 4. Behind Cloudflare: let Stripe through (optional)
+
+If your site is behind Cloudflare (the tunnel is) and Bot Fight Mode is on, it blocks Stripe's webhooks. On the Free plan no rule can make an exception to Bot Fight Mode, so turn Bot Fight Mode off: Cloudflare dashboard → your domain → Security → Settings, filter by Bot traffic. On Pro or higher, use Super Bot Fight Mode instead and add a custom rule: when the URI path equals the path below, action Skip, and choose Super Bot Fight Mode. This site cannot check either without a Cloudflare token; the doctor reminds you.
+
+Links:
+
+- [Cloudflare: Bot Fight Mode](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/)
 - [Cloudflare: skip rules](https://developers.cloudflare.com/waf/custom-rules/skip/)
 
 Copy into the provider's page:
@@ -69,9 +84,9 @@ Copy into the provider's page:
 
 You can skip this step and come back to it from the Admin Panel.
 
-## 4. Before you take real money: one test purchase of each kind (optional)
+## 5. Before you take real money: one test purchase of each kind (optional)
 
-The Tests above only read; nothing here writes to Stripe until a viewer starts a payment. So prove the Write permissions once, with test keys (rk_test_, pk_test_) and a webhook destination made in test mode: with Stripe's test card, subscribe, tip, buy points and gift a subscription to a second account, then open the billing portal from your account. If one of them fails, Stripe's Dashboard → Developers → Logs shows the refused request and the permission it lacked: add that one permission to the key, never switch to the full secret key. Then make the live key and a live webhook destination the same way and paste those instead.
+The Checks above only read; nothing here writes to Stripe until a viewer starts a payment. So prove the Write permissions once, with test keys (rk_test_, pk_test_) and a webhook destination made in test mode: with Stripe's test card, subscribe, tip, buy points and gift a subscription to a second account, then open the billing portal from your account. If one of them fails, Stripe's Dashboard → Developers → Logs shows the refused request and the permission it lacked: add that one permission to the key, never switch to the full secret key. Then make the live key and a live webhook destination the same way and paste those instead.
 
 Links:
 

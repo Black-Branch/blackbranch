@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import { createSlidingWindowLimiter } from "@/app/lib/rateLimit";
 import pool from "@/lib/db";
 import { entitledElsewhere, subscriptionSources } from "@/app/lib/subscriptions/entitlement";
+import { giftTrialEnd } from "@/app/lib/supportStatus";
 
 export const runtime = "nodejs";
 
@@ -78,6 +79,20 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // A gift still running: billing starts when it ends, so the viewer never pays for days the gift
+  // already covers (the forward twin of giftServer.ts grantGift, which starts a gift to a paying
+  // subscriber after the paid period). A trialing subscription entitles like an active one
+  // (normaliseStripeStatus). A gift ending inside Stripe's 48-hour trial floor is not waited for.
+  const gift = await pool
+    .query<{ gift_expires: Date | null }>(
+      `SELECT MAX(expires_at) AS gift_expires FROM site.gift_subscriptions
+       WHERE recipient_matrix_id = $1 AND expires_at > now()`,
+      [matrixId]
+    )
+    .catch(() => null);
+  if (!gift) return new Response("Could not verify gift state", { status: 503 });
+  const trialEnd = giftTrialEnd(gift.rows[0]?.gift_expires ?? null);
+
   const checkout = await stripe.checkout.sessions.create({
     ui_mode: "embedded_page",
     // "if_required": card payments stay in the modal, but redirect-based methods
@@ -92,7 +107,15 @@ export async function POST(req: NextRequest) {
     // Stamp our identity on both the session and the subscription so the webhook
     // can resolve the user even if the customer record ever drifts.
     metadata: { matrix_id: matrixId, tier: tier.slug },
-    subscription_data: { metadata: { matrix_id: matrixId, tier: tier.slug } },
+    subscription_data: {
+      metadata: { matrix_id: matrixId, tier: tier.slug },
+      // A trial is not a payment: payment_method_collection stays at its default ("always"), so a
+      // card is saved up front, and a trial that still ends without one is cancelled, never invoiced
+      // into past_due (a past_due that was never paid does not entitle — stripeRecords.ts settleNeverPaid).
+      ...(trialEnd
+        ? { trial_end: trialEnd, trial_settings: { end_behavior: { missing_payment_method: "cancel" } } }
+        : {}),
+    },
     // Remember the customer's details + show saved cards next time.
     customer_update: CUSTOMER_UPDATE,
     saved_payment_method_options: SAVED_PM_OPTIONS,

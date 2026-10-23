@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  twitchSendOutcome, kickSendOutcome, kickErrorOutcome, describeDelivery,
+  twitchSendOutcome, kickSendOutcome, refusalByClass, describeDelivery,
   undeliveredLabel, deliveryFailureKind, skipPlatformsFrom,
   youtubeErrorOutcome, httpUnavailable, thrownFailure, failureOf,
 } from "./sendDelivery.ts";
@@ -38,13 +38,13 @@ test("Kick: is_sent:false is a refusal; a sentence is mapped to a phrase", () =>
   assert.deepEqual(kickSendOutcome({ data: { is_sent: true, message_id: 42 } }), { sent: true, id: "42" });
 });
 
-test("Kick: a 4xx with a sentence is a refusal; 401/404/5xx/no sentence are failures to reach it", () => {
-  assert.deepEqual(kickErrorOutcome(400, { message: "You must follow this channel to chat" }), { refused: true, reason: "followers-only" });
-  assert.deepEqual(kickErrorOutcome(403, { message: "You are banned from this chatroom" }), { refused: true, reason: "you're banned there" });
-  assert.deepEqual(kickErrorOutcome(401, { message: "Unauthorized" }), { refused: false });
-  assert.deepEqual(kickErrorOutcome(404, { message: "not found" }), { refused: false });
-  assert.deepEqual(kickErrorOutcome(502, { message: "bad gateway" }), { refused: false });
-  assert.deepEqual(kickErrorOutcome(400, null), { refused: false });
+test("Kick: a 4xx with a sentence is a refusal; 401/404/5xx/no sentence are not", () => {
+  assert.deepEqual(refusalByClass(400, { message: "You must follow this channel to chat" }), { refused: true, reason: "followers-only" });
+  assert.deepEqual(refusalByClass(403, { message: "You are banned from this chatroom" }), { refused: true, reason: "you're banned there" });
+  assert.equal(refusalByClass(401, { message: "Unauthorized" }), null);
+  assert.equal(refusalByClass(404, { message: "not found" }), null);
+  assert.equal(refusalByClass(502, { message: "bad gateway" }), null);
+  assert.equal(refusalByClass(400, null), null);
 });
 
 test("the copy: posted here, refused there — never 'message not sent'", () => {
@@ -91,9 +91,9 @@ test("the line label", () => {
 
 test("persistent: a refusal for the channel's mode or the sender's standing there", () => {
   // The reasons exactly as the senders produce them — Kick's sentence and Twitch's code.
-  const kickFollowers = kickErrorOutcome(400, { message: "You must follow this channel to chat." });
-  assert.ok(kickFollowers.refused);
-  const kickReason = kickFollowers.refused ? kickFollowers.reason : undefined;
+  const kickFollowers = refusalByClass(400, { message: "You must follow this channel to chat." });
+  assert.ok(kickFollowers?.refused);
+  const kickReason = kickFollowers?.reason;
   assert.equal(deliveryFailureKind({ platform: "kick", error: "refused", reason: kickReason }), "persistent");
   for (const code of ["msg_followersonly", "msg_subsonly", "msg_banned", "msg_channel_suspended", "msg_verified_email", "msg_requires_verified_phone_number"]) {
     const out = twitchSendOutcome({ data: [{ is_sent: false, drop_reason: { code } }] });
@@ -147,7 +147,8 @@ test("infrastructure: YouTube rate limits and 5xx; insufficient scope stays a re
   assert.deepEqual(youtubeErrorOutcome(429, ""), { error: "unavailable", reason: "rate_limited", code: "youtube.http_429" });
   assert.deepEqual(youtubeErrorOutcome(503, "<html>backend error</html>"), { error: "unavailable", reason: "upstream", code: "youtube.http_503" });
   assert.deepEqual(youtubeErrorOutcome(403, JSON.stringify({ error: { errors: [{ reason: "insufficientPermissions" }] } })), { error: "missing_scope" });
-  assert.deepEqual(youtubeErrorOutcome(403, JSON.stringify({ error: { errors: [{ reason: "forbidden" }] } })), { error: "send_failed" });
+  assert.deepEqual(youtubeErrorOutcome(403, JSON.stringify({ error: { errors: [{ reason: "forbidden" }] } })), { error: "send_failed" },
+    "a 4xx with no words of its own → the generic line");
   assert.deepEqual(youtubeErrorOutcome(400, "not json"), { error: "send_failed" });
 });
 

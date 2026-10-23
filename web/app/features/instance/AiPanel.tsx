@@ -18,7 +18,7 @@ import { getJson, postJson } from "@/app/lib/http";
 import type { AiView, AiTask, AiCustomConnection, RouteSummary, SlotHealth } from "@/app/lib/aiAdminView";
 import type { InstanceView } from "@/app/lib/instanceAdminView";
 import { Toggle, Choice } from "@/app/components/SettingsControls";
-import { card, h2, h3, btn, input, chip, ago } from "./parts";
+import { card, h2, h3, btn, input, chip, ago, Fold } from "./parts";
 import { aiSubOf, keyGroupsFor, serviceName, type AiSub } from "./adminLayout";
 import KeyCards from "./KeyCards";
 import HelpdeskPicture, { botMatrixId } from "./HelpdeskPicture";
@@ -115,7 +115,7 @@ function RoutePicker({ connection, model, onChange, allowDefault, label, embedOn
           <input className={input} list={listId} value={model} onChange={(e) => onChange(connection, e.target.value.trim())}
             placeholder="model id" spellCheck={false} autoComplete="off" aria-label={`Model for ${label}`} />
           <datalist id={listId}>{(models[connection] ?? []).map((m) => <option key={m} value={m} />)}</datalist>
-          <button type="button" className={btn} onClick={() => void detect(connection)}>Detect</button>
+          {view.mode.value === "advanced" && <button type="button" className={btn} onClick={() => void detect(connection)}>Detect</button>}
         </>
       )}
     </div>
@@ -220,9 +220,11 @@ function AddConnection() {
 const kindWord = (kind: string) => (kind === "anthropic" ? "Anthropic" : "OpenAI-compatible");
 
 function ConnectionRow({ c }: { c: Conn }) {
-  const { models, detect } = usePanel();
+  const { view, models, detect } = usePanel();
   const [busy, setBusy] = useState(false);
   const found = models[c.id];
+  const advanced = view.mode.value === "advanced";
+  const keySet = !!c.key.stored || c.key.packages.some((p) => p.known && p.source !== "unset");
   return (
     <li className="border-t border-edge pt-3 first:border-t-0 first:pt-0" data-connection={c.id}>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -233,7 +235,10 @@ function ConnectionRow({ c }: { c: Conn }) {
         <span className="text-2xs text-muted">{[kindWord(c.kind) !== c.label ? kindWord(c.kind) : null, c.builtin ? "built in" : null].filter(Boolean).join(" · ")}</span>
       </div>
       <p className="mt-0.5 font-mono text-xs text-secondary break-all">{c.baseUrl}</p>
-      <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label="Key, per service">
+      {!advanced && (
+        <p className={`mt-1 text-xs ${keySet ? "text-secondary" : "text-muted"}`} data-key-summary>Key {keySet ? "set" : "not set"}{c.builtin ? ": under Built-in connection keys below" : ""}.</p>
+      )}
+      {advanced && <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label="Key, per service">
         {c.key.packages.length === 0 && (
           <li className={`${chip} ${c.key.stored ? "text-secondary" : "text-muted"}`}>
             key {c.key.stored ? `saved ${c.key.stored.display}` : "not set"}
@@ -248,12 +253,14 @@ function ConnectionRow({ c }: { c: Conn }) {
             {p.error && <span>· {p.error}</span>}
           </li>
         ))}
-      </ul>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" className={btn} disabled={busy} onClick={() => { setBusy(true); void detect(c.id).finally(() => setBusy(false)); }}>Detect models</button>
-        {found && <span className="text-2xs text-muted">{found.length} model{found.length === 1 ? "" : "s"} found — offered in the model boxes below</span>}
-        {c.builtin && <span className="text-2xs text-muted">Key: under Built-in connection keys below.</span>}
-      </div>
+      </ul>}
+      {advanced && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button type="button" className={btn} disabled={busy} onClick={() => { setBusy(true); void detect(c.id).finally(() => setBusy(false)); }}>Detect models</button>
+          {found && <span className="text-2xs text-muted">{found.length} model{found.length === 1 ? "" : "s"} found, offered in the model boxes below</span>}
+          {c.builtin && <span className="text-2xs text-muted">Key: under Built-in connection keys below.</span>}
+        </div>
+      )}
       {!c.builtin && <ConnectionEditor c={c} />}
     </li>
   );
@@ -331,6 +338,8 @@ function SlotRow({ s }: { s: Slot }) {
   const [busy, setBusy] = useState(false);
   const u = s.usage;
   const editable = s.kind === "chat" && !s.envPinned && !s.lockedBy;
+  const advanced = view.mode.value === "advanced";
+  const runsOn = s.routes.find((r) => r.route?.enabled)?.route ?? s.routes[0]?.route ?? null;
   async function test() {
     setBusy(true);
     const r = await runCheck("test", s.id);
@@ -350,8 +359,9 @@ function SlotRow({ s }: { s: Slot }) {
         {!s.running && <span className="text-2xs text-amber-300">· not running (no report for 10 min)</span>}
       </div>
       <p className="mt-0.5 text-xs text-secondary">{s.description}</p>
-      <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label="What it runs on, per service">
-        {s.routes.map((r) => (
+      {!advanced && <p className="mt-1 text-xs text-secondary" data-runs-on>Runs on: <span className="font-mono text-body-dim break-all">{routeText(runsOn)}</span></p>}
+      <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label={advanced ? "What it runs on, per service" : "Problems"}>
+        {advanced && s.routes.map((r) => (
           <li key={r.package} className={`${chip} min-w-0 max-w-full flex-wrap ${r.route?.enabled ? "text-secondary" : "text-muted"}`}>
             <span className="font-medium text-body">{serviceName(r.package)}</span>
             <span className={r.route?.enabled ? "min-w-0 font-mono text-body-dim break-all" : ""}>{routeText(r.route)}</span>
@@ -382,6 +392,15 @@ async function memoryAction(action: "enable" | "start-fresh" | "resume", body: R
     const res = await postJson(`/api/admin/ai/memory/${action}`, body, "POST", { timeoutMs: 70_000 });
     return { status: res.status, j: (await res.json().catch(() => ({}))) as MemoryAnswer };
   } catch { return { status: 0, j: { error: "network" } }; }
+}
+
+/** The memory store's state as one sentence: on or off, the embedder, how much is kept and for how long. */
+function memorySentence(status: string, st: { connection: string; model: string } | null, m: { rows: number; oldest: string | null; retentionDays: number | null; nextPurge: number }): string {
+  const kept = `${m.rows.toLocaleString()} message${m.rows === 1 ? "" : "s"} kept${m.oldest ? ` since ${new Date(m.oldest).toLocaleDateString()}` : ""}`;
+  const keep = m.retentionDays == null ? "kept forever" : `kept for ${m.retentionDays} days${m.nextPurge ? ` (${m.nextPurge.toLocaleString()} go at the next daily run)` : ""}`;
+  if (status === "off" || !st) return m.rows ? `Memory is off. ${kept}.` : "Memory is off.";
+  const word = status === "paused" ? "paused" : status === "switching" ? "switching embedders" : "on";
+  return `Memory is ${word} with ${st.connection} · ${st.model}: ${kept}, ${keep}.`;
 }
 
 const RETENTION: { value: number | null; key: string; label: string }[] = [
@@ -457,18 +476,7 @@ function MemoryPanel({ m }: { m: AiView["memory"] }) {
             <span className="ml-2 text-muted">probes the embedder first, and resumes only if it answers at {st.dim} dimensions</span></div>
         </div>
       )}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-        <dt className="text-muted">Status</dt>
-        <dd className={status === "on" ? "text-emerald-400" : status === "paused" ? "text-red-300" : "text-secondary"}>{status}</dd>
-        <dt className="text-muted">Embedder</dt>
-        <dd className="font-mono text-body-dim break-all">{st ? `${st.connection} · ${st.model} · ${st.dim} dims${st.reduced ? " (reduced)" : ""}` : "—"}</dd>
-        <dt className="text-muted">Stored</dt>
-        <dd className="text-body-dim">{m.rows.toLocaleString()} message{m.rows === 1 ? "" : "s"}{m.oldest ? `, oldest ${new Date(m.oldest).toLocaleDateString()}` : ""}</dd>
-        <dt className="text-muted">Column</dt>
-        <dd className="font-mono text-body-dim">{m.columnDim ? `vector(${m.columnDim})` : "unknown"}</dd>
-        <dt className="text-muted">Retention</dt>
-        <dd className="text-body-dim">{m.retentionDays == null ? "forever" : `${m.retentionDays} days — the next daily run removes ${m.nextPurge.toLocaleString()}`}</dd>
-      </dl>
+      <p role="status" data-memory-status className={`text-xs ${status === "on" ? "text-emerald-400" : status === "paused" ? "text-red-300" : "text-secondary"}`}>{memorySentence(status, st, m)}</p>
       <fieldset disabled={busy} className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted">Keep memories for</span>
         <Choice label="Memory retention" value={RETENTION.find((o) => o.value === (m.retentionDays ?? null))?.key ?? ""}
@@ -479,23 +487,52 @@ function MemoryPanel({ m }: { m: AiView["memory"] }) {
         <p className="text-xs text-muted">The embedder is locked: {lockedBy}</p>
       ) : status === "off" ? (
         <form className="space-y-2 rounded-lg border border-edge p-3" onSubmit={(ev) => { ev.preventDefault(); void turnOn(); }} aria-label="Turn on memory">
-          <p className="text-xs text-secondary">Pick an OpenAI-compatible connection and an embedding model. One test message is embedded first; its length becomes the store&apos;s. From then on new chat messages are remembered — older ones are not.</p>
+          <p className="text-xs text-secondary">Pick a connection and an embedding model. New messages are remembered from then on; older ones are not.</p>
           {picker}
           <button type="submit" className={btn} disabled={busy || !conn || !model}>Turn on memory</button>
         </form>
       ) : changing ? (
         <form className="space-y-2 rounded-lg border border-edge p-3" onSubmit={(ev) => { ev.preventDefault(); void startFresh(); }} aria-label="Start fresh">
-          <p className="text-xs text-secondary">Vectors from two models cannot be compared, so a new embedder starts with an empty memory. You will be told exactly how many memories are cleared before anything happens.</p>
+          <p className="text-xs text-secondary">A new embedder starts with an empty memory. You are told how many memories are cleared before anything happens.</p>
           {picker}
           <div className="flex gap-2">
             <button type="submit" className={btn} disabled={busy || !conn || !model}>Start fresh…</button>
             <button type="button" className={btn} disabled={busy} onClick={() => setChanging(false)}>Cancel</button>
           </div>
         </form>
-      ) : (
-        <button type="button" className={btn} disabled={busy || status === "switching"} onClick={() => setChanging(true)}>Change embedder…</button>
+      ) : null}
+      {!lockedBy && (status !== "off" || changing) && (
+        <Fold id="ai.memory.advanced" summary="Advanced">
+          {!changing && <button type="button" className={btn} disabled={busy || status === "switching"} onClick={() => setChanging(true)}>Change embedder…</button>}
+          <p className="text-2xs text-muted">The store holds vectors of {m.columnDim ? `${m.columnDim}` : "an unknown number of"} numbers{st ? ` (${st.dim} from this embedder${st.reduced ? ", reduced" : ""})` : ""}.</p>
+          <WordFloor />
+        </Fold>
       )}
     </div>
+  );
+}
+
+/** The fewest words a message needs to be remembered. */
+function WordFloor() {
+  const { view, note, reload } = usePanel();
+  const [v, setV] = useState(String(view.memoryMinWords.value));
+  const [busy, setBusy] = useState(false);
+  const env = view.memoryMinWords.envName;
+  async function save() {
+    setBusy(true);
+    const err = await saveKey("memory.minWords", Number(v));
+    note(err ? `Word floor: ${err}` : "Word floor: saved.");
+    setBusy(false);
+    if (!err) reload();
+  }
+  return (
+    <form className="flex flex-wrap items-center gap-2 text-xs text-secondary" onSubmit={(ev) => { ev.preventDefault(); void save(); }} data-word-floor>
+      <span>Remember a message once it has at least</span>
+      <input className={`${input} basis-14 flex-none`} inputMode="numeric" value={v} disabled={!!env} onChange={(e) => setV(e.target.value.replace(/\D/g, ""))} aria-label="Memory word floor" />
+      <span>words</span>
+      <button type="submit" className={btn} disabled={busy || !!env || !v || v === String(view.memoryMinWords.value)}>Save</button>
+      {env && <span className="text-2xs text-muted">set on the server ({env})</span>}
+    </form>
   );
 }
 
@@ -577,7 +614,7 @@ function PromptsCard({ sub }: { sub: AiSub }) {
         <ul className="space-y-3">
           {product.map((p) => (
             <ContentEditor key={`${p.slot}:${p.own?.updatedAt ?? "d"}`} contentKey={`prompt.${p.slot}`} label={p.label} defaultText={p.defaultPrompt} own={p.own} maxLength={16000}
-              help={p.slot === "automod.classify" ? "Your policy for what counts as risky. The categories and the strict answer format are added by the code." : "How the help desk answers. The person's account and the reference text below are added by the code."} />
+              help={p.slot === "automod.classify" ? "What counts as risky, in your words. The categories below are added for you." : "How the help desk answers. The person's account and the reference text below are added for you."} />
           ))}
           {withFacts && (
             <ContentEditor key={`facts:${view.facts?.updatedAt ?? "d"}`} contentKey="helpdesk.facts" label="Help desk reference" defaultText={null} own={view.facts} maxLength={32768}
@@ -611,6 +648,16 @@ function defaultBehavior(): Behavior {
   return d.value;
 }
 const FACT_TAGS = ["schedule", "rules", "links", "jokes", "other"] as const;
+
+/** Where the bot answers a mention, in one sentence: the site, Twitch once a bot account is linked
+ *  there; the other platforms' mentions are skipped.
+ *  @test-only exported so aiPanel.render.test.ts can hold each case's words (the panel calls it here). */
+export function answersOn(speak: { site: boolean; twitch: string | null } | null | undefined): string {
+  if (!speak) return "Answers messages that mention its name. Which platforms it answers on shows once the ingest service reports.";
+  const on = [speak.site ? "the site" : null, speak.twitch ? "Twitch" : null].filter(Boolean) as string[];
+  const where = on.length ? `on ${on.join(" and ")}` : "nowhere yet: no bot account is linked";
+  return `Answers messages that mention its name ${where}. Mentions on ${speak.twitch ? "YouTube, Kick and Streamplace" : "Twitch, YouTube, Kick and Streamplace"} are skipped.`;
+}
 
 /** The chat bot: its name, its switch, where it can speak, and its behavior file with the
  *  render-time meter (the same renderBotBehavior the bot runs). */
@@ -667,7 +714,7 @@ function BotSection() {
   return (
     <section className={card} aria-label="Chat bot">
       <h2 className={h2}>Chat bot</h2>
-      <p className="mt-0.5 mb-3 text-xs text-muted">Answers chat messages that mention its name. It sends the message, recent chat and (when memory is on) a few remembered lines to its task&apos;s connection.</p>
+      <p className="mt-0.5 mb-3 text-xs text-muted" data-answers-on>{answersOn(speak)} It sends the message, recent chat and (when memory is on) a few remembered lines to its task&apos;s connection.</p>
 
       <h3 className={h3}>Name</h3>
       <p className="mt-0.5 mb-1 text-2xs text-muted">Also the help desk&apos;s name, in chat, the help pop-up and the prompts. Unset = &quot;Bot&quot; (&quot;Help&quot; for the help desk).</p>
@@ -759,7 +806,6 @@ function AutomodSettings() {
   const a = view.automod;
   const [busy, setBusy] = useState(false);
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(AUTOMOD_NUMBERS.map((n) => [n.key, String(a[n.key]?.value ?? "")])));
-  const [cats, setCats] = useState(((a["automod.categories"]?.value as string[] | undefined) ?? []).join(", "));
   const task = view.slots.find((x) => x.id === "automod.classify");
   const taskOn = !!task?.routes.some((r) => r.route?.enabled);
   const on = a["automod.enabled"]?.value === true;
@@ -784,7 +830,8 @@ function AutomodSettings() {
           onToggle={() => void put("automod.skipSupporters", a["automod.skipSupporters"]?.value !== true, "Skip supporters")} />
         <span>Do not check paying supporters</span>
       </div>
-      <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(ev) => ev.preventDefault()}>
+      <Fold id="ai.automod.advanced" summary="Advanced">
+      <form className="grid gap-2 sm:grid-cols-2" onSubmit={(ev) => ev.preventDefault()} data-automod-numbers>
         {AUTOMOD_NUMBERS.map((n) => {
           const env = a[n.key]?.envName;
           return (
@@ -800,15 +847,35 @@ function AutomodSettings() {
             </label>
           );
         })}
-        <label className="flex flex-col gap-1 text-xs text-secondary sm:col-span-2">
-          <span>Categories <span className="text-muted">— what the check may call risky (comma-separated, lower case)</span></span>
-          <span className="flex gap-2">
-            <input className={input} value={cats} onChange={(e) => setCats(e.target.value)} aria-label="Automod categories" disabled={!!a["automod.categories"]?.envName} />
-            <button type="button" className={btn} disabled={busy || !!a["automod.categories"]?.envName}
-              onClick={() => void put("automod.categories", cats.split(",").map((c) => c.trim().toLowerCase()).filter(Boolean), "Categories")}>Save</button>
-          </span>
-        </label>
       </form>
+      </Fold>
+    </section>
+  );
+}
+
+/** What the check may call risky: added to the policy prompt for you. */
+function AutomodCategories() {
+  const { view, note, reload } = usePanel();
+  const a = view.automod;
+  const [busy, setBusy] = useState(false);
+  const [cats, setCats] = useState(((a["automod.categories"]?.value as string[] | undefined) ?? []).join(", "));
+  const env = a["automod.categories"]?.envName;
+  async function save() {
+    setBusy(true);
+    const err = await saveKey("automod.categories", cats.split(",").map((c) => c.trim().toLowerCase()).filter(Boolean));
+    note(err ? `Categories: ${err}` : "Categories: saved.");
+    setBusy(false);
+    if (!err) reload();
+  }
+  return (
+    <section className={card} aria-label="Categories">
+      <h2 className={h2}>Categories</h2>
+      <p className="mt-0.5 text-xs text-muted">What the check may call risky. Comma-separated, lower case.</p>
+      <form className="mt-2 flex gap-2" onSubmit={(ev) => { ev.preventDefault(); void save(); }}>
+        <input className={input} value={cats} onChange={(e) => setCats(e.target.value)} aria-label="Automod categories" disabled={!!env} />
+        <button type="submit" className={btn} disabled={busy || !!env}>Save</button>
+      </form>
+      {env && <p className="mt-1 text-2xs text-muted">Set on the server ({env}).</p>}
     </section>
   );
 }
@@ -846,10 +913,7 @@ function ModeSection() {
           onChange={(m) => { if (view.mode.value !== m) void put("ai.mode", m, "Mode"); }} />
         {modeEnv && <span className="text-2xs text-muted">set on the server ({modeEnv.envName})</span>}
       </fieldset>
-      <p className="mt-1 text-xs text-muted">
-        {simple ? "Simple: the default model below runs every chat task that is switched on and not set on the server."
-          : "Advanced: each task uses its own connection and model when it has one, else the default."}
-      </p>
+      <p className="mt-1 text-xs text-muted" data-mode-line>Simple: one model for everything. Advanced: pick a model per task.</p>
 
       <h3 className={`mt-4 ${h3}`}>Default model</h3>
       <form className="mt-1 space-y-2" onSubmit={(ev) => { ev.preventDefault(); saveDefault(); }}>
@@ -944,7 +1008,7 @@ export default function AiPanel({ sub, inst, reloadInst, note }: {
     <PanelCtx.Provider value={{ view, note, reload: load, models, detect }}>
     <div className="space-y-4">
       {!view.routesReachable && (
-        <p className="rounded-lg border border-edge bg-surface-1 px-3 py-2 text-xs text-amber-300">The chat service did not answer when asked what each AI task runs on — the tasks are missing here, not off.</p>
+        <p className="rounded-lg border border-edge bg-surface-1 px-3 py-2 text-xs text-amber-300">The chat service is not answering. Restart it from the server, then reload this page.</p>
       )}
 
       {sub === "models" && (
@@ -964,7 +1028,12 @@ export default function AiPanel({ sub, inst, reloadInst, note }: {
       {sub === "bot" && (
         <>
           <BotSection />
-          <KeyCards view={inst} groups={keyGroupsFor("ai", "bot")} onChanged={reloadBoth} note={note} />
+          <KeyCards view={inst} groups={keyGroupsFor("ai", "bot").filter((g) => !g.advanced)} onChanged={reloadBoth} note={note} />
+          <section className={card} aria-label="Advanced">
+            <Fold id="ai.bot.advanced" summary="Advanced">
+              <KeyCards view={inst} groups={keyGroupsFor("ai", "bot").filter((g) => g.advanced)} onChanged={reloadBoth} note={note} />
+            </Fold>
+          </section>
           <TasksCard sub="bot" />
           <PromptsCard sub="bot" />
         </>
@@ -979,8 +1048,9 @@ export default function AiPanel({ sub, inst, reloadInst, note }: {
       {sub === "automod" && (
         <>
           <AutomodSettings />
-          <TasksCard sub="automod" />
           <PromptsCard sub="automod" />
+          <AutomodCategories />
+          <TasksCard sub="automod" />
         </>
       )}
 
@@ -998,7 +1068,7 @@ export default function AiPanel({ sub, inst, reloadInst, note }: {
           <TasksCard sub="embeddings" />
           <section className={card} aria-label="Memory">
             <h2 className={h2}>Memory</h2>
-            <p className="mt-0.5 mb-3 text-xs text-muted">Chat messages turned into vectors so the bot can recall them. Needs an OpenAI-compatible connection (OpenAI, Ollama, LM Studio, …); Anthropic has no embeddings endpoint.</p>
+            <p className="mt-0.5 mb-3 text-xs text-muted">Lets the bot recall earlier chat. Needs an OpenAI-compatible connection (OpenAI, Ollama, LM Studio); Anthropic has none.</p>
             <MemoryPanel m={view.memory} />
           </section>
         </>

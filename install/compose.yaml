@@ -199,6 +199,9 @@ services:
       # let a compromised site take every secret. Root hands it over during setup's recovery step
       # through results/ (`blackbranch` recovery_sheet) and takes it back once setup moves on.
       SETUP_TOKEN_HASH: ${SETUP_TOKEN_HASH:-}
+      # The Forums tab reads the forum rooms as a read-only account (app/lib/forumReader.ts);
+      # `blackbranch up` makes it and keeps its sign-in in .env.
+      MATRIX_READER_TOKEN: ${MATRIX_READER_TOKEN:-}
       BB_ENV_FILE: ${BB_HOME:-/opt/blackbranch}/.env
     volumes:
       - web-cache:/app/.next/cache

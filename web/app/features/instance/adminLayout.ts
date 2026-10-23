@@ -50,8 +50,6 @@ export const SUBS: Record<AdminSection, readonly AdminSub[]> = {
     { key: "bar", label: "Support bar", depth: 1 },
     { key: "effects", label: "Effects", depth: 1 },
     { key: "tts", label: "TTS" },
-    // The stream-api overlay pages and how to add them to OBS (the setup pages do not carry OBS).
-    { key: "overlays", label: "Overlays" },
   ],
   // "Payment history", not "History": no label is in both panels (the mod panel has Mod history).
   payments: [{ key: "history", label: "Payment history" }, { key: "connections", label: "Connections" }],
@@ -59,13 +57,12 @@ export const SUBS: Record<AdminSection, readonly AdminSub[]> = {
   platforms: [
     { key: "player", label: "Player" },
     { key: "youtube", label: "YouTube" }, { key: "twitch", label: "Twitch" }, { key: "kick", label: "Kick" },
-    { key: "streamplace", label: "Streamplace" }, { key: "discord", label: "Discord" },
+    { key: "streamplace", label: "Streamplace" }, { key: "discord", label: "Discord" }, { key: "emotes", label: "Emotes" },
   ],
   // The site currency has its own screen beside the site's cards.
-  // Every module switch, one list.
   // Badges and Support tickets live here, not in the mod panel.
   site: [
-    { key: "general", label: "Site" }, { key: "points", label: "Points" }, { key: "modules", label: "Modules" },
+    { key: "general", label: "Site" }, { key: "points", label: "Points" }, { key: "leaderboard", label: "Leaderboard" },
     { key: "badges", label: "Badges" }, { key: "tickets", label: "Support tickets" }, { key: "moderators", label: "Moderators" },
   ],
   doctor: [],
@@ -141,9 +138,9 @@ const EXTRA_WORDS: Record<string, string> = {
   "ai/models": "anthropic openai model provider key", "ai/bot": "bot name account trigger speak",
   "ai/scoring": "sentiment temperament intelligence score", "ai/automod": "moderation classify model",
   "ai/helpdesk": "help desk support answers", "ai/embeddings": "memory vectors embed",
-  "utility/timer": "subathon clock countdown", "utility/bar": "goal meter colours shape",
-  "utility/effects": "alerts sounds lights scene", "utility/overlays": "obs browser source alert support bar meter bubble poll sticker", "payments/history": "refunds failures totals donations",
-  "platforms/player": "embed embeds sources watch page", "site/badges": "badge price unlock", "site/tickets": "help requests bug reports", "site/points": "currency store prices",
+  "utility/timer": "subathon clock countdown", "utility/bar": "goal colours shape overlay",
+  "utility/effects": "alerts sounds overlay", "utility/obs": "obs browser source overlay rig bubble poll sticker", "payments/history": "refunds failures totals donations",
+  "platforms/player": "embed embeds sources watch page", "site/badges": "badge price unlock", "site/tickets": "help requests bug reports", "site/points": "currency store prices", "site/leaderboard": "boards ranks home top", "platforms/emotes": "7tv bttv ffz emote sets refresh",
   doctor: "health checks logs", updates: "release version upgrade",
 };
 
@@ -181,47 +178,105 @@ export function isAdminSection(s: string): s is AdminSection {
 
 /** One card of key rows: which section and sub-tab it sits in, its title, its keys in order. */
 /** `ownerOnly`: shown only on an install with a site plugin (the OBS WebSocket path). */
-export type KeyGroup = { section: AdminSection; sub: string | null; title: string; blurb?: string; keys: readonly string[]; ownerOnly?: boolean };
+export type KeyGroup = {
+  section: AdminSection; sub: string | null; title: string; blurb?: string; keys: readonly string[]; ownerOnly?: boolean;
+  /** Every row shown, none edited here: the values the install was made with. */
+  readOnly?: boolean;
+  /** Under the page's Advanced fold. */
+  advanced?: boolean;
+  /** A read-only card's own line for each row, in place of "set it on the server" (a value the
+   *  server finds itself, which no setting changes). */
+  readOnlyNote?: string;
+  /** The card starts closed (a fold with its title as the summary). */
+  folded?: boolean;
+  /** Rows shown only once they hold a value (a fresh install never sets them). */
+  hideUnset?: readonly string[];
+  /** Rows shown only while another key holds one of these values. */
+  onlyWhen?: Readonly<Record<string, { key: string; is: readonly string[] }>>;
+};
+
+/** Keys no card shows, each with why. Every other key the Credentials page lists is on exactly one
+ *  card.
+ *  @test-only adminLayout.test.ts holds every other key to exactly one card and each of these to a reason. */
+export const UNPLACED: Readonly<Record<string, string>> = {
+  "bugReports.enabled": "nothing sends bug reports yet; shown once a sender exists",
+  "youtube.oauthClientId": "for posting into YouTube chat, which ships in a later release",
+  "youtube.oauthClientSecret": "for posting into YouTube chat, which ships in a later release",
+  // The owner's modules and the OBS WebSocket path are the owner plugin's, set on the server.
+  "modules.lights": "an owner module, switched on the server (MODULE_LIGHTS)",
+  "modules.meter": "an owner module, switched on the server (MODULE_METER)",
+  "modules.radio": "an owner module, switched on the server (MODULE_RADIO)",
+  "homeassistant.url": "the owner's room lights, set on the server",
+  "homeassistant.token": "the owner's room lights, set on the server",
+  "obs.url": "the OBS WebSocket path, which the product does not use (the rig page replaces it)",
+  "obs.password": "the OBS WebSocket path, which the product does not use (the rig page replaces it)",
+  "obs.soundSource": "the OBS WebSocket path, which the product does not use (the rig page replaces it)",
+  "obs.botScene": "the OBS WebSocket path, which the product does not use (the rig page replaces it)",
+  "obs.botSource": "the OBS WebSocket path, which the product does not use (the rig page replaces it)",
+  "obs.botShowScene": "the OBS WebSocket path, which the product does not use (the rig page replaces it)",
+};
 
 /** Every card, in order — the move table as code.
  *  @test-only adminLayout.test.ts checks every card against the schema and the sub-tab list; the
  *  panel itself reads cards through keyGroupsFor. */
 export const KEY_GROUPS: readonly KeyGroup[] = [
   { section: "ai", sub: "models", title: "Built-in connection keys", blurb: "The keys for the built-in Anthropic and OpenAI connections above.", keys: ["anthropic.apiKey", "openai.apiKey"] },
-  { section: "ai", sub: "bot", title: "Accounts", keys: ["bot.matrixId", "chat.botUsernames"] },
+  { section: "ai", sub: "bot", title: "Accounts", keys: ["bot.matrixId"] },
+  { section: "ai", sub: "bot", title: "Bot usernames", keys: ["chat.botUsernames"], advanced: true },
 
+  // Each module's switch sits on its own feature's page; there is no Modules tab.
+  { section: "utility", sub: "obs", title: "OBS", keys: ["modules.obs"] },
   { section: "utility", sub: "obs", title: "Timer", blurb: "The rig page reports OBS's scene; the timer pauses on this one.", keys: ["timer.pauseScene"] },
-  { section: "utility", sub: "obs", title: "OBS WebSocket", blurb: "For a server on the same network as OBS: it adds showing and hiding OBS's own sources.", keys: ["obs.url", "obs.password"], ownerOnly: true },
-  { section: "utility", sub: "obs", title: "Scenes and sources", blurb: "Used through the OBS WebSocket. OBS finds these by name, so each must match OBS exactly. A name left empty switches off only what it drives.", keys: ["obs.soundSource", "obs.botScene", "obs.botSource", "obs.botShowScene"], ownerOnly: true },
-  { section: "utility", sub: "obs", title: "Room lights", blurb: "Used while the room lights module is on (Site → Modules).", keys: ["homeassistant.url", "homeassistant.token"] },
   { section: "utility", sub: "tts", title: "Voice", keys: ["tts.enabled", "elevenlabs.apiKey", "tts.voiceCasual", "tts.voiceLoud"] },
   { section: "utility", sub: "tts", title: "Playback", keys: ["tts.sink", "tts.dualVoice", "tts.clipsDir"] },
 
-  { section: "payments", sub: "connections", title: "Stripe", keys: ["stripe.secretKey", "stripe.publishableKey", "stripe.webhookSecret", "stripe.supporterPriceId"] },
-  { section: "payments", sub: "connections", title: "PayPal", keys: ["paypal.env", "paypal.clientId", "paypal.clientSecret", "paypal.webhookId", "paypal.plans"] },
+  { section: "payments", sub: "connections", title: "Stripe", keys: ["modules.stripe", "stripe.secretKey", "stripe.publishableKey", "stripe.webhookSecret", "stripe.supporterPriceId"] },
+  { section: "payments", sub: "connections", title: "PayPal", keys: ["modules.paypal", "paypal.env", "paypal.clientId", "paypal.clientSecret", "paypal.webhookId", "paypal.plans"] },
   { section: "payments", sub: "connections", title: "Other", blurb: "Patreon, Ko-fi and Streamlabs.", keys: ["patreon.webhookSecret", "kofi.verificationToken", "streamlabs.socketToken"] },
   { section: "payments", sub: "connections", title: "Links", blurb: "Where support links point outside the site.", keys: ["money.subscribeUrl", "money.supportLine", "site.donateUrl"] },
 
   { section: "platforms", sub: "player", title: "Player", blurb: "Which live sources the watch page offers. The Stream tab switches the same setting.", keys: ["player.embedsOff"] },
-  { section: "platforms", sub: "youtube", title: "YouTube", keys: ["platform.youtube.channelId", "platform.youtube.vodPlaylist", "youtube.apiKey", "youtube.oauthClientId", "youtube.oauthClientSecret"] },
+  { section: "platforms", sub: "youtube", title: "YouTube", keys: ["modules.youtube", "platform.youtube.channelId", "platform.youtube.vodPlaylist", "youtube.apiKey"] },
   { section: "platforms", sub: "twitch", title: "Twitch", keys: ["platform.twitch.channel", "platform.twitch.broadcasterId", "twitch.clientId", "twitch.clientSecret"] },
   { section: "platforms", sub: "kick", title: "Kick", keys: ["platform.kick.slug", "platform.kick.userId", "kick.clientId", "kick.clientSecret", "kick.chatroomId", "kick.channelId"] },
   { section: "platforms", sub: "streamplace", title: "Streamplace", keys: ["platform.streamplace.did", "platform.streamplace.channel"] },
   { section: "platforms", sub: "discord", title: "Discord", blurb: "The Discord bridge on the community server.", keys: ["discordBridge.usernameTemplate", "discordBridge.displaynameTemplate"] },
 
-  // The streamer's name first: the one row here a new install edits (the Site card's rows are set
-  // where the site is built).
-  { section: "site", sub: "general", title: "Streamer", keys: ["streamer.displayName", "streamer.matrixId", "staff.extraMatrixIds"] },
-  { section: "site", sub: "general", title: "Site", keys: ["site.name", "site.shortName", "site.description", "site.tagline", "site.homeHeading", "site.homeIntro", "site.iconSet", "site.origin", "site.apiOrigin", "site.apiWsOrigin", "site.legacyId"] },
-  { section: "site", sub: "general", title: "Legal", blurb: "Who runs the site, as the Terms, Privacy and About pages name it (set where the site is built), and the liability cap the Terms state (changed here).", keys: ["legal.operator", "legal.contactEmail", "legal.governingLaw", "legal.effectiveDate", "legal.liabilityCapUsd"] },
-  { section: "site", sub: "general", title: "Community server", blurb: "Federation lets other Matrix servers exchange messages with this community's rooms. It does not decide who may sign in here — the next card does.", keys: ["matrix.serverName", "matrix.baseUrl", "matrix.federationServer", "matrix.legacyNamespace", "matrix.federation", "matrix.registration", "matrix.rooms.hub", "matrix.rooms.general", "matrix.oauth.issuer", "matrix.oauth.clientId", "matrix.oauth.clientSecret"] },
-  { section: "site", sub: "general", title: "Sign-in from other servers", blurb: "Who may sign in HERE with an account made on another Matrix server — not federation, which is about servers exchanging messages. This site's own server always signs in. Server names are matched exactly; a change applies at once, to people already signed in too.", keys: ["auth.federatedSignin", "auth.federatedAllow", "auth.federatedDeny"] },
-  { section: "site", sub: "general", title: "Health", blurb: "Where alerts for whoever runs the site are pushed.", keys: ["ntfy.wakeUrl", "ntfy.quietUrl"] },
-  { section: "site", sub: "general", title: "Running the site", blurb: "Set during setup; change them here.", keys: ["site.timeZone", "site.dataSince", "updates.quietHour", "bugReports.enabled"] },
-  { section: "site", sub: "general", title: "Backups", blurb: "Where the nightly backup goes. A change applies at the next backup; run blackbranch backup on the server to try it now.", keys: ["backup.target", "backup.repository", "backup.s3.region", "backup.s3.accessKeyId", "backup.s3.secretAccessKey", "backup.keepDaily", "backup.keepWeekly"] },
+  // The streamer's name first: the one row here a new install edits from the start.
+  { section: "site", sub: "general", title: "Streamer", keys: ["streamer.displayName", "streamer.matrixId"] },
+  { section: "site", sub: "general", title: "Site", keys: ["site.name", "site.shortName", "site.description", "site.tagline", "site.homeHeading", "site.homeIntro", "site.iconSet"] },
+  { section: "site", sub: "general", title: "Legal", blurb: "Who runs the site, as the Terms, Privacy and About pages name it, and the liability cap the Terms state.", keys: ["legal.operator", "legal.contactEmail", "legal.governingLaw", "legal.effectiveDate", "legal.liabilityCapUsd"] },
+  // Federation and sign-in from other servers are two cards on purpose: they read as one switch
+  // when they share a heading, and they are not one.
+  { section: "site", sub: "general", title: "Community", blurb: "Federation lets other Matrix servers exchange messages with this community's rooms. It does not decide who may sign in here: the next card does.", keys: ["matrix.federation", "matrix.registration"] },
+  { section: "site", sub: "general", title: "Sign-in from other servers", blurb: "Who may sign in HERE with an account made on another Matrix server. This is not federation, which is about servers exchanging messages. This site's own server always signs in. Server names are matched exactly; a change applies at once, to people already signed in too.", keys: ["auth.federatedSignin", "auth.federatedAllow", "auth.federatedDeny"] },
+  // The two rooms the server's community setup made. The installer passes neither id to any
+  // service: `blackbranch matrix bootstrap` records them in the database. Facts, not settings.
+  { section: "site", sub: "general", title: "Community rooms", readOnly: true,
+    blurb: "The community space and #general, as the server made them.",
+    readOnlyNote: "Found by the server when it made the community. Nothing to change here.",
+    keys: ["matrix.rooms.hub", "matrix.rooms.general"] },
+  { section: "site", sub: "general", title: "Alerts to your phone", blurb: "Where alerts for whoever runs the site are pushed: urgent ones and quiet ones.", keys: ["ntfy.wakeUrl", "ntfy.quietUrl"] },
+  { section: "site", sub: "general", title: "Running the site", keys: ["site.timeZone", "site.dataSince", "updates.quietHour"] },
+  { section: "site", sub: "general", title: "Backups", blurb: "Where the nightly backup goes. A change applies at the next backup; run sudo blackbranch backup on the server to try it now.",
+    keys: ["backup.target", "backup.repository", "backup.s3.region", "backup.s3.accessKeyId", "backup.s3.secretAccessKey", "backup.keepDaily", "backup.keepWeekly"],
+    onlyWhen: Object.fromEntries(["backup.s3.region", "backup.s3.accessKeyId", "backup.s3.secretAccessKey"].map((k) => [k, { key: "backup.target", is: ["s3"] }])) },
+  // Every value the install was made with, in one closed card at the bottom: the addresses, the
+  // homeserver and its sign-in client, the two rooms the bootstrap made. Changed on the server.
+  { section: "site", sub: "general", title: "Install values", folded: true, readOnly: true,
+    blurb: "Set when this site was installed. To change one, change it on the server, then restart the site.",
+    keys: ["site.origin", "site.apiOrigin", "site.apiWsOrigin", "matrix.serverName", "matrix.baseUrl", "matrix.federationServer",
+      "matrix.oauth.issuer", "matrix.oauth.clientId", "matrix.oauth.clientSecret", "site.legacyId", "matrix.legacyNamespace"],
+    hideUnset: ["site.legacyId", "matrix.legacyNamespace"] },
+
+  // Site → Leaderboard: Home's Leaderboard on or off, and which boards it offers.
+  { section: "site", sub: "leaderboard", title: "Leaderboard", keys: ["leaderboard.off", "leaderboard.hidden"] },
+
+  // Site → Moderators: the accounts treated as staff besides the streamer and the bot.
+  { section: "site", sub: "moderators", title: "Staff", keys: ["staff.extraMatrixIds"] },
 
   // Site → Points. The Store prices card is PointsPanel's own (it is a table, not keys).
-  { section: "site", sub: "points", title: "Name and look", blurb: "What people read wherever points show. Set where the site is built.", keys: ["currency.name", "currency.namePlural", "currency.symbol", "currency.icon", "community.scoreName"] },
+  { section: "site", sub: "points", title: "Name and look", blurb: "What people read wherever points show.", keys: ["currency.name", "currency.namePlural", "currency.symbol", "currency.icon", "community.scoreName"] },
   { section: "site", sub: "points", title: "Buying", keys: ["currency.purchasable"] },
   { section: "site", sub: "points", title: "Earning", blurb: "What each kind of taking part pays, and the caps on it. Changes apply to the next award.", keys: [
     "currency.earn.firstMessage", "currency.earn.message", "currency.earn.messageCooldownMinutes",
@@ -230,10 +285,33 @@ export const KEY_GROUPS: readonly KeyGroup[] = [
     "currency.earn.watchCap", "currency.earn.watchMinutesPerPoint", "currency.earn.clockMultiplier",
   ] },
 
-  // Site → Modules. Off = not started and its addresses answer "not found"; a switch
-  // applies when the chat service restarts. Each module's own settings stay in their section.
-  { section: "site", sub: "modules", title: "Modules", blurb: "Parts of the site that can be switched off. A module is on once the service that runs it restarts with its switch on, and the website shows it from that service's report — the radio tab follows the chat service's restart. Card payments and PayPal, which only the website reads, apply at once.", keys: ["modules.obs", "modules.lights", "modules.meter", "modules.radio", "modules.youtube", "modules.stripe", "modules.paypal"] },
 ];
+
+/** A key as a card reads it: what each service holds. */
+type CardKey = { key: string; packages: readonly { package: string; display?: unknown }[] };
+
+/** What a key holds now: the website's value where it reads the key, else the first service's. */
+function heldValue(k: CardKey): unknown {
+  return (k.packages.find((p) => p.package === "web") ?? k.packages[0])?.display ?? null;
+}
+const isEmpty = (v: unknown) => v === null || v === undefined || v === "" || (Array.isArray(v) && v.length === 0);
+
+/** The rows a card shows, in its order: keys this install has (an owner-only module's keys need the
+ *  site plugin), minus a `hideUnset` key that holds nothing and an `onlyWhen` key whose condition
+ *  does not hold. */
+export function shownKeys<K extends CardKey>(g: KeyGroup, keys: readonly K[], installed: (key: string) => boolean = () => true): K[] {
+  const byKey = new Map(keys.map((k) => [k.key, k]));
+  return g.keys.filter(installed).map((key) => byKey.get(key)).filter((k): k is K => {
+    if (!k) return false;
+    if (g.hideUnset?.includes(k.key) && isEmpty(heldValue(k))) return false;
+    const when = g.onlyWhen?.[k.key];
+    if (when) {
+      const other = byKey.get(when.key);
+      if (!other || !when.is.includes(String(heldValue(other) ?? ""))) return false;
+    }
+    return true;
+  });
+}
 
 export function guidesFor(section: AdminSection, sub: string | null): string[] {
   // SETUP_GUIDES lives beside the server code that builds the guides (lib/setup/setupGuides.ts).

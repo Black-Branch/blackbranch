@@ -13,7 +13,7 @@
 // Matrix's own m.* state — no namespace of the site's at all.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdirSync, rmSync, statSync, readdirSync, existsSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, statSync, readdirSync, existsSync, chmodSync, symlinkSync } from "node:fs";
 import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
@@ -318,7 +318,7 @@ test("the router's config is in its own folder: render writes rendered/caddy/Cad
     // recreates it with the new mount — and `up` removes it then.
     assert.ok(existsSync(path.join(home, "rendered/Caddyfile")));
     const up = read("blackbranch").match(/\ncmd_up\(\) \{\n([\s\S]*?)\n\}\n/)?.[1] ?? "";
-    assert.match(up, /\n {2}info "all services healthy"$/, "the whole of cmd_up was read");
+    assert.match(up, /\n {2}info "all services healthy"\n(?: {2}#[^\n]*\n)* {2}matrix_ensure "\$UP_AFTER" \|\| true$/, "the whole of cmd_up was read");
     assert.match(up, /\n {2}docker_step "the services did not start" compose up -d\n(?: {2}[^\n]*\n)*? {2}rm -f "\$BB_HOME\/rendered\/Caddyfile"\n/, "the old router file goes after everything is started on the new mount");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
@@ -391,7 +391,7 @@ function fakeHomeserver(server = "example.test", owner = `@admin:${server}`, adm
     }
     return send(404, { errcode: "M_UNRECOGNIZED" });
   });
-  return { srv, rooms, writes, plant, left };
+  return { srv, rooms, aliases, writes, plant, left };
 }
 function bootstrap(base, env = {}, token = "tok") {
   return new Promise((resolve) => {
@@ -546,4 +546,189 @@ test("bootstrap refuses rooms it did not create: a squatted alias, a recorded ro
     const ok = await bootstrap(`http://127.0.0.1:${mine.srv.address().port}`);
     assert.equal(ok.code, 0, ok.err); assert.equal(JSON.parse(ok.out).hub, hub);
   } finally { mine.srv.close(); }
+});
+
+// ── The rooms kept in place: at every start and after every restore (round 11, ops item 1) ──────
+// The bootstrap used to run only at setup's Community page: a restore whose homeserver data lacked
+// a room, or a link someone removed, stayed missing until the operator noticed.
+test("bootstrap after a restore: what the homeserver lacks is made again, with its links; the next run changes nothing", async () => {
+  const { srv, rooms, aliases, writes } = fakeHomeserver();
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const first = JSON.parse((await bootstrap(base)).out);
+    // The restored homeserver holds no #general, and the forum lost its link to the space.
+    rooms.delete(first.general); aliases.delete("general");
+    rooms.get(first.forum).state.delete(`m.space.parent\u0000${first.hub}`);
+    const stored = { MX_STORED_HUB: first.hub, MX_STORED_GENERAL: first.general };
+    // A plain run still never replaces a recorded room silently…
+    const n0 = writes.length;
+    const plain = await bootstrap(base, stored);
+    assert.equal(plain.code, 1); assert.match(plain.err, /not making a second one silently/);
+    assert.equal(writes.length, n0, "the refused run wrote nothing");
+    // …the run after a restore does: #general again, its two links, and the forum's lost link.
+    const after = await bootstrap(base, { ...stored, MX_RECREATE: "1" });
+    assert.equal(after.code, 0, after.err);
+    const made = JSON.parse(after.out);
+    assert.equal(made.hub, first.hub); assert.equal(made.forum, first.forum);
+    assert.notEqual(made.general, first.general, "a new #general");
+    assert.deepEqual(made.created, ["#general", "m.space.child", "m.space.parent", "m.space.parent"]);
+    assert.deepEqual(rooms.get(made.general).state.get("m.room.retention\u0000"), { max_lifetime: 30 * 24 * 3600 * 1000 });
+    assert.deepEqual(rooms.get(first.forum).state.get(`m.space.parent\u0000${first.hub}`), { via: ["example.test"] });
+    // Restart: the next start, with the new id recorded, changes nothing.
+    const n1 = writes.length;
+    const again = await bootstrap(base, { MX_STORED_HUB: made.hub, MX_STORED_GENERAL: made.general });
+    assert.equal(again.code, 0, again.err); assert.deepEqual(JSON.parse(again.out).created, []);
+    assert.equal(writes.length, n1, "a repeat run wrote something");
+  } finally { srv.close(); }
+});
+
+// The host side: `blackbranch matrix ensure`, run by `up` (every start, every restore) and by the boot
+// unit, against the stand-in docker. fake/rooms-state is what the read of Synapse's tables answers.
+function roomsHome({ recorded = true } = {}) {
+  const h = fakeHome();
+  mkdirSync(path.join(h.home, "release")); mkdirSync(path.join(h.home, "bin")); mkdirSync(path.join(h.home, "systemd"));
+  symlinkSync(here, path.join(h.home, "release/install"));
+  symlinkSync(path.join(root, "config"), path.join(h.home, "release/config"));
+  writeFileSync(path.join(h.fake, "cfg/streamer.matrixId"), "@casey:example.test\n");
+  if (recorded) {
+    writeFileSync(path.join(h.fake, "cfg/matrix.rooms.hub"), "!h1:example.test\n");
+    writeFileSync(path.join(h.fake, "cfg/matrix.rooms.general"), "!g1:example.test\n");
+  }
+  writeFileSync(path.join(h.fake, "mas-users"), "1\n");
+  writeFileSync(path.join(h.fake, "mas-token"), "Issued token mct_abc123\n");
+  writeFileSync(path.join(h.fake, "run-out"), '{"hub":"!h1:example.test","general":"!g1:example.test","forum":"!f1:example.test","created":["m.space.parent"]}\n');
+  const state = (s) => writeFileSync(path.join(h.fake, "rooms-state"), `${s}\n`);
+  // The bootstrap's container run fails with <text> (null: it works again); every other call is as before.
+  const failBootstrap = (text) => (text === null ? rmSync(path.join(h.fake, "fail-1"), { force: true })
+    : writeFileSync(path.join(h.fake, "fail-1"), `compose run --rm --no-deps -T -v ${h.home}/release/install/matrix:/bb-matrix:ro\n${text}\n`));
+  const env = { BB_BIN_DIR: path.join(h.home, "bin"), BB_SYSTEMD_DIR: path.join(h.home, "systemd"), BB_HEALTH_WAIT: "1", FAKE_RUN_STATUS: "0" };
+  const go = (extra, ...args) => {
+    const before = h.calls().length;
+    const r = h.runWith({ ...env, ...extra }, ...args);
+    return { ...r, calls: h.calls().slice(before) };
+  };
+  return { ...h, state, failBootstrap, go };
+}
+const SIGNED_IN = /issue-compatibility-token|bootstrap\.mjs/;
+
+test("matrix ensure: the rooms in place — one read of Synapse's tables, no sign-in, no container; a second start changes nothing", () => {
+  const h = roomsHome();
+  try {
+    h.state("complete");
+    for (const run of [1, 2]) {
+      const r = h.go({}, "matrix", "ensure");
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /community rooms: in place/, `run ${run}`);
+      assert.match(r.calls, /compose exec -T postgres psql -U postgres -d synapse -qAt/, "Synapse's own tables are read");
+      assert.doesNotMatch(r.calls, SIGNED_IN, `run ${run}: signed in or started a container`);
+    }
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("matrix ensure: before setup's Community page made them, nothing is read or made", () => {
+  const h = roomsHome({ recorded: false });
+  try {
+    h.state("missing");
+    const r = h.go({}, "matrix", "ensure");
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /community rooms: not made yet \(the setup pages' Community page makes them\)/);
+    assert.doesNotMatch(r.calls, /-d synapse/); assert.doesNotMatch(r.calls, SIGNED_IN);
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("matrix ensure: something missing — the bootstrap makes it; a plain start never replaces a recorded room, a restore's start may", () => {
+  const h = roomsHome();
+  try {
+    h.state("missing");
+    const plain = h.go({}, "matrix", "ensure");
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.match(plain.stdout, /community rooms: something is missing; making it again\n/);
+    assert.match(plain.calls, /bootstrap\.mjs/, "the bootstrap ran");
+    assert.match(plain.calls, /-e MX_STORED_HUB=!h1:example\.test -e MX_STORED_GENERAL=!g1:example\.test -e MX_RECREATE=0 /);
+    assert.match(plain.stdout, /community space !h1:example\.test · #general !g1:example\.test · #forum !f1:example\.test/);
+    assert.doesNotMatch(plain.stdout, /^ *\{"hub"/m, "the JSON line is the request's answer, not the start's printout");
+    const after = h.go({}, "matrix", "ensure", "--after-restore");
+    assert.equal(after.status, 0, after.stderr);
+    assert.match(after.stdout, /after a restore, a recorded room that is gone is replaced/);
+    assert.match(after.calls, /-e MX_RECREATE=1 /);
+    // The operator's own way to the same: bootstrap --recreate.
+    const by = h.go({}, "matrix", "bootstrap", "--recreate");
+    assert.equal(by.status, 0, by.stderr); assert.match(by.calls, /-e MX_RECREATE=1 /);
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("matrix ensure: a bootstrap that fails is said with the command to run; the retry at the next start makes the rooms", () => {
+  const h = roomsHome();
+  try {
+    h.state("missing");
+    h.failBootstrap("bootstrap: #general: the recorded room !g1:example.test is gone or not joined by @casey:example.test — not making a second one silently (MX_RECREATE=1 to replace it)");
+    let r = h.go({}, "matrix", "ensure");
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /a recorded room is gone\. To make a new one in its place: sudo blackbranch matrix bootstrap --recreate/);
+    h.failBootstrap("bootstrap: create #forum: 500 the homeserver is busy");
+    r = h.go({}, "matrix", "ensure");
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /could not be made again \(create #forum: 500 the homeserver is busy\). Run: sudo blackbranch matrix bootstrap/);
+    // Retry: the homeserver answers again; the same command makes them, and the run after is a no-op.
+    h.failBootstrap(null);
+    r = h.go({}, "matrix", "ensure");
+    assert.equal(r.status, 0, r.stderr); assert.match(r.calls, /bootstrap\.mjs/);
+    h.state("complete");
+    r = h.go({}, "matrix", "ensure");
+    assert.equal(r.status, 0, r.stderr); assert.doesNotMatch(r.calls, SIGNED_IN);
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("up ends with the rooms check: a failed one never fails the start, the next start retries it, and a start with them in place does nothing", () => {
+  const h = roomsHome();
+  try {
+    h.state("missing");
+    h.failBootstrap("bootstrap: create #forum: 500 the homeserver is busy");
+    let r = h.go({}, "up");
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.match(r.stdout, /all services healthy\n[\s\S]*community rooms: something is missing/);
+    assert.match(r.stderr, /community rooms: could not be made again \(create #forum: 500 the homeserver is busy\). Run: sudo blackbranch matrix bootstrap/);
+    // Retry: the next start makes them.
+    h.failBootstrap(null);
+    r = h.go({}, "up");
+    assert.equal(r.status, 0, r.stderr); assert.match(r.calls, /bootstrap\.mjs/); assert.match(r.calls, /-e MX_RECREATE=0 /);
+    // Restart: in place now — a start reads the tables once and signs in nowhere.
+    h.state("complete");
+    r = h.go({}, "up");
+    assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /community rooms: in place/); assert.doesNotMatch(r.calls, SIGNED_IN);
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("restore ends with a start whose rooms check may replace a room the snapshot's homeserver lacks", () => {
+  const h = roomsHome();
+  try {
+    h.state("missing");
+    const target = path.join(h.home, "state/target");
+    mkdirSync(path.join(h.home, "state/backup-scratch/r/bb/home"), { recursive: true });
+    writeFileSync(target, "BK_TARGET=local\n");
+    writeFileSync(path.join(h.home, "state/backup-scratch/r/bb/home/.env"), h.env());
+    writeFileSync(path.join(h.fake, "run-out-check"), 'BBRESULT {"ok":true,"repo":"ok"}\n');
+    for (const [m, out] of [["restore-stage", '{"ok":true,"snapshot":"abcd1234abcd1234","snapshotTime":"2026-10-12T00:00:00Z"}'], ["restore-db", '{"ok":true}'], ["restore-media", '{"ok":true}']]) {
+      writeFileSync(path.join(h.fake, `run-out-${m}`), `BBRESULT ${out}\n`);
+    }
+    const r = h.go({ BB_BACKUP_TARGET_FILE: target }, "restore", "latest", "--yes");
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.match(r.stdout, /restored snapshot abcd1234[\s\S]*all services healthy[\s\S]*after a restore, a recorded room that is gone is replaced/);
+    assert.match(r.calls, /-e MX_RECREATE=1 /);
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("the boot unit runs the rooms check after the reconcile; install-files enables it", () => {
+  const unit = read("systemd/blackbranch-matrix.service");
+  assert.match(unit, /\nExecStart=\/usr\/local\/bin\/blackbranch matrix ensure --boot\n/);
+  assert.match(unit, /\nAfter=docker\.service network-online\.target blackbranch-reconcile\.service\n/);
+  assert.match(unit, /\nWantedBy=multi-user\.target\n/);
+  const bb = read("blackbranch");
+  assert.match(bb, /\nBUNDLE_UNITS=\([^)]*blackbranch-matrix\.service/);
+  assert.match(bb, /for f in blackbranch-reconcile\.service blackbranch-matrix\.service; do\n {4}systemctl is-enabled -q "\$f" 2>\/dev\/null \|\| systemctl enable -q "\$f" \|\| true\n/);
+  // An update checks the rooms in its own start (the next release's `up`); the boot unit waits it out.
+  assert.match(bb, /--boot\)\n\s+if update_running \|\| \[ -f "\$UPDATE_DIR\/progress" \]; then/);
+  // Vacuity anchor: the end of the ensure verb.
+  assert.match(bb, /\n {2}matrix_ensure "\$after"\n\}\n/);
 });

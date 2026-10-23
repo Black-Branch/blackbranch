@@ -18,3 +18,5 @@ export { checkoutRequestFor } from "./tipCheckout";
 export { PayPalSubscribeButton } from "./PayPalSubscribeButton";
 export { recordLine, isLiveRecord, elsewhereWarning } from "./subscriptionLines";
 export type { SubscriptionRecordView } from "./subscriptionLines";
+// Whether the Subscribe button under the player shows, and where it opens (StreamView).
+export { subscribeButton } from "./subscribeButton";

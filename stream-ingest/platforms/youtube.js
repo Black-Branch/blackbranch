@@ -119,15 +119,18 @@ function ytParseText(r) {
   // delete/purge paths in web platformMod skip non-LCC ids explicitly.
   return { id: r.id || '', author, avatar: ytAvatar(r), channelId: r.authorExternalChannelId || '', text, emotes, isMod, isMember };
 }
+// Every event carries the renderer's own id: normalizeYouTubeEvent makes it the event
+// id stream-api's ledger refuses a second credit by. Without it each read of the same
+// banner minted a new one (ytEventIds.test.js, ytGiftCount.test.js).
 function ytParseEvent(item) {
   if (item.liveChatPaidMessageRenderer) {
     const r = item.liveChatPaidMessageRenderer;
-    return { kind: 'superchat', author: r.authorName?.simpleText || '', avatar: ytAvatar(r),
+    return { kind: 'superchat', id: r.id || '', author: r.authorName?.simpleText || '', avatar: ytAvatar(r),
       amount: r.purchaseAmountText?.simpleText || '', message: ytRunsToText(r.message?.runs).text };
   }
   if (item.liveChatPaidStickerRenderer) {
     const r = item.liveChatPaidStickerRenderer;
-    return { kind: 'supersticker', author: r.authorName?.simpleText || '', avatar: ytAvatar(r),
+    return { kind: 'supersticker', id: r.id || '', author: r.authorName?.simpleText || '', avatar: ytAvatar(r),
       amount: r.purchaseAmountText?.simpleText || '' };
   }
   if (item.liveChatMembershipItemRenderer) {
@@ -137,7 +140,7 @@ function ytParseEvent(item) {
     const header = subtext || primaryHeader;
     // `subtext`/`primaryHeader` ride along so lib/alerts.js can read the membership LEVEL name
     // ("Welcome to <level>!", or a milestone's subtext) — `header` keeps its old meaning.
-    return { kind: 'membership', author: r.authorName?.simpleText || '', avatar: ytAvatar(r), header, subtext, primaryHeader };
+    return { kind: 'membership', id: r.id || '', author: r.authorName?.simpleText || '', avatar: ytAvatar(r), header, subtext, primaryHeader };
   }
   if (item.liveChatSponsorshipsGiftPurchaseAnnouncementRenderer) {
     const r = item.liveChatSponsorshipsGiftPurchaseAnnouncementRenderer;
@@ -145,8 +148,10 @@ function ytParseEvent(item) {
     const primary = ytRunsToText(hdr?.primaryText?.runs).text || '';
     const author = r.authorName?.simpleText || hdr?.authorName?.simpleText || (primary.split(/\s+(?:gifted|sent)\s+/i)[0] || '').trim();
     // The count is read from `primary` by normalizeYouTubeEvent (lib/alerts.js
-    // parseGiftCount), the one parser both scrape paths share.
-    return { kind: 'membership-gift', author, avatar: ytAvatar(hdr) || ytAvatar(r), primary };
+    // parseGiftCount), the one parser both scrape paths share. `id` is the renderer's
+    // own id and becomes the event id stream-api's ledger refuses a second credit by;
+    // without it each read of the same banner minted a new one (ticket #168).
+    return { kind: 'membership-gift', id: r.id || '', author, avatar: ytAvatar(hdr) || ytAvatar(r), primary };
   }
   return null;
 }
@@ -536,18 +541,18 @@ export function installObserver() {
     if (kind === 'superchat') {
       const amount = r.querySelector('#purchase-amount')?.textContent?.trim() || '';
       const message = r.querySelector('#message')?.textContent?.trim() || '';
-      return { kind, author, avatar, amount, message };
+      return { kind, id, author, avatar, amount, message };
     }
     if (kind === 'supersticker') {
       const amount = r.querySelector('#purchase-amount-chip')?.textContent?.trim()
         || r.querySelector('#purchase-amount')?.textContent?.trim() || '';
-      return { kind, author, avatar, amount };
+      return { kind, id, author, avatar, amount };
     }
     if (kind === 'membership') {
       const subtext = r.querySelector('#header-subtext')?.textContent?.trim() || '';
       const primaryHeader = r.querySelector('#header-primary-text')?.textContent?.trim() || '';
       const header = subtext || primaryHeader;
-      return { kind, author, avatar, header, subtext, primaryHeader };
+      return { kind, id, author, avatar, header, subtext, primaryHeader };
     }
     if (kind === 'membership-gift') {
       const primary = r.querySelector('#primary-text')?.textContent?.trim()
@@ -555,8 +560,9 @@ export function installObserver() {
       const gifter = author || (primary.split(/\s+(?:gifted|sent)\s+/i)[0] || '').trim();
       // Raw text, not a count: this function runs inside the page and cannot
       // reach lib/alerts.js, so the count is parsed on the Node side by the
-      // same parseGiftCount the innertube path uses.
-      return { kind, author: gifter, avatar, primary };
+      // same parseGiftCount the innertube path uses. The element id is the renderer id
+      // the innertube path reads, so both paths name the same gift the same event.
+      return { kind, id, author: gifter, avatar, primary };
     }
     return null;
   };

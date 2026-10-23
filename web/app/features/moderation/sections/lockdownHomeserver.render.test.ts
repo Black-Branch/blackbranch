@@ -53,3 +53,16 @@ test("lever on, sign-up open (an admin opened it during the lockdown): said as k
   const r = await lineFor({ signupsDisabled: true, homeserver: { managed: "bundle", registration: "open", closedByLockdown: false, applied: true } });
   assert.equal(r.text, "Homeserver sign-up: open — set in Admin Panel → Site during this lockdown, and left as set.");
 });
+
+test("the cross-posting lever names the platforms site chat is sent on to, never YouTube (no posting there in this release)", async () => {
+  state = { ...base, homeserver: null };
+  const el = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(el);
+  const root = createRoot(el);
+  await act(async () => { root.render(React.createElement(LockdownSection as never, { note: () => {} })); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  const text = el.textContent ?? "";
+  assert.match(text, /Stops site chat being sent on to Twitch, Kick and Streamplace\./);
+  assert.doesNotMatch(text, /sending to [^.]*YouTube/);
+  await act(async () => { root.unmount(); el.remove(); });
+});

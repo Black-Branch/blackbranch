@@ -1,16 +1,12 @@
-// Pieces the Admin Panel's sections share: the class names, the "ago" formatter and the service
-// strip. Internal to this feature — reached only by its own panels.
+// Pieces the Admin Panel's sections share: the class names, the "ago" formatter and the Details
+// fold. Internal to this feature — reached only by its own panels.
 // Fields and buttons follow docs/DESIGN-STANDARD.md: 24px controls, the one FIELD style.
 
 "use client";
 
 import { useState, type ReactNode } from "react";
-import type { InstanceView } from "@/app/lib/instanceAdminView";
 import { FIELD } from "@/app/components/SettingsControls";
 import { lsGetJSON, lsSetJSON } from "@/app/lib/safeLocalStorage";
-import { serviceName } from "./adminLayout";
-
-type Proc = InstanceView["processes"][number];
 
 export const card = "rounded-xl border border-edge bg-surface-1 p-4";
 export const h2 = "text-sm font-semibold text-body";
@@ -27,27 +23,6 @@ export function ago(iso: string | null | undefined): string {
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
   return h < 48 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
-}
-
-/** One line per service: is it answering, has it loaded the saved settings. */
-export function ProcessStrip({ procs }: { procs: Proc[] }) {
-  return (
-    <section className={`${card} flex flex-wrap gap-2`} aria-label="Service state">
-      {procs.map((p) => {
-        const bad = !p.reachable || !p.loaded || !!p.failingSince;
-        return (
-          <span key={p.package} className={`${chip} ${bad ? "text-amber-300" : "text-secondary"}`}>
-            <span className="font-medium text-body">{serviceName(p.package)}</span>
-            {!p.reachable ? "not reporting" : !p.loaded ? "saved settings not loaded — using server settings and defaults"
-              : p.failingSince ? `out of date since ${ago(p.failingSince)}` : `loaded ${ago(p.loadedAt)}`}
-            {p.package === "stream-api" && p.masterKey && p.masterKey !== "ok" && (
-              <span className="text-amber-300">· encryption key {p.masterKey}</span>
-            )}
-          </span>
-        );
-      })}
-    </section>
-  );
 }
 
 const FOLD_KEY = "bb_admin_details";

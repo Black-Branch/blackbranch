@@ -14,7 +14,7 @@ import type { SetupView } from "@/app/lib/setup/setupServer";
 import type { FormField } from "@/app/lib/setup/setupValidate";
 import type { SetupPage, SetupStepView } from "@/app/lib/setup/setupPages";
 import { previousStep } from "@/app/lib/setup/setupFlow";
-import { formatProblem } from "@/app/lib/setup/setupExtras";
+import { formatProblem, docsUrl, SETUP_DOCS } from "@/app/lib/setup/setupExtras";
 import SetupStepGuide from "@/app/components/SetupStepGuide";
 import { PRODUCT_MARK } from "@/app/lib/siteIcons";
 
@@ -71,7 +71,8 @@ function Shell({ siteName, children, step }: { siteName: string; children: React
           </div>
           {step && (
             <div className="space-y-1.5">
-              <p className="text-xs text-secondary">Step {step.n} of {step.of} · <span className="text-body font-medium">{step.title}</span></p>
+              <p className="text-xs text-secondary">Step {step.n} of {step.of} · <span className="text-body font-medium">{step.title}</span>
+                {" · "}<a href={docsUrl(SETUP_DOCS)} target="_blank" rel="noopener noreferrer" className="text-body-dim underline hover:text-strong" data-setup-docs>Help with setup</a></p>
               <div className="h-1 rounded-full bg-surface-2" aria-hidden>
                 <div className="h-1 rounded-full bg-strong" style={{ width: `${Math.round((step.n / step.of) * 100)}%` }} />
               </div>
@@ -104,7 +105,7 @@ function NotYou({ adminExists }: { adminExists: boolean }) {
           <Problem text={err} />
         </div>
       ) : (
-        <p className={`${hint} border-t border-edge pt-3`}>Owner: open the setup link the installer printed. On the server, <code className="text-body">blackbranch setup-link</code> prints it again.</p>
+        <p className={`${hint} border-t border-edge pt-3`}>Owner: open the setup link the installer printed. On the server, <code className="text-body">sudo blackbranch setup-link</code> prints it again.</p>
       )}
     </section>
   );
@@ -278,7 +279,7 @@ function SiteIcons({ data }: { data: Json }) {
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
   if (!icons.upload) {
-    return <p className={`${hint} border-t border-edge pt-3`}>Site icon: this install cannot take an upload. On the server, put the icon files in <code className="text-body">site-files/</code> and run <code className="text-body">blackbranch set SITE_ICON_SET /site-files</code>.</p>;
+    return <p className={`${hint} border-t border-edge pt-3`}>Site icon: this install cannot take an upload. On the server, put the icon files in <code className="text-body">site-files/</code> and run <code className="text-body">sudo blackbranch set SITE_ICON_SET /site-files</code>.</p>;
   }
   const pick = async (file: File | undefined) => {
     if (!file) return;
@@ -320,7 +321,7 @@ function SiteIcons({ data }: { data: Json }) {
       {state === "sending" && <p className={hint}>Making the icons…</p>}
       {state === "waiting" && <p className={hint}>Handing them to the server…</p>}
       {state === "placed" && <p className="text-xs text-body">✓ Your icon is on the server; it shows once you finish setting up.</p>}
-      {state === "unanswered" && <p className="text-xs text-body">The server did not take the icon — this release&apos;s server may not accept uploads yet. You can carry on; on the server, put the icon files in <code>site-files/</code> and run <code>blackbranch set SITE_ICON_SET /site-files</code>.</p>}
+      {state === "unanswered" && <p className="text-xs text-body">The server did not take the icon — this release&apos;s server may not accept uploads yet. You can carry on; on the server, put the icon files in <code>site-files/</code> and run <code>sudo blackbranch set SITE_ICON_SET /site-files</code>.</p>}
       <Problem text={err} />
     </div>
   );
@@ -358,7 +359,8 @@ function FieldsForm({ title, intro, fields, values, back, onBack, save, footer }
 }
 
 function Modules({ data, back, onBack, save }: { data: Json; back: boolean; onBack: () => void; save: (d: Json) => Promise<void> }) {
-  const mods = (data.modules as { id: string; label: string; description: string; on: boolean; hasSetup: boolean; note?: string }[]) ?? [];
+  const mods = (data.modules as { id: string; label: string; description: string; on: boolean; hasSetup: boolean }[]) ?? [];
+  const elsewhere = (data.elsewhere as string[] | undefined) ?? [];
   const later = (data.later as { id: string; label: string; description: string }[]) ?? [];
   const core = (data.core as { id: string; label: string; description: string; chosen: boolean }[]) ?? [];
   const [on, setOn] = useState<Record<string, boolean>>(Object.fromEntries(mods.map((m) => [m.id, m.on])));
@@ -384,10 +386,10 @@ function Modules({ data, back, onBack, save }: { data: Json; back: boolean; onBa
           <div className="min-w-0">
             <p className="text-xs font-medium text-body">{m.label}</p>
             <p className={hint}>{m.description}</p>
-            {m.note && on[m.id] && <p className="text-2xs text-body">{m.note}</p>}
           </div>
         </div>
       ))}
+      {elsewhere.map((t) => <p key={t} className={hint} data-elsewhere>{t}</p>)}
       <div className="space-y-1 rounded-md border border-edge p-2">
         <label className={label} htmlFor="bb-donate-url">Donate link <span className="text-muted font-normal"> · optional</span></label>
         <input id="bb-donate-url" className={input} value={donateUrl} maxLength={512} spellCheck={false} autoComplete="off"
@@ -524,6 +526,7 @@ function ModulePage({ stepId, data, back, onBack, save }: { stepId: string; data
       <section className={card}>
         <h2 className="text-sm font-semibold text-body">{page.label}</h2>
         <p className="text-sm text-secondary">{page.description}</p>
+        {page.docs && <p className="text-xs"><a href={page.docs} target="_blank" rel="noopener noreferrer" className="text-body-dim underline hover:text-strong" data-docs>Read the {page.label} guide</a></p>}
       </section>
       {page.steps.map((s) => (
         <Fragment key={s.id}>
@@ -615,7 +618,7 @@ function Community({ data, back, onBack, save }: { data: Json; back: boolean; on
           {state === "working" ? "Making the community… (usually under half a minute)" : "Make the community"}
         </button>
       )}
-      {data.hostRequests === false && <p className={hint}>This install cannot ask its server for this; run <code className="text-body">blackbranch matrix bootstrap</code> there.</p>}
+      {data.hostRequests === false && <p className={hint}>This install cannot ask its server for this; run <code className="text-body">sudo blackbranch matrix bootstrap</code> there.</p>}
       {rooms.general && <p className={`${hint} break-all`}>#general: {rooms.general}</p>}
       <Problem text={err} />
       <Nav back={back} onBack={onBack} busy={busy} disabled={state !== "done" || !registration} />
@@ -734,7 +737,7 @@ function Backups({ data, onPassed }: { data: Json; onPassed: (passed: boolean) =
         </button>
         {state === "passed" && <span className="text-xs text-body">✓ A backup was made and restored on the server.</span>}
       </div>
-      {data.hostRequests === false && <p className={hint}>This install cannot ask its server for a backup; run <code className="text-body">blackbranch backup</code> there.</p>}
+      {data.hostRequests === false && <p className={hint}>This install cannot ask its server for a backup; run <code className="text-body">sudo blackbranch backup</code> there.</p>}
       <Problem text={err} />
     </fieldset>
   );
@@ -761,7 +764,6 @@ function Finish({ data, back, onBack, siteName }: { data: Json; back: boolean; o
   const signup = data.signup as Signup | undefined;
   const alerts = (data.alerts as { set: { wake: boolean; quiet: boolean } | null; words: string } | undefined) ?? null;
   const [quiet, setQuiet] = useState<number>(typeof data.quietHour === "number" ? data.quietHour : 4);
-  const [reports, setReports] = useState(!!data.bugReports);
   const [phase, setPhase] = useState<"form" | "applying" | "done">("form");
   const [err, setErr] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -785,7 +787,7 @@ function Finish({ data, back, onBack, siteName }: { data: Json; back: boolean; o
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setErr(null);
-    const r = await call("/api/setup/finish", { quietHour: quiet, bugReports: reports, alerts: { wake, quiet: quietTopic } });
+    const r = await call("/api/setup/finish", { quietHour: quiet, alerts: { wake, quiet: quietTopic } });
     if (!r.ok) { setErr(errorOf(r.json)); return; }
     if (r.json.phase === "done") { setPhase("done"); return; }
     setPhase("applying");
@@ -823,15 +825,11 @@ function Finish({ data, back, onBack, siteName }: { data: Json; back: boolean; o
           <span className="text-body">{typeof data.timeZone === "string" && data.timeZone ? data.timeZone : "(UTC) — no time zone was set on Your site"}</span>.
         </p>
       </div>
-      <label className="flex items-start gap-2 text-xs text-body">
-        <input type="checkbox" className="mt-0.5" checked={reports} onChange={(e) => setReports(e.target.checked)} />
-        <span>Send bug reports to the project <span className={hint}>— off unless you tick it. A report never holds a secret, chat text or a viewer&apos;s id.</span></span>
-      </label>
       <SignupLine signup={signup} />
       <fieldset className="space-y-2 rounded-md border border-edge p-2">
         <legend className="px-1 text-xs font-medium text-body">Phone alerts <span className={hint}>(optional)</span></legend>
         <p className={hint}>{alerts?.words}</p>
-        <p className={hint}>To have problems pushed to your phone, make two private topics in the <a className="underline" href="https://ntfy.sh" target="_blank" rel="noreferrer">ntfy</a> app — one for urgent problems, one for the rest — and paste their full addresses. Anyone who knows a topic&apos;s address can read it: make the names long and unguessable. Leave both empty to skip.</p>
+        <p className={hint}>To have problems pushed to your phone, make a private topic in the <a className="underline" href="https://ntfy.sh" target="_blank" rel="noreferrer">ntfy</a> app and paste its full address. One topic is enough; a second keeps urgent problems apart from the rest. Anyone who knows a topic&apos;s address can read it, so make the names long and hard to guess. Leave both empty to skip.</p>
         <div className="grid gap-2 sm:grid-cols-2">
           <div className="space-y-1">
             <label className={label} htmlFor="bb-alert-wake">Urgent topic</label>
@@ -940,7 +938,7 @@ export function SetupWizard({ view, siteName, serverName, domain, token }: {
             <h2 className="text-sm font-semibold text-body">{view.adminExists ? "This setup link no longer works" : "This setup link is not valid"}</h2>
             <p className="text-sm text-secondary">{view.adminExists
               ? "The site's first admin account exists, so its setup link is used up. Sign in with that account to carry on."
-              : "Check the link the installer printed. On the server, blackbranch setup-link prints it again."}</p>
+              : "Check the link the installer printed. On the server, sudo blackbranch setup-link prints it again."}</p>
           </section>
           {view.adminExists && <NotYou adminExists />}
         </Shell>

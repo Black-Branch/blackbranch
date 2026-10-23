@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Generate each package's copy of the instance settings schema, or check that none has drifted.
 //
-//   node tools/gen-instance-schema.mjs            write all three copies
+//   node tools/gen-instance-schema.mjs            write all three copies + the restart-settings list
 //   node tools/gen-instance-schema.mjs --check P  exit 1 if package P's copy differs (check:all)
 //
 // WHY GENERATED COPIES. The schema is ONE file (config/instance-schema.mjs), but stream-api
@@ -25,6 +25,7 @@
 // list (config/doctor.mjs) into web, under the same gate. Each of those files imports nothing and
 // exports one name, so its copy is its own TEXT with the export rewritten for the package's module
 // system — one list, not two that agree. (The box runs the release's config/doctor.mjs itself.)
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,7 +47,7 @@ export const TARGETS = {
   "stream-ingest": {
     file: "stream-ingest/lib/instanceSchema.generated.js",
     format: "esm",
-    exports: ["INSTANCE_KEYS", "instanceEntry", "resolveInstanceValue", "runProviderCheck", "parseBotBehavior", "renderBotBehavior"],
+    exports: ["INSTANCE_KEYS", "MODULES", "instanceEntry", "resolveInstanceValue", "runProviderCheck", "parseBotBehavior", "renderBotBehavior"],
   },
   web: {
     file: "web/app/lib/instanceSchema.generated.mjs",
@@ -276,6 +277,14 @@ export function main(argv, { modules = MODULES, core = SETUP_CORE } = {}) {
       writeFileSync(join(REPO, copy.targets[pkg].file), renderCopy(pkg, copy));
       console.log(`wrote ${copy.targets[pkg].file}`);
     }
+  }
+  // The operator's restart-settings list (install/restart-settings.tsv + its section of
+  // docs/public/operate.md) is derived from the same schema, and install/restart-settings.test.mjs
+  // fails when it drifts — so one command keeps every generated copy current, not two to remember.
+  const list = spawnSync(process.execPath, [join(REPO, "install/restart-settings.mjs"), "--write"], { stdio: "inherit" });
+  if (list.status !== 0) {
+    console.error("gen-instance-schema: install/restart-settings.mjs --write failed (see above)");
+    return list.status ?? 1;
   }
   return 0;
 }

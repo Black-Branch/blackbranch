@@ -127,10 +127,30 @@ test('release() frees the parked brain poll so the drain can finish', () => {
   relay.next(brainRes);
   assert.equal(relay.stats().brainParked, true, 'precondition: a poll is parked');
   relay.release();
-  assert.deepEqual(brainRes.sent, {},
-    'the parked poll must be answered with the same empty body its timeout would send, ' +
-    'so the brain simply re-polls against the new process');
+  assert.deepEqual(brainRes.sent, { restarting: true },
+    'the parked poll is answered with no job and the word that this process is going away, ' +
+    'so the brain re-polls the new process and does not report the gap as an error');
   assert.equal(relay.stats().brainParked, false, 'the waiter is cleared');
+});
+
+// The brain's next fetch after a release lands on a closed port ("fetch failed"). The relay says
+// it is restarting so the brain can tell that gap from a real failure; a plain idle timeout says
+// nothing of the kind, or every idle cycle would hide the next real failure.
+test('a stream-api restart is told to the brain: release and a draining poll say restarting, an idle timeout does not', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const relay = createSupportRelay({ pollTimeoutMs: 1000 });
+  const idle = mockRes();
+  relay.next(idle);
+  t.mock.timers.tick(1001);
+  assert.deepEqual(idle.sent, {}, 'an idle timeout is not a restart');
+  const parked = mockRes();
+  relay.next(parked);
+  relay.release();
+  assert.equal(parked.sent.restarting, true);
+  assert.equal(parked.sent.requestId, undefined, 'never a job');
+  const again = mockRes();
+  relay.next(again);
+  assert.equal(again.sent.restarting, true, 'retry: every poll during the drain says so');
 });
 
 test('release() 503s held web asks rather than leaving browsers hanging', () => {
@@ -192,7 +212,7 @@ test('after release() the relay refuses to park anything new', () => {
 
   const rePoll = mockRes();
   relay.next(rePoll);
-  assert.deepEqual(rePoll.sent, {}, 'a poll during the drain must be answered immediately');
+  assert.deepEqual(rePoll.sent, { restarting: true }, 'a poll during the drain must be answered immediately, saying why');
   assert.equal(relay.stats().brainParked, false,
     'the drain re-parked the brain — the socket it just freed is held open again');
 

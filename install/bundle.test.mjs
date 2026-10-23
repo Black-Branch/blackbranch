@@ -43,7 +43,7 @@ const ENDS = {
   "install.sh": /\nexit 0\n$/,
   "blackbranch": /\n {2}\*\) die "unknown command[^\n]*\nesac\n$/,
   "migrate.sh": /now at v\$head"; fi\n$/,
-  ".env.example": /\nSETUP_TOKEN_HASH=\n$/,
+  ".env.example": /\nBB_ALERT_NTFY_URL=\nBB_ALERT_EMAIL_COMMAND=\n$/,
   "Dockerfile": /\nUSER node\nEXPOSE 3000\nCMD \["node", "server.js"\]\n$/,
   "matrix/render.sh": /\n\thandle \{\n\t\trespond 404\n\t\}\nEOF\n\}\n$/,
   "matrix/bootstrap.mjs": /process\.stdout\.write\(`\$\{JSON\.stringify\(\{ hub, general, forum, created \}\)\}\\n`\);\n$/,
@@ -779,4 +779,28 @@ test("an upgrade brings every migration since the FIRST baseline — a regenerat
   for (let v = first + 1; v <= base; v++) assert.ok(shipped.includes(v), `v${v} is folded into the baseline but an older box still needs its file`);
   // …and the runner applies only what the database does not record, so a fresh box applies none twice.
   assert.match(read("migrate.sh"), /case "\$applied" in \*" \$v "\*\) continue ;; esac/);
+});
+
+// Round 11 stranger read: the help says what is true.
+test("help and the installer's header say what is true: #forum, the release key, the one-liner that exists", () => {
+  const r = spawnSync("bash", [path.join(here, "blackbranch"), "help"], { encoding: "utf8", env: { PATH: "/usr/bin:/bin", BB_HOME: "/nonexistent" } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /blackbranch matrix bootstrap [^\n]*create the community space, #general\n\s+and #forum/);
+  const head = read("install.sh").split("\n").filter((l) => l.startsWith("#")).slice(0, 60).join("\n");
+  // The key: no handover exists, so none is promised; what the code does is said.
+  assert.doesNotMatch(head, /names the\s*#?\s*next key|key rotation/);
+  assert.match(head, /Written once into \.env as BB_RELEASE_KEY\. The\n#\s+box then trusts that key alone: an update never changes it, and running\n#\s+the installer again with another key is refused\./);
+  assert.match(read("install.sh"), /die "this box already trusts another release key/, "the refusal the help names exists");
+  // The one-liner is the short form: blackbranch.app/install.sh serves the beta installer until the
+  // first stable release (k 2026-10-21), and the header says so in words.
+  assert.match(head, /curl -fsSL https:\/\/blackbranch\.app\/install\.sh \| sudo bash\n/);
+  assert.match(head, /until the first stable release/i);
+  assert.doesNotMatch(head, /curl -fsSL https:\/\/blackbranch\.app\/install-beta\.sh/);
+});
+
+test("the install README shows the short one-liner, and says it installs the beta until the first stable release", () => {
+  const md = read("README.md");
+  assert.match(md, /curl -fsSL https:\/\/blackbranch\.app\/install\.sh \| sudo bash\n/);
+  assert.doesNotMatch(md, /curl -fsSL https:\/\/blackbranch\.app\/install-beta\.sh/);
+  assert.match(md, /until the first stable release/i);
 });

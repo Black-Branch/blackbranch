@@ -23,7 +23,7 @@ export const runtime = "nodejs";
 // that does arrive falls to the `default: break;` below, so nothing breaks
 // either way.
 export async function POST(req: NextRequest) {
-  // PayPal switched off (Site → Modules): "not found" before anything is read; PayPal retries a
+  // PayPal switched off (Payments → Connections): "not found" before anything is read; PayPal retries a
   // non-2xx delivery 25 times over about three days, so switching back on in time loses nothing.
   if (!paypalModuleOn()) return new Response("Not found", { status: 404 });
   if (!paypalWebhookConfigured()) {

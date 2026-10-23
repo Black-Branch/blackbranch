@@ -302,7 +302,7 @@ const INSTANCE_KEYS = [
       "stream-api"
     ],
     "label": "Time zone",
-    "description": "The time zone the site runs on, as a name like Europe/Berlin — the quiet hour and daily jobs use it. Unset = UTC."
+    "description": "The time zone the site runs on, as a name like Europe/Berlin. The quiet hour and daily jobs use it. Unset = UTC."
   },
   {
     "key": "site.dataSince",
@@ -401,7 +401,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Send bug reports",
-    "description": "Off by default. On = a failing check sends the project a report with every secret, chat text and viewer id removed."
+    "description": "Not used yet: this release sends no bug reports, so the setting is hidden. Kept for the sender a later release brings, which will strip every secret, chat text and viewer id."
   },
   {
     "key": "backup.target",
@@ -523,7 +523,7 @@ const INSTANCE_KEYS = [
     ],
     "required": true,
     "label": "Matrix server name",
-    "description": "The :server part of every account id (@name:server). Permanent — a homeserver can never be renamed."
+    "description": "The :server part of every account id (@name:server). Permanent: a homeserver can never be renamed."
   },
   {
     "key": "matrix.baseUrl",
@@ -618,8 +618,8 @@ const INSTANCE_KEYS = [
     "packages": [
       "web"
     ],
-    "label": "Sign-up on the bundled homeserver",
-    "description": "Whether anyone may make an account on the bundled homeserver's own sign-in pages: open or closed. Unset = closed; always closed while setup runs. Applies only to the homeserver this install's bundle runs — the host re-renders its sign-in config and restarts it; a homeserver run elsewhere keeps its own setting."
+    "label": "Let people make accounts",
+    "description": "Whether anyone may make an account on the bundled homeserver's own sign-in pages: Yes (open) or No (closed). Unset = No; always No while setup runs. Applies only to the homeserver this install's bundle runs: the host re-renders its sign-in config and restarts it. A homeserver run elsewhere keeps its own setting."
   },
   {
     "key": "auth.federatedSignin",
@@ -758,7 +758,7 @@ const INSTANCE_KEYS = [
     ],
     "required": true,
     "label": "Matrix sign-in client id",
-    "description": "This site's registered (confidential) client at the issuer. Public — it appears in every sign-in link."
+    "description": "This site's registered (confidential) client at the issuer. Public: it appears in every sign-in link."
   },
   {
     "key": "discordBridge.usernameTemplate",
@@ -776,7 +776,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Discord bridge username template",
-    "description": "The bridge's username_template, e.g. discord_{{.}} — how a Discord user's Matrix id is built."
+    "description": "The bridge's username_template, e.g. discord_{{.}}: how a Discord user's Matrix id is built."
   },
   {
     "key": "discordBridge.displaynameTemplate",
@@ -906,7 +906,7 @@ const INSTANCE_KEYS = [
       "stream-ingest"
     ],
     "label": "Twitch channel",
-    "description": "The Twitch channel login (lower case) — the embed, emotes and the chat connection."
+    "description": "The Twitch channel login (lower case). Used for the embed, emotes and the chat connection."
   },
   {
     "key": "platform.twitch.broadcasterId",
@@ -945,7 +945,7 @@ const INSTANCE_KEYS = [
       "stream-ingest"
     ],
     "label": "YouTube channel id",
-    "description": "The channel id (UC…) — the embed, live detection, chat and moderation."
+    "description": "The channel id (UC…). Used for the embed, live detection, chat and moderation."
   },
   {
     "key": "platform.youtube.vodPlaylist",
@@ -983,7 +983,7 @@ const INSTANCE_KEYS = [
       "stream-ingest"
     ],
     "label": "Kick channel",
-    "description": "The Kick channel slug — the chat connection and live detection."
+    "description": "The Kick channel name, as in kick.com/<name>. Used for the chat connection and live detection."
   },
   {
     "key": "platform.kick.userId",
@@ -1021,7 +1021,7 @@ const INSTANCE_KEYS = [
     ],
     "test": "streamplace",
     "label": "Streamplace account",
-    "description": "The streamer's stream.place DID (did:plc:…) — the player and its chat."
+    "description": "The streamer's stream.place DID (did:plc:…), found from the handle. Used for the player and its chat."
   },
   {
     "key": "platform.streamplace.channel",
@@ -1123,7 +1123,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Outside subscribe link",
-    "description": "Where the Subscribe button goes when Stripe is not set up (e.g. a Patreon page). Unset = no Subscribe button without Stripe."
+    "description": "Where the Subscribe button goes when the site cannot sell the Supporter subscription itself: card payments off, or no Supporter price set at Stripe. For example a Patreon page. Unset then = no Subscribe button."
   },
   {
     "key": "money.supportLine",
@@ -1241,6 +1241,50 @@ const INSTANCE_KEYS = [
     ],
     "label": "Vote score name",
     "description": "What a person's score from votes on their messages is called (Home's boards, the user card). Its last word names the per-100-messages board."
+  },
+  {
+    "key": "leaderboard.off",
+    "kind": "bool",
+    "default": false,
+    "scope": "public",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "LEADERBOARD_OFF"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Hide the Leaderboard",
+    "description": "On = Home has no Leaderboard card."
+  },
+  {
+    "key": "leaderboard.hidden",
+    "kind": "list",
+    "values": [
+      "points",
+      "credit",
+      "creditRate",
+      "streams",
+      "messages",
+      "emotes"
+    ],
+    "default": [],
+    "scope": "public",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "LEADERBOARD_HIDDEN"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Leaderboard boards switched off",
+    "description": "The boards the Leaderboard does not offer: points (points earned), credit (the vote score), creditRate (the vote score per 100 messages), streams, messages (top messages), emotes (top emotes). Empty = all of them."
   },
   {
     "key": "currency.purchasable",
@@ -1405,7 +1449,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Paid upvotes from one voter",
-    "description": "Per stream, how many upvotes from the SAME voter pay the author — stops two accounts paying each other."
+    "description": "Per stream, how many upvotes from the SAME voter pay the author. This stops two accounts paying each other."
   },
   {
     "key": "currency.earn.watchCap",
@@ -1906,7 +1950,7 @@ const INSTANCE_KEYS = [
       "stream-api"
     ],
     "label": "OBS control",
-    "description": "One browser source in OBS — the rig page — plays the bot's voice and the sound alerts into your stream, draws the bot's avatar, switches scenes on request and pauses the timer on a scene. It connects out from OBS, so it works from any network. Off: the rig page is refused and nothing reaches OBS."
+    "description": "One browser source in OBS, the rig page, plays the bot's voice into your stream, draws the bot's avatar, switches scenes on request and pauses the timer on a scene. It connects out from OBS, so it works from any network. Off: the rig page is refused and nothing reaches OBS."
   },
   {
     "key": "modules.lights",
@@ -2000,7 +2044,7 @@ const INSTANCE_KEYS = [
     ],
     "legacyOn": true,
     "label": "Card payments (Stripe)",
-    "description": "Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers \"not found\" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them — cancel their subscriptions in Stripe first, or switch back on."
+    "description": "Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers \"not found\" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them. Cancel their subscriptions in Stripe first, or switch back on."
   },
   {
     "key": "modules.paypal",
@@ -2019,7 +2063,7 @@ const INSTANCE_KEYS = [
     ],
     "legacyOn": true,
     "label": "PayPal and Venmo",
-    "description": "Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers \"not found\", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them — cancel their subscriptions in PayPal first, or switch back on."
+    "description": "Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers \"not found\", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them. Cancel their subscriptions in PayPal first, or switch back on."
   },
   {
     "key": "obs.url",
@@ -2400,7 +2444,7 @@ const INSTANCE_KEYS = [
     "scope": "server",
     "module": "stripe",
     "secret": true,
-    "reload": "restart",
+    "reload": "live",
     "tier": "secret",
     "env": [
       "STRIPE_SECRET_KEY"
@@ -2410,7 +2454,7 @@ const INSTANCE_KEYS = [
     ],
     "test": "stripe",
     "label": "Stripe secret key",
-    "description": "Card payments: subscriptions, gifts, tips, coins."
+    "description": "Card payments: subscriptions, gifts, tips and points. A new key is used from the next payment, no restart."
   },
   {
     "key": "stripe.webhookSecret",
@@ -2448,7 +2492,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Supporter subscription price",
-    "description": "The Stripe Price id (price_…) of the monthly Supporter subscription. Its amount and currency are read from Stripe and shown on the site; gifts charge the same. Unset = subscriptions are not offered."
+    "description": "The Stripe Price id (price_…) of the monthly Supporter subscription. Its amount and currency are read from Stripe and shown on the site; gifts charge the same. Unset = card subscriptions and gift subscriptions are not offered (a PayPal plan can still sell the subscription)."
   },
   {
     "key": "paypal.clientId",
@@ -2505,7 +2549,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Subscription plans",
-    "description": "The PayPal billing plan (P-…) for each tier this site sells, as JSON: {\"supporter\":\"P-…\"}. Set = subscriptions can be paid through PayPal; the plan's price and currency are read from PayPal. The plan must bill monthly at a fixed price — any other plan is refused credit and flagged. Unset = PayPal subscriptions are not offered."
+    "description": "The PayPal billing plan (P-…) for each tier this site sells, as JSON: {\"supporter\":\"P-…\"}. Set = subscriptions can be paid through PayPal; the plan's price and currency are read from PayPal. The plan must bill monthly at a fixed price; any other plan is refused credit and flagged. Unset = PayPal subscriptions are not offered."
   },
   {
     "key": "paypal.webhookId",
@@ -2627,7 +2671,7 @@ const INSTANCE_KEYS = [
       "stream-ingest"
     ],
     "label": "Kick chatroom id",
-    "description": "Only when the reader cannot look it up itself (Kick's bot protection): the numeric chatroom id of your Kick channel. Unset = looked up automatically."
+    "description": "Only when the reader cannot look it up itself (Kick's bot protection). Open kick.com/api/v2/channels/YOUR-CHANNEL in a browser: this is the number under chatroom.id. Unset = looked up automatically."
   },
   {
     "key": "kick.channelId",
@@ -2646,7 +2690,7 @@ const INSTANCE_KEYS = [
       "stream-ingest"
     ],
     "label": "Kick channel id",
-    "description": "Pairs with the Kick chatroom id. Unset = looked up automatically."
+    "description": "Pairs with the Kick chatroom id. On the same page (kick.com/api/v2/channels/YOUR-CHANNEL), this is the first \"id\" number. Unset = looked up automatically."
   },
   {
     "key": "youtube.apiKey",
@@ -2812,7 +2856,7 @@ const INSTANCE_KEYS = [
     "packages": [
       "stream-api"
     ],
-    "label": "Alert push — urgent topic",
+    "label": "Urgent alerts topic",
     "description": "Where critical operator alerts are pushed. The topic URL is the secret."
   },
   {
@@ -2830,7 +2874,7 @@ const INSTANCE_KEYS = [
     "packages": [
       "stream-api"
     ],
-    "label": "Alert push — quiet topic",
+    "label": "Quiet alerts topic",
     "description": "Where non-urgent operator alerts are pushed."
   },
   {
@@ -2921,7 +2965,7 @@ const MODULES = [
     "packages": [
       "stream-api"
     ],
-    "description": "One browser source in OBS — the rig page — plays the bot's voice and the sound alerts into your stream, draws the bot's avatar, switches scenes on request and pauses the timer on a scene. It connects out from OBS, so it works from any network. Off: the rig page is refused and nothing reaches OBS.",
+    "description": "One browser source in OBS, the rig page, plays the bot's voice into your stream, draws the bot's avatar, switches scenes on request and pauses the timer on a scene. It connects out from OBS, so it works from any network. Off: the rig page is refused and nothing reaches OBS.",
     "api": {
       "files": [
         "obs.js",
@@ -2940,7 +2984,7 @@ const MODULES = [
         "id": "rig",
         "title": "Add the rig page to OBS",
         "need": "required",
-        "explain": "In OBS: Sources → + → Browser. Paste the rig page address from Admin Panel → Utility → OBS (it carries this site's key — keep it private), width 1920, height 1080. Tick \"Control audio via OBS\" so the voice and sounds reach your stream. For scene switching, set \"Page permissions\" to \"Advanced access to OBS\". Put the source in every scene you stream from (or in a scene you nest into each). Nothing is installed on your computer.",
+        "explain": "In OBS: Sources → + → Browser. Paste the rig page address from Admin Panel → Utility → OBS (it carries this site's key, so keep it private), width 1920, height 1080. Tick \"Control audio via OBS\" so the voice reaches your stream. For scene switching, set \"Page permissions\" to \"Advanced access to OBS\". Put the source in every scene you stream from (or in a scene you nest into each). Nothing is installed on your computer.",
         "links": [
           {
             "label": "OBS: browser sources",
@@ -2960,39 +3004,6 @@ const MODULES = [
         "paste": [],
         "fields": [
           "timer.pauseScene"
-        ],
-        "test": null
-      },
-      {
-        "id": "websocket",
-        "title": "OBS WebSocket password",
-        "need": "optional",
-        "ownerOnly": true,
-        "explain": "Only for a server on the same network as OBS, with its address set (OBS_WS_URL): in OBS, Tools → WebSocket Server Settings → Enable WebSocket server, and set a password. Paste the same password here. It adds what a browser source cannot do: showing and hiding OBS's own sources.",
-        "links": [
-          {
-            "label": "OBS remote control guide",
-            "url": "https://obsproject.com/kb/remote-control-guide"
-          }
-        ],
-        "paste": [],
-        "fields": [
-          "obs.password"
-        ],
-        "test": "obs.password"
-      },
-      {
-        "id": "names",
-        "title": "Scene and source names",
-        "need": "optional",
-        "ownerOnly": true,
-        "explain": "Used through the OBS WebSocket. OBS finds scenes and sources by name, so each must match OBS exactly. A name left empty switches off only what it drives.",
-        "links": [],
-        "paste": [],
-        "fields": [
-          "obs.soundSource",
-          "obs.botScene",
-          "obs.botSource"
         ],
         "test": null
       }
@@ -3061,7 +3072,10 @@ const MODULES = [
     "doneTest": [
       "boot:off"
     ],
-    "servesMedia": true
+    "servesMedia": true,
+    "helpdesk": {
+      "on": "Radio: when nobody is live, the player has a Radio tab that plays music."
+    }
   },
   {
     "id": "youtube",
@@ -3082,6 +3096,10 @@ const MODULES = [
       "youtube.apiKey"
     ],
     "doneTest": [],
+    "helpdesk": {
+      "on": "YouTube: messages from the live chat of the streamer's YouTube streams appear in the site chat.",
+      "off": "YouTube chat is not read on this site: messages typed on YouTube do not appear here."
+    },
     "setup": [
       {
         "id": "channel",
@@ -3120,7 +3138,7 @@ const MODULES = [
       "web"
     ],
     "legacyOn": true,
-    "description": "Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers \"not found\" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them — cancel their subscriptions in Stripe first, or switch back on.",
+    "description": "Card payments with your own Stripe account: subscriptions, gift subs, tips and points. You are the merchant; the money goes to your Stripe balance. Off: no card checkout, Stripe's webhook address answers \"not found\" (Stripe keeps its events and retries them for about three days), and card subscribers lose their Supporter perks at once while Stripe keeps charging them. Cancel their subscriptions in Stripe first, or switch back on.",
     "api": {
       "files": []
     },
@@ -3130,12 +3148,16 @@ const MODULES = [
       "stripe.webhookSecret"
     ],
     "doneTest": [],
+    "helpdesk": {
+      "on": "Card payments: tips and points can be paid by card. When the site has set a subscription price, the Supporter subscription and gift subscriptions can be paid by card too.",
+      "off": "Card payments are not offered on this site, so gift subscriptions cannot be bought here."
+    },
     "setup": [
       {
         "id": "keys",
         "title": "A restricted key and the publishable key",
         "need": "required",
-        "explain": "In the Stripe Dashboard → Developers → API keys, make a RESTRICTED key (rk_…) for this site and set exactly the permissions listed below, everything else None. Paste it here with the publishable key (pk_…). Live keys take live money; test keys (rk_test_, pk_test_) take test cards only. The Test only reads: your account, then each kind of object the site reads, so a missing Read permission is named. It cannot check the Write permissions without making something, so it never tries: a green Test does not prove that checkout, the customer record or the billing portal will work. The last step below proves them.",
+        "explain": "In the Stripe Dashboard → Developers → API keys, make a RESTRICTED key (rk_…) for this site and set exactly the permissions listed below, everything else None. Paste it here with the publishable key (pk_…). Live keys take live money; test keys (rk_test_, pk_test_) take test cards only. Check only reads: your account, then each kind of object the site reads, so a missing Read permission is named. It cannot check the Write permissions without making something, so it never tries: a passing Check does not prove that checkout, the customer record or the billing portal will work. The last step below proves them.",
         "links": [
           {
             "label": "Stripe: API keys",
@@ -3166,7 +3188,7 @@ const MODULES = [
         "id": "webhook",
         "title": "The webhook",
         "need": "required",
-        "explain": "Stripe tells the site about every payment through a webhook. Developers → Webhooks → Add destination: your account, the API version below (the one this release reads payment events in — not simply the newest), the events listed below, endpoint URL as below. Then reveal the signing secret (whsec_…) and paste it here. The Test checks that a destination for this address exists, is enabled and sends every event the site handles.",
+        "explain": "Stripe tells the site about every payment through a webhook. Developers → Webhooks → Add destination: your account, the API version below (the one this release reads payment events in — not simply the newest), the events listed below, endpoint URL as below. Then reveal the signing secret (whsec_…) and paste it here. Check confirms that a destination for this address exists, is enabled and sends every event the site handles.",
         "links": [
           {
             "label": "Stripe: webhooks",
@@ -3193,11 +3215,32 @@ const MODULES = [
         "test": "stripe.webhookSecret"
       },
       {
+        "id": "price",
+        "title": "The supporter subscription's price",
+        "need": "optional",
+        "explain": "Subscriptions need a monthly Price in Stripe. Product catalogue → Add product: a name (Supporter), Recurring, Monthly, your amount and currency → Save. Open the price and copy its id (price_…). Leave it empty and the site offers no card subscriptions or gift subs; tips and points still work. Check asks Stripe that the price is active, recurring and monthly; the key needs Read on Prices for that.",
+        "links": [
+          {
+            "label": "Stripe: product catalogue",
+            "url": "https://dashboard.stripe.com/products"
+          }
+        ],
+        "paste": [],
+        "fields": [
+          "stripe.supporterPriceId"
+        ],
+        "test": null
+      },
+      {
         "id": "cloudflare",
         "title": "Behind Cloudflare: let Stripe through",
         "need": "optional",
-        "explain": "If your site is behind Cloudflare (the tunnel is), Bot Fight Mode blocks Stripe's webhooks until a skip rule exists. Cloudflare dashboard → your domain → Security → WAF → Custom rules → Create: when the URI path equals the path below, action Skip, and tick every bot and security feature. This site cannot check the rule without a Cloudflare token; the doctor reminds you.",
+        "explain": "If your site is behind Cloudflare (the tunnel is) and Bot Fight Mode is on, it blocks Stripe's webhooks. On the Free plan no rule can make an exception to Bot Fight Mode, so turn Bot Fight Mode off: Cloudflare dashboard → your domain → Security → Settings, filter by Bot traffic. On Pro or higher, use Super Bot Fight Mode instead and add a custom rule: when the URI path equals the path below, action Skip, and choose Super Bot Fight Mode. This site cannot check either without a Cloudflare token; the doctor reminds you.",
         "links": [
+          {
+            "label": "Cloudflare: Bot Fight Mode",
+            "url": "https://developers.cloudflare.com/bots/get-started/bot-fight-mode/"
+          },
           {
             "label": "Cloudflare: skip rules",
             "url": "https://developers.cloudflare.com/waf/custom-rules/skip/"
@@ -3216,7 +3259,7 @@ const MODULES = [
         "id": "trial",
         "title": "Before you take real money: one test purchase of each kind",
         "need": "optional",
-        "explain": "The Tests above only read; nothing here writes to Stripe until a viewer starts a payment. So prove the Write permissions once, with test keys (rk_test_, pk_test_) and a webhook destination made in test mode: with Stripe's test card, subscribe, tip, buy points and gift a subscription to a second account, then open the billing portal from your account. If one of them fails, Stripe's Dashboard → Developers → Logs shows the refused request and the permission it lacked: add that one permission to the key, never switch to the full secret key. Then make the live key and a live webhook destination the same way and paste those instead.",
+        "explain": "The Checks above only read; nothing here writes to Stripe until a viewer starts a payment. So prove the Write permissions once, with test keys (rk_test_, pk_test_) and a webhook destination made in test mode: with Stripe's test card, subscribe, tip, buy points and gift a subscription to a second account, then open the billing portal from your account. If one of them fails, Stripe's Dashboard → Developers → Logs shows the refused request and the permission it lacked: add that one permission to the key, never switch to the full secret key. Then make the live key and a live webhook destination the same way and paste those instead.",
         "links": [
           {
             "label": "Stripe: test cards",
@@ -3238,7 +3281,7 @@ const MODULES = [
       "web"
     ],
     "legacyOn": true,
-    "description": "Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers \"not found\", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them — cancel their subscriptions in PayPal first, or switch back on.",
+    "description": "Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers \"not found\", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them. Cancel their subscriptions in PayPal first, or switch back on.",
     "api": {
       "files": []
     },
@@ -3250,6 +3293,10 @@ const MODULES = [
       "paypal.plans"
     ],
     "doneTest": [],
+    "helpdesk": {
+      "on": "PayPal: tips and points can be paid with PayPal, and with Venmo when PayPal offers it (mostly US buyers). When the site has set up a PayPal plan, the Supporter subscription can be paid with PayPal too, also on a site without card payments: press Subscribe under the player (or open Support from the account menu) and choose PayPal. Gift subscriptions are card payments only.",
+      "off": "PayPal and Venmo are not offered on this site."
+    },
     "setup": [
       {
         "id": "app",
@@ -3274,7 +3321,7 @@ const MODULES = [
         "id": "webhook",
         "title": "The webhook",
         "need": "required",
-        "explain": "Open the app → Webhooks → Add webhook: the URL below, and tick the events below. PayPal then shows a webhook id; paste it here. The Test checks that the id exists at PayPal, points at this site and sends every event the site handles.",
+        "explain": "Open the app → Webhooks → Add webhook: the URL below, and tick the events below. PayPal then shows a webhook id; paste it here. Check confirms that the id exists at PayPal, points at this site and sends every event the site handles.",
         "links": [
           {
             "label": "PayPal: webhooks",
@@ -3295,6 +3342,23 @@ const MODULES = [
           "paypal.webhookId"
         ],
         "test": "paypal.webhookId"
+      },
+      {
+        "id": "plans",
+        "title": "Supporter subscriptions through PayPal",
+        "need": "optional",
+        "explain": "Optional: lets viewers pay the Supporter subscription with PayPal too. In PayPal, make a billing plan that bills monthly at a fixed price, with a payment failure threshold of 3. Paste it as {\"supporter\":\"P-…\"} with your plan id in place of P-…. Any other kind of plan is refused credit and flagged. Leave it empty and PayPal takes tips and points only.",
+        "links": [
+          {
+            "label": "PayPal: subscriptions",
+            "url": "https://www.paypal.com/billing/plans"
+          }
+        ],
+        "paste": [],
+        "fields": [
+          "paypal.plans"
+        ],
+        "test": null
       }
     ]
   }

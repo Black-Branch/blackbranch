@@ -1,0 +1,18 @@
+# At boot: the community space, #general and #forum are still in place. The services start by
+# themselves (restart: unless-stopped); this waits for the database and the homeserver, reads
+# Synapse's own tables and runs the bootstrap only when something it makes is missing (usually
+# nothing: it ends after one query). An update in progress checks them in its own start instead.
+# Enabled by `blackbranch install-files` (install.sh and every update).
+[Unit]
+Description=Black Branch: check that the community rooms are in place
+After=docker.service network-online.target blackbranch-reconcile.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch matrix ensure --boot
+TimeoutStartSec=20min
+
+[Install]
+WantedBy=multi-user.target

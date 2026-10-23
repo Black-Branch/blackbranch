@@ -29,7 +29,7 @@ test("every source has a unique id, a name, one line on what it shows, and a siz
     ids.add(s.id);
     assert.ok(s.name.length > 0 && s.shows.length > 0 && s.size.length > 0, `${s.id}: incomplete`);
   }
-  assert.deepEqual([...ids].sort(), ["alert", "bubble", "chat", "credit", "meter", "poll", "rig", "sticker", "support-bar"],
+  assert.deepEqual([...ids].sort(), ["alert", "bubble", "chat", "credit", "poll", "rig", "sticker", "support-bar"],
     "every source, by name — a deleted entry must fail here, not vanish");
   assert.ok(OVERLAY_SOURCES.every((s) => s.served !== "rig"), "a file on the streaming PC is an install's own: its plugin lists it");
 });
@@ -49,7 +49,7 @@ test("stream-api sources are PUBLIC GETs on the pinned route surface", () => {
   const api = OVERLAY_SOURCES.filter((s) => s.served === "stream-api");
   // The four money overlays are agent D's routes (contract 4): this stays red in a tree without
   // them, by design — the directory must not name a source stream-api does not serve.
-  assert.ok(api.length >= 6, "the poll, sticker, alert, support-bar, meter and bubble overlays");
+  assert.ok(api.length >= 5, "the poll, sticker, alert, support-bar and bubble overlays (the meter is the owner's, not listed)");
   for (const s of api) {
     assert.ok(surface.includes(`"GET ${s.path} [PUBLIC]"`), `${s.id}: GET ${s.path} is not a PUBLIC route`);
   }
@@ -72,5 +72,14 @@ test("/overlay is a mod page, and the Admin Panel's OBS place links to it", () =
   // The /mod page is the mod window (no text links); the directory is an
   // OBS concern, linked from Utility → OBS.
   const admin = stripComments(readFileSync(join(web, "app", "features", "instance", "AdminPanel.tsx"), "utf8"));
-  assert.match(admin, /section === "utility" && sub === "obs"[\s\S]{0,200}href="\/overlay"/, "the OBS place is where the directory is found");
+  assert.match(admin, /section === "utility" && sub === "obs" && \(\s*<>\s*<RigPanel note=\{note\} \/>\s*<OverlaysPanel go=\{go\} \/>/, "the OBS place renders the overlay cards");
+  const cards = stripComments(readFileSync(join(web, "app", "features", "instance", "OverlaysPanel.tsx"), "utf8"));
+  assert.match(cards, /href="\/overlay"/, "and they link the directory");
+});
+
+test("each overlay's line says only what the page draws: no timer on the support bar, no follows on the alerts", () => {
+  const shows = (id: string) => OVERLAY_SOURCES.find((s) => s.id === id)!.shows;
+  assert.doesNotMatch(shows("support-bar"), /timer/i);
+  assert.doesNotMatch(shows("alert"), /follow/i, "nothing sends a follow alert");
+  assert.ok(!OVERLAY_SOURCES.some((s) => s.id === "meter"), "the owner's meter is not a product overlay");
 });

@@ -78,7 +78,7 @@ test("all green facts: every check this release makes is ok, and the later areas
   for (const [id, r] of Object.entries(rows)) {
     if (later.includes(id)) { assert.equal(r.status, "grey", id); assert.equal(r.detail, "not checked in this release"); }
     // The Cloudflare skip rule cannot be read without a Cloudflare token: grey "check by hand", never red.
-    else if (id === "payments.cloudflare") { assert.equal(r.status, "grey"); assert.match(r.detail, /check by hand: a WAF Skip rule for \/api\/billing\/webhook/); }
+    else if (id === "payments.cloudflare") { assert.equal(r.status, "grey"); assert.match(r.detail, /check by hand/); assert.match(r.detail, /Bot Fight Mode/); }
     // A fresh install has no older platform id: not applicable, grey (not a pass it never needed).
     else if (id === "site.legacyId") { assert.equal(r.status, "grey"); assert.match(r.detail, /^not needed: a fresh install/); }
     else assert.equal(r.status, "ok", `${id}: ${r.detail}`);
@@ -251,7 +251,7 @@ test("ingest.readers: a reader that failed is named with its reason; off is igno
   const bad = row((g) => { g.ok = false; g.readers.youtube = { state: "failed", since: null, error: "browserType.launch: Executable doesn't exist" }; g.readers.kick = { state: "failed", since: null, error: "" }; });
   assert.equal(bad.status, "fail");
   assert.equal(bad.detail, "Kick: failed to start; YouTube: browserType.launch: Executable doesn't exist");
-  assert.equal(bad.fix, "Admin Panel → Stream shows the reason; blackbranch logs stream-ingest.");
+  assert.equal(bad.fix, "The site's Stream tab (admins only) shows the reason; sudo blackbranch logs stream-ingest.");
   assert.equal(row((g) => { g.readers.youtube = { state: "starting", since: null, error: "" }; }).status, "ok", "starting under two minutes counts as ok (the service says ok)");
   const slow = row((g) => { g.ok = false; g.readers.youtube = { state: "starting", since: null, error: "" }; });
   assert.equal(slow.status, "warn"); assert.match(slow.detail, /YouTube still starting after two minutes/);
@@ -298,30 +298,125 @@ test("tts.ready: switched off is skipped; on without the key or a voice is red w
   assert.equal(off.status, "grey"); assert.equal(off.detail, "skipped: read-aloud is switched off");
   const both = row((t) => { t.keySet = false; t.voiceSet = false; });
   assert.equal(both.status, "fail"); assert.match(both.detail, /the ElevenLabs key and a voice id are not set/);
-  assert.equal(both.fix, "Admin Panel → Voice: set the ElevenLabs key and a voice id");
+  assert.equal(both.fix, "Admin Panel → Utility → TTS: set the ElevenLabs key and a voice id.");
   assert.equal(run((h) => { h.tts = { answered: false }; })["tts.ready"].status, "grey");
 });
 
-// W18b: a fresh install's failing rows were all "module on, keys not set". A module that is
-// untouched (switched on, never configured, its page never opened — the site's fact) is amber
-// "not set up yet" until its page is visited; then its Test counts as before.
-test("modules.tests: an untouched module is 'not set up yet' (amber), a visited one fails as before", () => {
-  const failing = (untouched) => (h, s) => { s.modules[0].tests[0] = { step: "websocket", ok: false, detail: "refused" }; s.modules[0].untouched = untouched; };
-  const fresh = run(failing(true))["modules.tests"];
-  assert.equal(fresh.status, "warn");
-  assert.equal(fresh.detail, "not set up yet: obs — switched on, but its page has not been opened");
-  assert.match(fresh.fix, /set it up, or switch the module off/);
-  assert.equal(run(failing(false))["modules.tests"].status, "fail", "visited: its Test counts");
-  assert.equal(run(failing(undefined))["modules.tests"].status, "fail", "a site that does not report the fact: as before");
-  // The setup flow's stamp, read by the host: setup.state.visited ("module:<id>").
-  const stamped = (setup) => run((h, s) => { failing(undefined)(h, s); h.setup = setup; })["modules.tests"].status;
-  assert.equal(stamped({ visited: ["core:kick", "module:stripe"], completed: false }), "warn", "obs's page not in the list: not set up yet");
-  assert.equal(stamped({ visited: ["module:obs"], completed: true }), "fail", "visited: its Test counts");
-  assert.equal(stamped({ visited: null, completed: false }), "warn", "no list during setup = nothing visited yet");
-  assert.equal(stamped({ visited: null, completed: true }), "fail", "an install that finished setup before the stamp existed: as before");
-  assert.equal(stamped(null), "fail", "the host could not read it: as before");
-  const mixed = run((h, s) => { failing(true)(h, s); s.modules.push({ id: "youtube", on: true, servesMedia: false, tests: [{ step: "channel", ok: false, detail: "not found" }] }); })["modules.tests"];
-  assert.equal(mixed.status, "fail"); assert.equal(mixed.detail, "youtube: not found; not set up yet: obs");
+// A module's own switch says whether it is set up, not whether its setup page was ever opened:
+// switched off = "not set up yet" (grey, never red); switched on with its keys missing = its Test
+// fails (red); switched on with its keys = its Test's verdict. The setup flow's "visited" stamp
+// (h.setup) no longer changes a verdict.
+test("modules.tests: a switched-off module is grey 'not set up yet'; on with no keys is red; on with keys is tested", () => {
+  const row = (mut) => run(mut)["modules.tests"];
+  const off = row((h, s) => { s.modules = [{ id: "obs", on: false, servesMedia: false, owner: false, tests: [] }]; });
+  assert.equal(off.status, "grey");
+  assert.equal(off.detail, "not set up yet: obs is switched off");
+  const noKeys = row((h, s) => { s.modules[0].tests[0] = { step: "websocket", ok: false, detail: "the address is not set" }; });
+  assert.equal(noKeys.status, "fail");
+  assert.equal(noKeys.detail, "obs: the address is not set");
+  const keys = row(() => {});
+  assert.equal(keys.status, "ok"); assert.equal(keys.detail, "1 passed");
+  const mixed = row((h, s) => { s.modules.push({ id: "radio", on: false, servesMedia: true, owner: false, tests: [] }); });
+  assert.equal(mixed.status, "ok"); assert.equal(mixed.detail, "1 passed; not set up yet: radio is switched off");
+});
+
+test("modules.tests: the setup flow's 'visited' stamp no longer turns a failing switched-on module amber", () => {
+  const failing = (setup) => run((h, s) => { s.modules[0].tests[0] = { step: "websocket", ok: false, detail: "refused" }; h.setup = setup; s.modules[0].untouched = true; })["modules.tests"].status;
+  for (const setup of [{ visited: ["core:kick"], completed: false }, { visited: null, completed: false }, { visited: ["module:obs"], completed: true }, null]) {
+    assert.equal(failing(setup), "fail", JSON.stringify(setup));
+  }
+});
+
+test("modules.tests restart + retry: a fresh load of the doctor file and a second run give the same off/on verdicts", async () => {
+  const facts = () => { const site = greenSite(); site.modules = [{ id: "obs", on: false, servesMedia: false, owner: false, tests: [] }, { id: "youtube", on: true, servesMedia: false, owner: false, tests: [{ step: "channel", ok: false, detail: "the key is not set" }] }]; return { host: greenHost(), hostState: "ok", site, siteError: null }; };
+  const pick = (d) => d.evaluate(facts()).find((r) => r.id === "modules.tests");
+  const first = pick(DOCTOR);
+  assert.equal(first.status, "fail"); assert.equal(first.detail, "youtube: the key is not set");
+  assert.deepEqual(pick(DOCTOR), first, "retry: the same verdict");
+  const { DOCTOR: reloaded } = await import(`../config/doctor.mjs?restart=${Date.now()}`);
+  assert.deepEqual(pick(reloaded), first, "restart: a fresh load gives the same verdict");
+  const generated = await import(`../web/app/lib/doctor.generated.mjs?restart=${Date.now()}`);
+  assert.deepEqual(pick(generated.DOCTOR), first, "the site's generated copy says the same");
+});
+
+// Kick's refused lookup: the reader's one-line reason travels stream-ingest /health → the host's
+// snippet (one line, cut at 160) → the Doctor's "Chat readers started" row. The row must show the
+// whole sentence, with where the two numbers are read, and so must the settings' own help.
+test("Kick refused: the Doctor's row shows the whole help sentence, saying where both numbers are found", async () => {
+  const kickSrc = readFileSync(path.join(root, "stream-ingest/platforms/kick.js"), "utf8");
+  const help = /\nexport const KICK_IDS_HELP = '([^'\n]+)';\n/.exec(kickSrc)?.[1];
+  assert.ok(help, "KICK_IDS_HELP is where this test reads it");
+  assert.match(help, /kick\.com\/api\/v2\/channels\/YOUR-CHANNEL/);
+  assert.match(help, /chatroom\.id/);
+  assert.match(help, /"Kick chatroom id"/); assert.match(help, /"Kick channel id"/);
+  const js = /\nINGEST_HEALTH_JS='([^']+)'\n/.exec(readFileSync(path.join(here, "blackbranch"), "utf8"))?.[1];
+  assert.ok(js, "the snippet is where this test reads it");
+  const { createServer } = await import("node:http");
+  const { execFile } = await import("node:child_process");
+  for (const error of [help, `${help}; no browser to retry in`]) {
+    const server = createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, readers: { kick: { state: "failed", since: null, error } } }));
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const out = await new Promise((resolve) => execFile(process.execPath, ["-e", js.replace("127.0.0.1:3010", `127.0.0.1:${server.address().port}`)], { encoding: "utf8", timeout: 20_000 }, (e, stdout) => resolve(stdout)));
+      const ingest = JSON.parse(out);
+      const row = run((h) => { h.ingest = ingest; })["ingest.readers"];
+      assert.equal(row.status, "fail");
+      assert.equal(row.detail, `Kick: ${error}`, "the Doctor's row cut the help sentence");
+    } finally { server.close(); }
+  }
+  const { INSTANCE_KEYS } = await import("../config/instance-schema.mjs");
+  for (const key of ["kick.chatroomId", "kick.channelId"]) {
+    const e = INSTANCE_KEYS.find((k) => k.key === key);
+    assert.ok(e, `${key} is in the schema`);
+    assert.match(e.description, /kick\.com\/api\/v2\/channels\/YOUR-CHANNEL/, `${key}: its help says where the number is found`);
+  }
+});
+
+// What an operator reads must be what they can do. Every command a row prints is run on the
+// server as root (blackbranch refuses otherwise), so it is printed with sudo; a page name is the
+// one the Admin Panel or the site shows; and Cloudflare advice matches the plan the operator is on.
+test("every blackbranch command the doctor prints is printed with sudo", () => {
+  const src = readFileSync(path.join(root, "config/doctor.mjs"), "utf8");
+  assert.match(src, /CHECKS: CHECKS\.map\([^\n]*\n\}\)\(\);\s*$/, "the scan read to the end of the file");
+  const strings = [...src.replace(/^\s*\/\/.*$/gm, "").matchAll(/'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g)].map((m) => m[0]);
+  const shown = strings.filter((t) => /\bblackbranch [a-z]/.test(t));
+  assert.ok(shown.length >= 25, `only ${shown.length} strings name a command: the scan lost them`);
+  const bare = shown.filter((t) => /(^|[^\w-])(?<!sudo )blackbranch [a-z]/.test(t));
+  assert.deepEqual(bare, [], "a command printed without sudo");
+  // Not only blackbranch: every command that needs root on the box (the clock, the package
+  // manager, docker, systemd). Each needs sudo before it, and before each one after "then".
+  const ROOT = /(?<![\w-])(?<!sudo )(?:docker|timedatectl|apt|apt-get|dpkg-reconfigure|systemctl|ufw) [a-z-]/;
+  assert.ok(strings.some((t) => /sudo timedatectl set-ntp/.test(t)), "the clock fix is where this scan looks");
+  assert.deepEqual(strings.filter((t) => ROOT.test(t)), [], "a root command printed without sudo");
+});
+
+test("fix lines name the real places: Utility → TTS, the site's Stream tab, and what a Free Cloudflare plan can do", () => {
+  const fix = (id) => DOCTOR.CHECKS.find((c) => c.id === id).fix;
+  assert.match(fix("tts.ready"), /^Admin Panel → Utility → TTS:/);
+  assert.match(fix("ingest.readers"), /^The site's Stream tab/);
+  const cf = fix("payments.cloudflare");
+  assert.match(cf, /Free plan: .*turn Bot Fight Mode off/, "a Free plan cannot skip Bot Fight Mode with a rule");
+  assert.match(cf, /Super Bot Fight Mode/);
+  assert.match(cf, /\/api\/billing\/webhook/);
+  for (const c of DOCTOR.CHECKS) assert.doesNotMatch(c.fix, /—/, `${c.id}: no em-dash`);
+  // The Admin Panel's per-value button says Check (setup pages and KeyCards alike).
+  for (const c of DOCTOR.CHECKS) assert.doesNotMatch(c.fix, /press Test/, `${c.id}: the button is Check`);
+  assert.match(fix("payments.stripe"), /press Check\.$/);
+});
+
+test("module texts promise only what a standard install has, and give a Free Cloudflare plan's step", async () => {
+  const { MODULES } = await import("../config/modules.mjs");
+  const obs = MODULES.find((m) => m.id === "obs");
+  assert.doesNotMatch(obs.description, /sound/i, "a standard install has no sound alerts");
+  assert.doesNotMatch(obs.setup.find((s) => s.id === "rig").explain, /sound/i);
+  const cf = MODULES.find((m) => m.id === "stripe").setup.find((s) => s.id === "cloudflare");
+  assert.match(cf.explain, /Free plan/);
+  assert.match(cf.explain, /Bot Fight Mode off/);
+  assert.match(cf.explain, /Super Bot Fight Mode/);
+  for (const t of [obs.description, obs.setup.find((s) => s.id === "rig").explain, cf.explain]) assert.doesNotMatch(t, /—/);
 });
 
 test("the printout's header: one line per group, each saying what it asks of the reader", () => {
@@ -342,7 +437,7 @@ test("site.legacyId: needed only where the site had visitors before the platform
   assert.equal(missing.status, "warn");
   assert.match(missing.detail, /accounts from before the platform-key rename/);
   assert.match(missing.fix, /SITE_LEGACY_ID/);
-  assert.match(missing.fix, /restart the site — it is read when the site starts/, "an install value: read at start, nothing to rebuild");
+  assert.match(missing.fix, /restart the site: it is read when the site starts/, "an install value: read at start, nothing to rebuild");
   assert.doesNotMatch(missing.fix, /rebuild/);
   assert.equal(row("set", true, false).status, "ok");
   assert.match(row("set", true, false).detail, /migration chain/);
@@ -495,7 +590,7 @@ test("blackbranch doctor prints the list, exits 1 on a red, and writes nothing b
     // No router answers in a scratch home, so the front door is red: exit 1, with its fix line.
     assert.equal(r.status, 1, r.stderr);
     assert.match(r.stdout, /\[FAIL\] The site, api\. and matrix\. answer by name/);
-    assert.match(r.stdout, /fix: blackbranch status shows which service is down/);
+    assert.match(r.stdout, /fix: sudo blackbranch status shows which service is down/);
     assert.match(r.stdout, /\[ok {2}\] The rendered config files match a fresh render — 4 files match/);
     assert.match(r.stdout, /\[ok {2}\] Every bootstrap secret is present — 15 present/);
     assert.match(r.stdout, /\[ok {2}\] The database is at this release's version/);
@@ -545,7 +640,7 @@ test("--report: release, modules, every check and the failing fixes — and not 
     // The fix block lists the failing rows (which of the box's own rows fail depends on the machine).
     const fixes = rep.slice(rep.indexOf("How to fix the failing checks"));
     assert.ok(fixes.length > 30, "no fix block");
-    assert.match(fixes, /^ {2}door\.answers: blackbranch status/m);
+    assert.match(fixes, /^ {2}door\.answers: sudo blackbranch status/m);
     assert.match(fixes, /^ {2}modules\.tests: Admin Panel/m);
     for (const line of rep.split("\n").filter((l) => l.startsWith("fail "))) assert.ok(fixes.includes(`  ${line.split(/\s+/)[1]}: `), `${line} has no fix line`);
     const values = envValues(h);

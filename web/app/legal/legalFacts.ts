@@ -37,7 +37,8 @@ export type LegalFacts = {
   };
   payments: {
     stripe: boolean; paypal: boolean; kofi: boolean; patreon: boolean; streamlabs: boolean;
-    /** A subscription can be bought: card payments AND a tier price (the checkout's own test). */
+    /** A subscription can be bought, through either provider: Stripe with a tier price, or a
+     *  PayPal plan for the tier (supporterPrice.ts subscriptionsSetUp). */
     subscriptions: boolean;
     /** Points can be bought: the buy switch on and a processor that sells them. */
     points: boolean;
@@ -79,7 +80,8 @@ export type LegalInputs = {
   botName: string | null;
   youtube: LegalFacts["youtube"];
   stripe: boolean;
-  /** The subscription tier has a price (lib/tiers.ts — what /api/billing/checkout requires). */
+  /** A subscription is for sale: Stripe on with a tier price, or PayPal subscriptions configured
+   *  (supporterPrice.ts subscriptionsSetUp, which already holds the provider test). */
   subscriptions: boolean;
   paypal: boolean;
   /** `currency.purchasable` — the buy switch both points checkouts read. */
@@ -149,7 +151,7 @@ export function legalFactsFrom(i: LegalInputs): LegalFacts {
       kofi: secretSet("kofi.verificationToken"),
       patreon: secretSet("patreon.webhookSecret"),
       streamlabs: secretSet("streamlabs.socketToken"),
-      subscriptions: i.stripe && i.subscriptions,
+      subscriptions: i.subscriptions,
       points: i.pointsPurchase && (i.stripe || i.paypal),
     },
     currencyName: i.currencyName,

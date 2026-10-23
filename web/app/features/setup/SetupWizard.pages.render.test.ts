@@ -101,11 +101,12 @@ test("restart: the page drawn again from what was saved shows the saved price an
   m.unmount();
 });
 
-test("the modules page: the OBS note says where its setup went (W3); the donate link is checked before it is saved", async () => {
+test("the modules page: OBS is not offered, one line says where it is set up (W3); the donate link is checked before it is saved", async () => {
   posts.length = 0;
-  const data = { modules: [{ id: "obs", label: "OBS control", description: "d", on: true, hasSetup: true, note: "Its setup is in the Admin Panel (Utility → OBS)." }], core: [], later: [], donateUrl: "" };
+  const data = { modules: [{ id: "youtube", label: "YouTube", description: "d", on: true, hasSetup: true }], elsewhere: ["OBS is not part of setup. Switch it on in Admin Panel → Utility → OBS."], core: [], later: [], donateUrl: "" };
   const m = mount("modules", data);
-  assert.match(m.host.textContent ?? "", /Its setup is in the Admin Panel \(Utility → OBS\)/);
+  assert.match(m.host.querySelector("[data-elsewhere]")?.textContent ?? "", /OBS is not part of setup/);
+  assert.equal(m.host.querySelectorAll('[role="switch"]').length, 1, "no OBS switch");
   const link = m.host.querySelector("#bb-donate-url") as HTMLInputElement;
   type(link, "ko-fi.com/casey");
   await submit(m.host);
@@ -113,7 +114,7 @@ test("the modules page: the OBS note says where its setup went (W3); the donate 
   assert.match(m.host.textContent ?? "", /Donate link: a full https:\/\/ address/);
   type(link, "https://ko-fi.com/casey");
   await submit(m.host);
-  assert.deepEqual(posts.map((p) => p.body), [{ step: "modules", data: { modules: { obs: true }, core: [], donateUrl: "https://ko-fi.com/casey" } }]);
+  assert.deepEqual(posts.map((p) => p.body), [{ step: "modules", data: { modules: { youtube: true }, core: [], donateUrl: "https://ko-fi.com/casey" } }]);
   m.unmount();
 });
 
@@ -148,7 +149,7 @@ test("W22: the streamer display name is on Your site with the value the server s
 });
 
 test("R1.8: the quiet hour names its zone — and says (UTC) when none was set", () => {
-  const base = { quietHour: 4, bugReports: false, pending: [], hostRequests: false, signup: undefined, alerts: { set: null, words: "" }, backup: {} };
+  const base = { quietHour: 4, pending: [], hostRequests: false, signup: undefined, alerts: { set: null, words: "" }, backup: {} };
   const utc = mount("finish", { ...base, timeZone: null });
   assert.match(utc.host.textContent ?? "", /The hour is in \(UTC\) — no time zone was set on Your site/);
   utc.unmount();
@@ -174,5 +175,15 @@ test("the read-aloud switch is a switch, sent as the setting's own words", async
   await click(sw);
   await submit(m.host);
   assert.equal((posts[0]!.body as { data: { values: Record<string, string> } }).data.values["tts.enabled"], "true");
+  m.unmount();
+});
+
+test("a setup page links its guide on blackbranch.app, opened in a new tab", () => {
+  const m = mount("module:stripe", stripeData());
+  const a = m.host.querySelector("a[data-docs]") as HTMLAnchorElement;
+  assert.ok(a, "the guide link is on the page");
+  assert.equal(a.getAttribute("href"), "https://blackbranch.app/docs/platforms/stripe/");
+  assert.equal(a.getAttribute("target"), "_blank");
+  assert.match(a.textContent ?? "", /guide/);
   m.unmount();
 });

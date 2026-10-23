@@ -1,0 +1,13 @@
+{
+  "id": "sub_1PLACEHOLDERcancelat", "object": "subscription", "status": "active",
+  "customer": "cus_PLACEHOLDER3",
+  "cancel_at_period_end": false,
+  "cancel_at": 1792993800,
+  "canceled_at": 1790950000,
+  "cancellation_details": { "reason": "cancellation_requested", "comment": null, "feedback": null },
+  "metadata": { "matrix_id": "@casey:site.test" },
+  "items": { "object": "list", "data": [
+    { "id": "si_PLACEHOLDER", "object": "subscription_item", "current_period_end": 1792993800,
+      "price": { "id": "price_PLACEHOLDER", "object": "price" } }
+  ] }
+}

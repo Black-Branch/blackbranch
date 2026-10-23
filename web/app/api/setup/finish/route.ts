@@ -1,4 +1,4 @@
-// Setup step 8. POST { quietHour, bugReports } — save them; when the staged display values differ
+// Setup step 8. POST { quietHour, alerts }: save them; when the staged display values differ
 // from the running site's, ask the host to write them and restart the site (phase "applying"), else
 // finish (phase "done"). POST { complete: true } — finish once the restarted site holds the values. GET — what is still
 // pending, and the host's answer.

@@ -14,7 +14,7 @@ import {
 } from "@/app/features/support";
 import { pointsForCents } from "@/app/lib/coins";
 import { currencyOnItsWay } from "@/app/lib/currency";
-import { subscriptionStatusLine, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView } from "@/app/lib/supportStatus";
+import { subscriptionStatusLine, giftSubscribeNotes, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView } from "@/app/lib/supportStatus";
 import type { SubscriptionView } from "@/app/lib/supportStatus";
 import { usePaymentResult } from "@/app/lib/usePaymentResult";
 
@@ -258,6 +258,8 @@ export default function SupportContent({
   // One sentence about where the viewer stands: renews / renewal off / via a
   // gift / ended — or nothing (supportStatus.test.ts pins the wording).
   const status = me ? subscriptionStatusLine(me) : null;
+  // While a gift runs: when a card subscription would start billing, and that PayPal bills at once.
+  const giftNotes = me ? giftSubscribeNotes(me) : { card: null, paypal: null };
   // Subscription sources: every live record, and the PayPal ones this panel manages.
   const liveRecords = (me?.subscriptions ?? []).filter((r) => isLiveRecord(r));
   const paypalRecords = liveRecords.filter((r) => r.provider === "paypal");
@@ -599,6 +601,7 @@ export default function SupportContent({
               )
             ) : (
               <div className="flex flex-col items-start gap-2">
+                {subsOn && giftNotes.card && <p className="text-xs text-secondary">{giftNotes.card}</p>}
                 {subsOn && (
                   <button
                     onClick={startSubscriptionCheckout}
@@ -607,6 +610,9 @@ export default function SupportContent({
                   >
                     {busy ? "Starting…" : "Become a Supporter"}
                   </button>
+                )}
+                {paypalSubOn && paypalClientId && paypalSub?.price && signedIn && giftNotes.paypal && (
+                  <p className="text-xs text-secondary">{giftNotes.paypal}</p>
                 )}
                 {paypalSubOn && paypalClientId && paypalSub?.price && signedIn && (
                   <div className="w-full max-w-xs">

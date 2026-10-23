@@ -21,7 +21,7 @@ test("every key the setup pages add or check is a settings key, and never an ins
     ...Object.values(WIZARD_STEPS).flatMap((x) => x.flatMap((s) => s.step.fields)),
     ...WIZARD_LISTS.flatMap((w) => (w.own ?? []).flatMap((s) => s.fields)),
   ];
-  assert.ok(named.length >= 30, `vacuity: only ${named.length} keys named`);
+  assert.ok(named.length >= 28, `vacuity: only ${named.length} keys named`);
   for (const k of named) {
     assert.ok(keys.has(k), `${k} is not a settings key`);
     assert.notEqual((INSTANCE_KEYS as { key: string; tier: string }[]).find((e) => e.key === k)!.tier, "install", `${k} is set in .env, not on a page`);

@@ -39,10 +39,10 @@ export const SETUP_CORE = [
       },
       {
         id: 'app', title: 'Your Twitch app', need: 'optional',
-        explain: 'Needed for viewers to link their Twitch account, for moderation from the site and for live status. Turn on two-factor sign-in on the Twitch account first (Settings → Security). Then Twitch Developers → Your Console → Applications → Register: any unique name, the redirect URL below, category Website Integration. Copy the client id; New Secret gives the secret. The Test fetches an app token and finds the channel; it shows the channel\'s numeric id — paste it as the broadcaster id. Signing the bot account in from this page comes in a later release.',
+        explain: 'Needed for viewers to link their Twitch account, for moderation from the site and for live status. Turn on two-factor sign-in on the Twitch account first (Settings → Security). Then Twitch Developers → Your Console → Applications → Register: any unique name, the redirect URL below, category Website Integration. Copy the client id; New Secret gives the secret. Check fetches an app token and finds the channel. The channel\'s numeric id is found and saved for you. Signing the bot account in from this page comes in a later release.',
         links: [{ label: 'Twitch: register an application', url: 'https://dev.twitch.tv/console/apps/create' }],
         paste: [{ label: 'OAuth redirect URL', value: '{origin}/api/auth/link/twitch/callback' }],
-        fields: ['twitch.clientId', 'twitch.clientSecret', 'platform.twitch.broadcasterId'], test: 'twitch.clientSecret',
+        fields: ['twitch.clientId', 'twitch.clientSecret'], test: 'twitch.clientSecret',
       },
     ],
   },
@@ -52,16 +52,21 @@ export const SETUP_CORE = [
     steps: [
       {
         id: 'channel', title: 'Your Kick channel', need: 'required',
-        explain: 'The channel name as it appears in your Kick address (kick.com/<name>). Chat is read with this alone; the app below makes it more reliable.',
+        explain: 'The channel name as it appears in your Kick address (kick.com/<name>). Without the app below, the site still tries to read Kick chat and your live status, but Kick often blocks a site that has no app, so live status can show as unknown. Viewers cannot link their Kick account and moderators cannot act on Kick from the site until the app is set.',
         links: [{ label: 'Kick', url: 'https://kick.com/' }],
         paste: [], fields: ['platform.kick.slug'], test: null,
       },
       {
         id: 'app', title: 'Your Kick app', need: 'optional',
-        explain: 'Needed for viewers to link their Kick account and for moderation from the site. Turn on two-factor sign-in on the Kick account first. Then Kick → Settings → Developer → Create app: any name and the redirect URL below. Paste the client id and secret. The Test fetches an app token and finds the channel; it shows the channel\'s numeric id — paste it as the Kick user id.',
+        explain: 'Makes live status reliable, lets viewers link their Kick account and lets moderators act on Kick from the site. Turn on two-factor sign-in on the Kick account first. Then Kick → Settings → Developer → Create app: any name and the redirect URL below. Paste the client id and secret. Check fetches an app token and finds the channel. The channel\'s numeric id is found and saved for you.',
         links: [{ label: 'Kick: developer settings', url: 'https://kick.com/settings/developer' }],
         paste: [{ label: 'Redirect URL', value: '{origin}/api/auth/link/kick/callback' }],
-        fields: ['kick.clientId', 'kick.clientSecret', 'platform.kick.userId'], test: 'kick.clientSecret',
+        fields: ['kick.clientId', 'kick.clientSecret'], test: 'kick.clientSecret',
+      },
+      {
+        id: 'ids', title: 'Kick\'s chatroom and channel ids (only if needed)', need: 'optional',
+        explain: 'Leave these empty. Only if the Doctor says the Kick reader cannot find your chatroom (Kick\'s bot protection can block the lookup): open kick.com/api/v2/channels/<your name> in your own browser, and copy the number after "chatroom":{"id": as the chatroom id and the first "id" as the channel id.',
+        links: [], paste: [], fields: ['kick.chatroomId', 'kick.channelId'], test: null,
       },
     ],
   },
@@ -71,13 +76,13 @@ export const SETUP_CORE = [
     steps: [
       {
         id: 'account', title: 'Your stream.place account', need: 'required',
-        explain: 'Paste your account\'s DID (did:plc:…, shown on your Bluesky or stream.place profile settings) and the handle the player opens. There is no app to register: stream.place reads this site\'s own sign-in description at the first address below, and sends people back to the second. The Test finds the account and fetches that description.',
+        explain: 'Paste your handle, as in you.bsky.social, without the @. When you save, the site finds your account\'s DID (did:plc:…) from it. There is no app to register: stream.place reads this site\'s own sign-in description at the first address below, and sends people back to the second. Check finds the account and fetches that description.',
         links: [{ label: 'stream.place', url: 'https://stream.place/' }],
         paste: [
           { label: 'Client id (nothing to paste anywhere)', value: '{origin}/oauth/client-metadata.json' },
           { label: 'Redirect URL', value: '{origin}/api/auth/link/streamplace/callback' },
         ],
-        fields: ['platform.streamplace.did', 'platform.streamplace.channel'], test: 'platform.streamplace.did',
+        fields: ['platform.streamplace.channel'], test: null,
       },
     ],
   },
@@ -104,6 +109,18 @@ export const SETUP_CORE = [
         explain: 'Streamlabs → Settings → API Settings → API Tokens: copy the Socket API token into this page. It applies when the chat service restarts.',
         links: [{ label: 'Streamlabs: API settings', url: 'https://streamlabs.com/dashboard#/settings/api-settings' }],
         paste: [], fields: ['streamlabs.socketToken'], test: null,
+      },
+    ],
+  },
+  {
+    id: 'voice', label: 'Read-aloud voice (ElevenLabs)', release: 'now',
+    description: 'Alerts, paid messages and the bot spoken on stream with an ElevenLabs voice. The sound reaches your stream through the rig page in OBS.',
+    steps: [
+      {
+        id: 'voice', title: 'Your ElevenLabs key and voice', need: 'optional',
+        explain: 'ElevenLabs → Developers → API keys → Create key, with access to Text to Speech, Models and Voices. Paste it, then pick a voice in ElevenLabs\' Voices page and copy its voice id. Speaking stays off until you switch it on here.',
+        links: [{ label: 'ElevenLabs: API keys', url: 'https://elevenlabs.io/app/settings/api-keys' }, { label: 'ElevenLabs: voices', url: 'https://elevenlabs.io/app/voice-library' }],
+        paste: [], fields: ['elevenlabs.apiKey', 'tts.voiceCasual', 'tts.voiceLoud', 'tts.enabled'], test: 'elevenlabs.apiKey',
       },
     ],
   },

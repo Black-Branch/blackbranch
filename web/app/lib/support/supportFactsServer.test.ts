@@ -66,3 +66,15 @@ test("cached 30 s; a failed read after that keeps the last answer (retry), then 
   h.tick(30_000);
   assert.equal((await h.read()).freeText, false);
 });
+
+test("a site that sells subscriptions through PayPal only tells the help desk it has subscriptions: the fact reads the either-provider offer", async () => {
+  // The fact itself is the dep's answer (above); what decides it in production is wired here.
+  const { readFileSync } = await import("node:fs");
+  const { stripComments } = await import("../testSource.ts");
+  const raw = readFileSync(new URL("./supportFactsServer.ts", import.meta.url), "utf8");
+  assert.match(raw.trimEnd(), /return \(G\.__supportFacts \?\?= createSupportFacts\(\)\)\(\);\n\}$/, "vacuity anchor: read to the end");
+  const src = stripComments(raw);
+  assert.match(src, /subscriptions: async \(\) => \(await subscriptionOffer\(\)\) !== null,/);
+  assert.doesNotMatch(src, /supporterPrice\(\)/, "Stripe's price alone would call a PayPal-only site subscription-free");
+  assert.equal((await harness({}, {}, { subs: true }).read()).subscriptions, true);
+});

@@ -14,7 +14,7 @@ export type SubscriptionView = {
   subStatus: string | null;
   /** current_period_end — the renewal date, or the access-end date when renewal is off. */
   subRenewsAt: string | null;
-  /** Stripe's cancel_at_period_end: the viewer switched renewal off in the portal. */
+  /** The viewer switched renewal off in the portal (Stripe cancel_at_period_end OR cancel_at — stripeRenewalOff). */
   subCancelAtPeriodEnd: boolean;
   giftActive: boolean;
   giftExpiresAt: string | null;
@@ -65,6 +65,40 @@ export function subscriptionStatusLine(
     return { tone: "ended", text: `Your subscription ended on ${fmt(new Date(me.subRenewsAt))}` };
   }
   return null;
+}
+
+/** How far ahead a Checkout trial must end: Stripe takes `subscription_data.trial_end` only "at least
+ *  48 hours in the future" (docs.stripe.com/api/checkout/sessions/create) — plus an hour, so a gift
+ *  right at the edge is never refused by Stripe between our clock and theirs.
+ *  @test-only exported so giftCheckout.test.ts can hold it at or above Stripe's documented 48 hours;
+ *  giftTrialEnd (this file) is its caller. */
+export const GIFT_TRIAL_MIN_LEAD_MS = 49 * 60 * 60 * 1000;
+
+/** The Checkout `trial_end` (unix seconds) that starts a card subscription's billing when the
+ *  viewer's gift ends — the forward twin of grantGift's rule (a gift to a paying subscriber starts
+ *  after the paid period). null when there is no gift, or it ends too soon for Stripe to accept:
+ *  then the card is billed today, as before. The checkout route and the sheet's sentence both ask
+ *  this, so the sheet never promises a wait the checkout will not make. */
+export function giftTrialEnd(giftExpiresAt: string | Date | null, now: Date = new Date()): number | null {
+  if (giftExpiresAt == null) return null;
+  const end = new Date(giftExpiresAt).getTime();
+  if (!Number.isFinite(end) || end - now.getTime() <= GIFT_TRIAL_MIN_LEAD_MS) return null;
+  return Math.floor(end / 1000);
+}
+
+/** The subscribe sheet's sentences while a gift is active: when a card subscription starts billing,
+ *  and — PayPal having no trial here — that PayPal bills at once. Both null with no active gift. */
+export function giftSubscribeNotes(
+  me: SubscriptionView,
+  now: Date = new Date(),
+  fmt: DateFormatter = defaultFormat
+): { card: string | null; paypal: string | null } {
+  if (!me.giftActive || !me.giftExpiresAt) return { card: null, paypal: null };
+  const date = fmt(new Date(me.giftExpiresAt));
+  const card = giftTrialEnd(me.giftExpiresAt, now) != null
+    ? `Billing starts when your gift ends on ${date} — nothing is charged today.`
+    : `Your gift ends on ${date} — a card subscription is billed today.`;
+  return { card, paypal: `PayPal bills today, so the rest of your gift (until ${date}) goes unused.` };
 }
 
 /** One gift purchase as the gifter's ledger shows it (from /api/billing/gifts). */

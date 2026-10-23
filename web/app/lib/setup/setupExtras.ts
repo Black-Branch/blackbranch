@@ -5,8 +5,7 @@
 //
 //   STEP_HELP       per step: foldable explainers, a one-line note, paste lines that are shown for
 //                   reference (nothing to paste, so no Copy button), and the scopes an app needs.
-//   WIZARD_STEPS    steps only the setup pages show, appended to a list (the Stripe price, Kick's
-//                   ids) — the Admin Panel draws its own cards for those keys.
+//   WIZARD_STEPS    steps only the setup pages show, appended to a list (none today).
 //   WIZARD_LISTS    the "where you stream, and other services" choices: the product's lists, with
 //                   Ko-fi, Patreon and Streamlabs as three separate choices, and the read-aloud voice.
 //   FIELD_FORMATS   the shape of every value a page takes, checked before it is saved.
@@ -62,7 +61,7 @@ export const STEP_HELP: Record<string, StepHelp> = {
       "Client ID (on the app's Manage page) → Twitch app client id.",
       "New Secret → Twitch app client secret. Twitch shows it once; a new one replaces the old.",
       "Client type: Confidential. Twitch asks for no scopes when you register: the site asks for them when someone links an account, and the person sees them on Twitch's consent screen.",
-      "Press Check on the secret: it signs the app in and finds your channel, then shows its numeric id — paste that as the broadcaster id.",
+      "Press Check on the secret: it signs the app in and finds your channel. The channel's numeric id is found and saved for you when you save the page.",
     ] }],
   },
   "core:kick/channel": { later: LATER("Platforms → Kick") },
@@ -75,13 +74,13 @@ export const STEP_HELP: Record<string, StepHelp> = {
     more: [{ title: "Which value goes where", body: [
       "Client ID → Kick app client id. Client Secret → Kick app client secret.",
       "Kick asks which scopes the app may use when you create it: tick the ones above. A scope the app lacks is refused when someone links.",
-      "Press Check on the secret: it signs the app in and finds your channel, then shows its numeric id — paste that as the Kick user id.",
+      "Press Check on the secret: it signs the app in and finds your channel. The channel's numeric id is found and saved for you when you save the page.",
     ] }],
   },
   "core:streamplace/account": {
     info: {
-      "Client id (nothing to paste anywhere)": "This site's app description — Streamplace reads it itself",
-      "Redirect URL": "Where Streamplace sends people back — nothing to paste",
+      "Client id (nothing to paste anywhere)": "This site's app description. Streamplace reads it itself when a viewer links an account",
+      "Redirect URL": "Where Streamplace sends people back after they link. Nothing to paste",
     },
     more: [{ title: "What the two addresses are for", body: [
       "Streamplace has no developer console. When a viewer links their account, Streamplace opens the first address to learn which site is asking, then sends the viewer back to the second.",
@@ -118,25 +117,38 @@ export const STEP_HELP: Record<string, StepHelp> = {
   "module:paypal/webhook": { note: "The webhook belongs to one app in one mode: a sandbox app's webhook id does not work with live keys." },
 };
 
-/** Modules whose setup is not a setup page: switched on during setup, set up in the Admin Panel. */
+/** Modules the setup pages leave out altogether: switched on and set up in the Admin Panel. */
 export const ADMIN_ONLY_SETUP: Record<string, string> = {
-  obs: "Its setup — the rig page in OBS and the overlays — is in the Admin Panel once setup is finished (Utility → OBS).",
+  obs: "OBS is not part of setup. Once setup is finished, switch it on and add the rig page and the overlays in Admin Panel → Utility → OBS.",
 };
 
-/** Steps only the setup pages show, appended to a list (after `after`, else at the end). */
-export const WIZARD_STEPS: Record<string, { after?: string; step: RawStep }[]> = {
-  "module:stripe": [{ after: "webhook", step: {
-    id: "price", title: "The supporter subscription's price", need: "optional",
-    explain: "Subscriptions need a monthly Price in Stripe. Product catalogue → Add product: a name (Supporter), Recurring, Monthly, your amount and currency → Save. Open the price and copy its id (price_…). Leave it empty and the site offers no subscriptions or gift subs; tips and points still work. Check asks Stripe that the price is active, recurring and monthly — the key needs Read on Prices for that.",
-    links: [{ label: "Stripe: product catalogue", url: "https://dashboard.stripe.com/products" }],
-    paste: [], fields: ["stripe.supporterPriceId"], test: "stripe.supporterPriceId",
-  } }],
-  "core:kick": [{ step: {
-    id: "ids", title: "Kick's chatroom and channel ids (only if needed)", need: "optional",
-    explain: "Leave these empty. Only if the Doctor says the Kick reader cannot find your chatroom (Kick's bot protection can block the lookup): open kick.com/api/v2/channels/<your name> in your own browser, and copy the number after \"chatroom\":{\"id\": as the chatroom id and the first \"id\" as the channel id.",
-    links: [], paste: [], fields: ["kick.chatroomId", "kick.channelId"], test: null,
-  } }],
+/** The guide on blackbranch.app for each setup page, by page id: links go to its slug (the docs
+ *  site's slug rule: /docs/<section>/<page>/, fixed once published). */
+export const PAGE_DOCS: Record<string, string> = {
+  youtube: "platforms/youtube", stripe: "platforms/stripe", paypal: "platforms/paypal",
+  twitch: "platforms/twitch", kick: "platforms/kick", streamplace: "platforms/streamplace",
+  kofi: "platforms/donations", patreon: "platforms/donations", streamlabs: "platforms/donations",
+  voice: "features/alerts-and-tts",
 };
+/** The setup pages' own guide, for every page without one of its own. */
+export const SETUP_DOCS = "install/the-setup-wizard";
+/** A guide's address. */
+export function docsUrl(slug: string): string {
+  return `https://blackbranch.app/docs/${slug}/`;
+}
+
+/** Steps only the setup pages show, appended to a list (after `after`, else at the end). None
+ *  today: the Stripe price, Kick's ids and the voice are in the lists themselves, so the Admin
+ *  Panel's guides and the public platform pages carry them too. */
+export const WIZARD_STEPS: Record<string, { after?: string; step: RawStep }[]> = {};
+
+/** Fields with a live check of the setup pages' own, not the schema's (the Stripe price: setupTest
+ *  in setupServer.ts asks Stripe for it). A step that fills one gets that field as its test. */
+export const OWN_CHECKS: readonly string[] = ["stripe.supporterPriceId"];
+
+/** A field whose Check is another key's: the value the site finds from it on save (derivedIds.ts).
+ *  The Streamplace handle is checked through the account found from it. */
+export const CHECK_VIA: Readonly<Record<string, string>> = { "platform.streamplace.channel": "platform.streamplace.did" };
 
 type WizardList = { id: string; label: string; description: string; source: string | null; steps?: string[]; own?: RawStep[] };
 
@@ -149,15 +161,7 @@ export const WIZARD_LISTS: WizardList[] = [
   { id: "kofi", label: "Ko-fi", description: "Ko-fi tips and memberships shown as alerts and counted on the support bar.", source: "donations", steps: ["kofi"] },
   { id: "patreon", label: "Patreon", description: "New Patreon members shown as alerts and counted on the support bar.", source: "donations", steps: ["patreon"] },
   { id: "streamlabs", label: "Streamlabs", description: "Streamlabs tips shown as alerts and counted on the support bar.", source: "donations", steps: ["streamlabs"] },
-  { id: "voice", label: "Read-aloud voice (ElevenLabs)", source: null,
-    description: "Alerts, paid messages and the bot spoken on stream with an ElevenLabs voice. The sound reaches your stream through the rig page in OBS.",
-    own: [{
-      id: "voice", title: "Your ElevenLabs key and voice", need: "optional",
-      explain: "ElevenLabs → Developers → API keys → Create key, with access to Text to Speech, Models and Voices. Paste it, then pick a voice in ElevenLabs' Voices page and copy its voice id. Speaking stays off until you switch it on here.",
-      links: [{ label: "ElevenLabs: API keys", url: "https://elevenlabs.io/app/settings/api-keys" }, { label: "ElevenLabs: voices", url: "https://elevenlabs.io/app/voice-library" }],
-      paste: [], fields: ["elevenlabs.apiKey", "tts.voiceCasual", "tts.voiceLoud", "tts.enabled"], test: "elevenlabs.apiKey",
-    }],
-  },
+  { id: "voice", label: "", description: "", source: "voice" },
 ];
 
 /** An older setup's choice of the one combined donations page → the three it became. */
@@ -201,6 +205,7 @@ export const FIELD_FORMATS: Record<string, { ok: (v: string) => boolean; says: s
   "tts.voiceCasual": { ok: (v) => /^[A-Za-z0-9]{10,40}$/.test(v), says: "a voice id: letters and digits, from the voice's ID button" },
   "tts.voiceLoud": { ok: (v) => /^[A-Za-z0-9]{10,40}$/.test(v), says: "a voice id: letters and digits, from the voice's ID button" },
   "site.donateUrl": { ok: (v) => https(v) && v.length <= 512, says: "a full https:// address" },
+  "paypal.plans": { ok: (v) => /^\{\s*"supporter"\s*:\s*"P-[A-Z0-9]{6,40}"\s*\}$/.test(v), says: 'paste {"supporter":"P-…"} with your plan id (it starts P-)' },
 };
 
 /** What is wrong with a value's shape, in words — null when it is fine or blank (blank = unset). */

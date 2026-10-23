@@ -56,7 +56,9 @@ test("2: the webhook's subscription writer stores Stripe's cancel_at_period_end 
   assert.match(upsert, /\(matrix_id, stripe_customer_id, stripe_sub_id, tier, status, current_period_end, cancel_at_period_end, updated_at, stripe_event_at\)/,
     "the column list must name cancel_at_period_end");
   assert.match(upsert, /cancel_at_period_end = EXCLUDED\.cancel_at_period_end,/, "…and the ON CONFLICT branch must update it");
-  assert.match(fn, /sub\.cancel_at_period_end/, "the value is Stripe's own flag, not a guess from status");
+  assert.match(fn, /stripeRenewalOff\(sub\)/,
+    "the value is Stripe's own answer — cancel_at_period_end OR cancel_at (the newer portal sets only cancel_at) — read through the one helper the record mapping uses");
+  assert.doesNotMatch(fn, /Boolean\(sub\.cancel_at_period_end\)/, "the old one-field read misses a portal cancellation");
   // Still ONE writer: nothing else in web touches the column.
   const others = ["app/lib/billingServer.ts", "app/lib/giftServer.ts", "app/api/billing/portal/route.ts", "app/api/billing/checkout/route.ts"];
   for (const f of others) {
@@ -113,7 +115,7 @@ test("5: SupportContent shows the status line, the ledger, and refreshes the led
   const src = read("app/components/SupportContent.tsx");
   assert.match(src, /<\/div>\s*\);\s*\}\s*$/, "END of SupportContent.tsx not read");
   const s = stripComments(src);
-  assert.match(s, /import \{ subscriptionStatusLine, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView \} from "@\/app\/lib\/supportStatus";/);
+  assert.match(s, /import \{ subscriptionStatusLine, giftSubscribeNotes, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView \} from "@\/app\/lib\/supportStatus";/);
   assert.doesNotMatch(s, /giftLedgerServer/, "the client must never import the pool-backed module, not even for a type");
   // The old two lines are gone — one status line replaces both.
   assert.doesNotMatch(s, /"Access ends" : "Renews"/, "the unreachable 'Access ends' branch is replaced");

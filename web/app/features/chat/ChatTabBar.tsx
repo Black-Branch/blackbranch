@@ -58,6 +58,9 @@ type ChatTabBarProps = {
    *  `!!compact && !!narrow && !barRevealHold` — true when mobile compact
    *  should hide this bar for real. Reaches Bar's own `hidden` unchanged. */
   mobileHidden: boolean;
+  /** A window is open over the pane: the compact overlay's pointer reveal stands down, so
+   *  reaching for the window's own top-right buttons does not slide this bar over them. */
+  standDown?: boolean;
 };
 
 /** Live and Matrix share the strip with the registry's content tabs; the key sets are disjoint. */
@@ -86,6 +89,7 @@ export function ChatTabBar({
   liveUnseen, matrixUnseen, setMatrixOpened, narrow,
   contentTabs, contentTab, setContentTab, unarmedTabs, onArmTab, onCloseContentTab,
   splitAvailable, onToggleFull, isFull, fullKind = "community", selectPane, progress, requestPane, mobileHidden,
+  standDown = false,
 }: ChatTabBarProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const plusRef = useRef<HTMLSpanElement>(null);
@@ -173,6 +177,7 @@ export function ChatTabBar({
       // has no geometry) — there is nothing left to occlude once hidden has
       // already removed it from flow.
       hidden={mobileHidden}
+      standDown={standDown}
       // The chat panel's TOP bar. In flow it paints --panel-tint-bar (the panel
       // tint at bar strength); floating/compact it uses the glass fill.
       background={compactOverlay ? "var(--glass-bg)" : "var(--panel-tint-bar)"}

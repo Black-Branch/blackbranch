@@ -78,7 +78,7 @@ export default function RigPanel({ note }: { note: (m: string) => void }) {
     return (
       <section className={`${card} space-y-1`} data-rig-panel="off">
         <h2 className={h2}>The rig page</h2>
-        <p className="text-xs text-secondary">{view.error ? `Not available: ${view.error}.` : "The OBS module is off — switch it on in Site → Modules (it applies when the chat service restarts)."}</p>
+        <p className="text-xs text-secondary">{view.error ? `Not available: ${view.error}.` : "The OBS module is off. Switch it on at the top of this page; it applies when the chat service restarts."}</p>
       </section>
     );
   }

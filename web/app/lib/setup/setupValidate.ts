@@ -146,7 +146,7 @@ const keyLabel = (key: string): string => {
 
 /** Where the sign-up switch lives afterwards. setupValidate.test.ts holds these words to the Admin
  *  Panel's own layout (adminLayout.ts KEY_GROUPS), so a move there fails a test here. */
-export const SIGNUP_SWITCH = { place: "Admin Panel → Site → Community server", label: keyLabel("matrix.registration") } as const;
+export const SIGNUP_SWITCH = { place: "Admin Panel → Site → Community", label: keyLabel("matrix.registration") } as const;
 
 /** A "who can join" answer, or null when it is not one. */
 export function joinChoice(v: unknown): JoinChoice | null {
@@ -186,13 +186,13 @@ export function joinWords(stored: unknown): { state: JoinChoice; words: string }
 
 // ── Finish: phone alerts (optional) ──────────────────────────────────────────────────────────
 // The operator's push alerts go to two ntfy topics (stream-api notify.js): an urgent one and a quiet
-// one. notify.js sends nothing unless BOTH are set — one alone would silently misroute a tier — so the
-// page takes both or neither. Each topic's address is the secret (anyone who knows it can read it):
+// one. notify.js sends everything to the one topic when only one is set, so the page takes one,
+// both or neither. Each topic's address is the secret (anyone who knows it can read it):
 // never shown back; a blank field keeps what is saved.
 
 const ALERT_KEYS = { wake: "ntfy.wakeUrl", quiet: "ntfy.quietUrl" } as const;
 type AlertKey = (typeof ALERT_KEYS)[keyof typeof ALERT_KEYS];
-const ALERTS_PLACE = "Admin Panel → Site → Health";
+const ALERTS_PLACE = "Admin Panel → Site → Alerts to your phone";
 
 function topicUrl(v: string): boolean {
   if (v.length > 300 || /\s/.test(v)) return false;
@@ -221,7 +221,6 @@ export function validateAlertTopics(input: unknown, saved: { wake: boolean; quie
     write[ALERT_KEYS[tier]] = s;
     set[tier] = true;
   }
-  if (set.wake !== set.quiet) return { ok: false, error: "alerts: give both topics, urgent and quiet, or neither — one alone sends nothing" };
   if (write[ALERT_KEYS.wake] !== undefined && write[ALERT_KEYS.wake] === write[ALERT_KEYS.quiet]) {
     return { ok: false, error: "alerts: the urgent and the quiet topic must differ, so muting the quiet one never mutes the urgent one" };
   }
@@ -240,7 +239,8 @@ export function alertsSet(self: Record<string, { display: unknown }> | null | un
 /** The Finish page's line about alerts. */
 export function alertWords(saved: { wake: boolean; quiet: boolean } | null): string {
   if (!saved) return `Whether phone alerts are set up could not be checked just now (${ALERTS_PLACE} shows it).`;
+  if (saved.wake !== saved.quiet) return "Phone alerts are on: every alert goes to the one topic you set. Add a second topic to keep urgent ones apart.";
   return saved.wake && saved.quiet
     ? "Phone alerts are on: urgent problems go to the urgent topic, the rest to the quiet one."
-    : `No phone alerts are set up — that is fine. Important problems always show in the Admin Panel (Doctor); alerts pushed to your phone are optional, and can be added any time in ${ALERTS_PLACE}.`;
+    : `No phone alerts are set up. That is fine. Important problems always show in the Admin Panel (Doctor); alerts pushed to your phone are optional, and can be added any time in ${ALERTS_PLACE}.`;
 }

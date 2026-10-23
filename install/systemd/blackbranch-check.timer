@@ -1,0 +1,13 @@
+# Once a day, in the morning (the server's own time), so an alert arrives while someone is awake.
+# Enabled and started by `blackbranch install-files` (install.sh and every update).
+[Unit]
+Description=Black Branch: daily check of disk, certificates and backups
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+RandomizedDelaySec=1800
+Persistent=true
+Unit=blackbranch-check.service
+
+[Install]
+WantedBy=timers.target

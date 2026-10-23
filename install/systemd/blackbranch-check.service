@@ -1,0 +1,11 @@
+# The daily check, started by blackbranch-check.timer: low disk, a certificate about to run out
+# (direct mode), no good backup for 36 hours. A problem is sent to the alert channel in .env
+# (BB_ALERT_NTFY_URL, BB_ALERT_EMAIL_COMMAND); with none set it is in this unit's log only.
+[Unit]
+Description=Black Branch: daily check of disk, certificates and backups
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch alerts check

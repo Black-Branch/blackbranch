@@ -159,3 +159,111 @@ test("the federation switch's FIRST render is the saved value — never on for a
     await unmount();
   }
 });
+
+async function mountGroups(groups: unknown[], keys: unknown[]) {
+  const el = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(el);
+  const root = createRoot(el);
+  await act(async () => {
+    root.render(React.createElement(KeyCards as never, { view: view({ keys }), groups, onChanged: () => {}, note: () => {} }));
+  });
+  return { el, unmount: () => act(async () => { root.unmount(); el.remove(); }) };
+}
+
+test("the Install values card: closed, every row its value with a lock, nothing to type or save, even for a database setting", async () => {
+  const keys = [
+    key({ key: "site.origin", label: "Site address", tier: "install", reload: "restart", envNames: ["SITE_ORIGIN"], packages: [pkg("web", "https://site.test", "env")] }),
+    key({ key: "matrix.rooms.hub", label: "Community space room", envNames: ["MATRIX_HUB_ROOM_ID"], packages: [pkg("web", "!space:site.test")] }),
+    key({ key: "site.legacyId", label: "Legacy site id", tier: "install", reload: "restart", envNames: ["SITE_LEGACY_ID"], packages: [pkg("web", null, "unset")] }),
+  ];
+  const card = { section: "site", sub: "general", title: "Install values", readOnly: true, folded: true, blurb: "change it on the server",
+    keys: keys.map((k) => k.key), hideUnset: ["site.legacyId"] };
+  const { el, unmount } = await mountGroups([card], keys);
+  const fold = el.querySelector("details[data-folded-card]") as HTMLDetailsElement;
+  assert.ok(fold, "a fold");
+  assert.equal(fold.open, false, "closed until opened");
+  assert.equal(fold.querySelector("summary")?.textContent, "Install values");
+  assert.equal(el.querySelectorAll("[data-key]").length, 2, "the unset legacy id is not a row");
+  for (const [k, v] of [["site.origin", "https://site.test"], ["matrix.rooms.hub", "!space:site.test"]] as const) {
+    const row = rowOf(el, k);
+    assert.ok(row.querySelector("[data-locked-value]")?.textContent?.includes(v), `${k} shows its value`);
+    assert.equal(row.querySelector("input, select, button[type=submit]"), null, `${k}: nothing to edit`);
+  }
+  assert.match(rowOf(el, "matrix.rooms.hub").textContent ?? "", /MATRIX_HUB_ROOM_ID on the server/, "a card without its own note: the env line");
+  await unmount();
+});
+
+test("the time zone is picked from a list of zone names, starting from the saved one", async () => {
+  const tz = key({ key: "site.timeZone", label: "Time zone", packages: [pkg("web", "Europe/Berlin")] });
+  const { el, unmount } = await mountGroups([{ section: "site", sub: "general", title: "Running", keys: ["site.timeZone"] }], [tz]);
+  const select = rowOf(el, "site.timeZone").querySelector("select");
+  assert.ok(select, "a pick list, not a text box");
+  assert.equal(select!.value, "Europe/Berlin");
+  const zones = [...select!.querySelectorAll("option")].map((o) => o.value);
+  assert.ok(zones.length > 100 && zones.includes("America/New_York"), `${zones.length} zones offered`);
+  await unmount();
+});
+
+test("Let people make accounts reads Yes or No, and saves the stored open or closed", async () => {
+  const reg = key({ key: "matrix.registration", label: "Let people make accounts", kind: "enum", values: ["open", "closed"], packages: [pkg("web", "closed")] });
+  const { el, unmount } = await mountGroups([{ section: "site", sub: "general", title: "Community", keys: ["matrix.registration"] }], [reg]);
+  const select = rowOf(el, "matrix.registration").querySelector("select")!;
+  assert.deepEqual([...select.querySelectorAll("option")].map((o) => [o.value, o.textContent]), [["open", "Yes"], ["closed", "No"]]);
+  sent = [];
+  await type(select, "open");
+  await submit(rowOf(el, "matrix.registration").querySelector("form")!);
+  assert.deepEqual(sent, [{ url: "/api/admin/instance/matrix.registration", method: "PUT", body: { value: "open" } }]);
+  await unmount();
+});
+
+test("a platform id found from its channel is shown, not typed, with Find again; a channel's save says what it found", async () => {
+  const ch = key({ key: "platform.twitch.channel", label: "Twitch channel", packages: [pkg("web", "casey")] });
+  const id = key({ key: "platform.twitch.broadcasterId", label: "Twitch broadcaster id", packages: [pkg("web", "4242")] });
+  const notes: string[] = [];
+  const el = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(el);
+  const root = createRoot(el);
+  await act(async () => {
+    root.render(React.createElement(KeyCards as never, { view: view({ keys: [ch, id] }), groups: [{ section: "platforms", sub: "twitch", title: "Twitch", keys: [ch.key, id.key] }], onChanged: () => {}, note: (m: string) => notes.push(m) }));
+  });
+  const row = rowOf(el, "platform.twitch.broadcasterId");
+  assert.equal(row.querySelector("input, select, button[type=submit]"), null, "nothing to type");
+  assert.ok(row.querySelector("[data-locked-value]")?.textContent?.includes("4242"));
+  assert.ok(row.querySelector("[data-derived-from]"));
+  sent = [];
+  await act(async () => { (row.querySelector("[data-find-id]") as HTMLButtonElement).click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  assert.deepEqual(sent.map((x) => [x.url, x.method]), [["/api/admin/instance/platform.twitch.broadcasterId/find", "POST"]]);
+  // The channel itself stays editable.
+  assert.ok(rowOf(el, "platform.twitch.channel").querySelector("input"));
+  await act(async () => { root.unmount(); el.remove(); });
+});
+
+test("Player: one switch per live source (on = offered); a flip saves the whole off-list; the last one on stays on", async () => {
+  const off = (list: string[]) => key({ key: "player.embedsOff", label: "Player sources switched off", kind: "list", values: ["native", "streamplace", "youtube", "twitch"], packages: [pkg("web", list)] });
+  const g = [{ section: "platforms", sub: "player", title: "Player", keys: ["player.embedsOff"] }];
+  const a = await mountGroups(g, [off(["youtube"])]);
+  const row = rowOf(a.el, "player.embedsOff");
+  assert.equal(row.querySelector("input"), null, "no comma list to type");
+  const sw = (item: string) => row.querySelector(`[data-item="${item}"] [role=switch]`) as HTMLButtonElement;
+  assert.deepEqual(["native", "streamplace", "youtube", "twitch"].map((i) => sw(i).getAttribute("aria-checked")), ["true", "true", "false", "true"]);
+  sent = [];
+  await act(async () => { sw("twitch").click(); });
+  assert.deepEqual(sent, [{ url: "/api/admin/instance/player.embedsOff", method: "PUT", body: { value: ["youtube", "twitch"] } }]);
+  await a.unmount();
+  const b = await mountGroups(g, [off(["native", "streamplace", "youtube"])]);
+  assert.equal((rowOf(b.el, "player.embedsOff").querySelector('[data-item="twitch"] [role=switch]') as HTMLButtonElement).disabled, true, "the last source on cannot be switched off");
+  await b.unmount();
+});
+
+test("a read-only card with its own note (the community rooms): the note, never a line to set it on the server", async () => {
+  const hub = key({ key: "matrix.rooms.hub", label: "Community space room", envNames: ["MATRIX_HUB_ROOM_ID"], packages: [pkg("web", "!space:site.test")] });
+  const card = { section: "site", sub: "general", title: "Community rooms", readOnly: true, readOnlyNote: "Found by the server when it made the community.", keys: [hub.key] };
+  const { el, unmount } = await mountGroups([card], [hub]);
+  const row = rowOf(el, "matrix.rooms.hub");
+  assert.ok(row.querySelector("[data-locked-value]")?.textContent?.includes("!space:site.test"));
+  assert.match(row.textContent ?? "", /Found by the server when it made the community\./);
+  assert.doesNotMatch(row.textContent ?? "", /on the server, then restart|MATRIX_HUB_ROOM_ID/);
+  assert.equal(row.querySelector("input, select, button[type=submit]"), null);
+  await unmount();
+});

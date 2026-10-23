@@ -51,6 +51,7 @@ import { useRefusalNote, useSkippedPlatforms, dismissRefusalNote, retryDestinati
 import { failedSendAction } from "@/app/lib/failedSend";
 import { takeReHideNotice } from "@/app/lib/behaviorStore";
 import { featureOn } from "@/app/lib/siteFeatures";
+import { useComposerFocus } from "./useComposerFocus";
 
 type Props = {
   replyTo: ChatMsg | null;
@@ -227,6 +228,9 @@ export default function ChatInput({
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Does the box have focus — from onFocus, or from a keystroke when the focus came before the
+  // page was listening (useComposerFocus). Read by `composing` below.
+  const { focused, onFocus: onFieldFocus, onBlur: onFieldBlur, noteInput } = useComposerFocus(inputRef);
 
   function showNotice(text: string) {
     setNotice(text);
@@ -409,12 +413,13 @@ export default function ChatInput({
   // Done here, in an event, rather than in an effect — setState inside an effect
   // cascades renders and the repo's lint rejects it.
   const onComposerChange = useCallback((v: string) => {
+    noteInput();
     handleInputChange(v);
     setCmdSel(0);
     if (!v.startsWith("/")) setCmdDismissed(false);
     // The caret has not moved yet at this point; read it next frame.
     requestAnimationFrame(() => setCaret(inputRef.current?.selectionStart ?? v.length));
-  }, [handleInputChange, inputRef]);
+  }, [handleInputChange, inputRef, noteInput]);
 
   // The parser needs the caret, not just the text, to know which token is
   // being edited — that is what makes mid-line completion possible.
@@ -732,7 +737,6 @@ export default function ChatInput({
   // It is focus AND text, not text alone: a draft you have clicked away from
   // should hand its space back to the chat rather than sitting there several
   // lines tall, and clicking back in expands it again.
-  const [focused, setFocused] = useState(false);
   const composing = focused && input.trim().length > 0;
 
   // Where is this message going? — as a colour. Load-bearing rather than
@@ -934,8 +938,8 @@ export default function ChatInput({
           // — while composing, the two ends of the row are then the only
           // things saying where the message is going.
           accentColor={accent}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onFocus={onFieldFocus}
+          onBlur={onFieldBlur}
           combobox={composerCombobox}
         />
 

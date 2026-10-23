@@ -21,6 +21,7 @@ import { matrixBaseUrl } from "@/app/lib/matrixConfig";
 import { authMetadataOrNull } from "@/app/lib/matrixAuthMetadata";
 import { oauthTokenRequest } from "@/app/lib/matrixOAuthClient";
 import { policyGatedSession } from "@/app/lib/federatedSignInSwitch";
+import { refreshPathFor } from "@/app/lib/matrixRefreshPath";
 
 // A NULL site.users.homeserver means "ours" — and "ours" is the configured matrix.baseUrl, not the
 // sign-in issuer's origin (the two can differ).
@@ -115,10 +116,12 @@ async function loadRow(matrixId: string, sessionId: string): Promise<SessionRow 
 }
 
 async function accountUrlFor(row: SessionRow): Promise<string | null> {
-  if (row.oidc_token_endpoint) {
+  const path = refreshPathFor(row);
+  if (path.kind === "federated") {
     // An OUTSIDE server's account page, guessed from its stored token endpoint — not ours to
-    // discover here (out of M1's scope; the federated row stores no metadata).
-    return `${row.oidc_token_endpoint.replace(/\/oauth2\/token$/, "")}/account`;
+    // discover here (out of M1's scope; the federated row stores no metadata). An own-server
+    // account always gets our MAS metadata, whatever stale columns its row carries.
+    return `${path.tokenEndpoint.replace(/\/oauth2\/token$/, "")}/account`;
   }
   return (await authMetadataOrNull())?.accountManagementUri ?? null;
 }
@@ -149,8 +152,10 @@ async function resolve(matrixId: string, sessionId: string): Promise<MatrixSessi
   if (!storedRefresh) throw new RevokedSessionError();
 
   try {
-    const fresh = row.oidc_token_endpoint && row.oidc_client_id
-      ? await federatedRefresh(storedRefresh, row.oidc_token_endpoint, row.oidc_client_id)
+    // Chosen by the account's server, not the stored columns (matrixRefreshPath.ts says why).
+    const path = refreshPathFor(row);
+    const fresh = path.kind === "federated"
+      ? await federatedRefresh(storedRefresh, path.tokenEndpoint, path.clientId)
       : await localRefresh(storedRefresh);
     const expiresAt = Date.now() + (fresh.expires_in ?? 3600) * 1000;
     await pool.query(

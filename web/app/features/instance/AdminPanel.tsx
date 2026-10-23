@@ -17,7 +17,7 @@ import { createElement, useCallback, useEffect, useMemo, useState, type ReactNod
 import {
   Cpu, Robot, ChartBar, ShieldCheck, Lifebuoy, Database, VideoCamera, SpeakerHigh,
   ClockCounterClockwise, CreditCard, YoutubeLogo, TwitchLogo, Broadcast, Butterfly, DiscordLogo,
-  GlobeSimple, Coins, PuzzlePiece, Timer, Gauge, Sparkle, Medal, Ticket, Brain, Stethoscope, ArrowsClockwise, Browsers,
+  GlobeSimple, Coins, Users, Trophy, Smiley, Timer, Gauge, Sparkle, Medal, Ticket, Brain, Stethoscope, ArrowsClockwise, Browsers,
 } from "@phosphor-icons/react/dist/ssr";
 import { Rail, RailLayout } from "@/app/components/chrome";
 import { getJson } from "@/app/lib/http";
@@ -32,23 +32,23 @@ import {
   type AdminSection, type AdminRailItem, type AiSub,
 } from "./adminLayout";
 import SetupGuides from "./SetupGuides";
-import { ProcessStrip } from "./parts";
 import KeyCards from "./KeyCards";
 import AiPanel from "./AiPanel";
 import PointsPanel from "./PointsPanel";
 import DoctorPanel from "./DoctorPanel";
 import UpdatesPanel from "./UpdatesPanel";
 import RigPanel from "./RigPanel";
-import OverlaysPanel from "./OverlaysPanel";
+import OverlaysPanel, { OverlayAddresses } from "./OverlaysPanel";
 import DiscordNote from "./DiscordNote";
+import EmotesPanel from "./EmotesPanel";
 
 const ic = (C: typeof Cpu) => createElement(C, { size: 18, weight: "bold" });
 const ICON: Record<string, ReactNode> = {
   "ai/models": ic(Cpu), "ai/bot": ic(Robot), "ai/scoring": ic(ChartBar), "ai/automod": ic(ShieldCheck), "ai/helpdesk": ic(Lifebuoy), "ai/embeddings": ic(Database),
-  "utility/obs": ic(VideoCamera), "utility/timer": ic(Timer), "utility/bar": ic(Gauge), "utility/effects": ic(Sparkle), "utility/tts": ic(SpeakerHigh), "utility/overlays": ic(Browsers),
+  "utility/obs": ic(VideoCamera), "utility/timer": ic(Timer), "utility/bar": ic(Gauge), "utility/effects": ic(Sparkle), "utility/tts": ic(SpeakerHigh),
   "payments/history": ic(ClockCounterClockwise), "payments/connections": ic(CreditCard),
   "platforms/youtube": ic(YoutubeLogo), "platforms/twitch": ic(TwitchLogo), "platforms/kick": ic(Broadcast), "platforms/streamplace": ic(Butterfly), "platforms/discord": ic(DiscordLogo),
-  "site/general": ic(GlobeSimple), "site/points": ic(Coins), "site/modules": ic(PuzzlePiece), "site/badges": ic(Medal), "site/tickets": ic(Ticket),
+  "site/general": ic(GlobeSimple), "site/points": ic(Coins), "site/badges": ic(Medal), "site/tickets": ic(Ticket), "site/moderators": ic(Users), "platforms/player": ic(Browsers), "site/leaderboard": ic(Trophy), "platforms/emotes": ic(Smiley),
   doctor: ic(Stethoscope), updates: ic(ArrowsClockwise),
 };
 const PLUGIN_ICON = ic(Brain);
@@ -132,7 +132,6 @@ export default function AdminPanel({ section, initialSub, syncUrl = false, onPla
       {elsewhere.length > 0 && onOpenMod && (
         <OtherPanelHits title="In the mod panel" hits={elsewhere} onOpen={(h) => { setSearch(""); onOpenMod(h.id); }} />
       )}
-      {inst && <div className="mb-2 shrink-0"><ProcessStrip procs={inst.processes} /></div>}
       {msg && <p role="status" className="mb-2 shrink-0 rounded-lg border border-edge bg-surface-1 px-3 py-2 text-xs text-body-dim break-words">{msg}</p>}
       <RailLayout
         fill
@@ -169,29 +168,40 @@ function AdminPlace({ item, inst, error, loadInst, note, go }: {
   if (section === "updates") return <UpdatesPanel />;
   if (section === "payments" && sub === "history") return <PaymentHistory onSetup={() => go("payments/connections")} />;
   if (section === "utility" && sub === "timer") return <TimerControls note={note} />;
-  if (section === "utility" && sub === "bar") return <SupportBarControls note={note} />;
-  if (section === "utility" && sub === "effects") return <EffectsControls note={note} />;
+  // The support bar's and the alerts' overlay addresses sit beside their own settings.
+  if (section === "utility" && sub === "bar") return <><SupportBarControls note={note} /><OverlayAddresses ids={["support-bar"]} /></>;
+  if (section === "utility" && sub === "effects") return <><EffectsControls note={note} /><OverlayAddresses ids={["alert"]} /></>;
   if (section === "site" && sub === "badges") return <BadgesAdmin />;
   if (section === "site" && sub === "tickets") return <SupportTickets note={note} />;
-  if (section === "site" && sub === "moderators") return <ModeratorList note={note} />;
-  if (section === "utility" && sub === "overlays") return <OverlaysPanel go={go} />;
+  // The moderators, then the Staff card (its key rows wait for the settings view).
+  if (section === "site" && sub === "moderators") return (
+    <>
+      <ModeratorList note={note} />
+      {inst && <KeyCards view={inst} groups={keyGroupsFor(section, sub)} onChanged={loadInst} note={note} />}
+    </>
+  );
   if (error) return <p className="text-sm text-red-300">Could not load the settings: {error}</p>;
   if (!inst) return <p role="status" className="text-sm text-muted">Loading settings…</p>;
   if (section === "ai") return <AiPanel sub={sub as AiSub} inst={inst} reloadInst={loadInst} note={note} />;
   if (section === "site" && sub === "points") return <PointsPanel inst={inst} reloadInst={loadInst} note={note} />;
+  if (section === "platforms" && sub === "emotes") return <EmotesPanel inst={inst} note={note} go={go} />;
   const lists = guidesFor(section, sub);
   const guides = (inst.guides ?? []).filter((g) => lists.includes(g.list));
+  // A card that is only a module's switch comes first: the page's feature is on or off above all else.
+  const groups = keyGroupsFor(section, sub, inst.ownerPlugin !== false);
+  const isSwitch = (g: (typeof groups)[number]) => g.keys.every((k) => k.startsWith("modules."));
   return (
     <>
+      <KeyCards view={inst} groups={groups.filter(isSwitch)} onChanged={loadInst} note={note} placeLabel={item.label} />
       {section === "utility" && sub === "obs" && (
         <>
           <RigPanel note={note} />
-          <p className="text-xs text-muted">Other sources: <a href="/overlay" className="text-body-dim underline hover:text-strong">the overlay directory</a> (chat, the credit line); alerts, the support bar and the other overlays: <button type="button" className="text-body-dim underline hover:text-strong" onClick={() => go("utility/overlays")}>Utility → Overlays</button>.</p>
+          <OverlaysPanel go={go} />
         </>
       )}
       {section === "platforms" && sub === "discord" && <DiscordNote view={inst} />}
       {guides.length > 0 && <SetupGuides guides={guides} />}
-      <KeyCards view={inst} groups={keyGroupsFor(section, sub, inst.ownerPlugin !== false)} onChanged={loadInst} note={note} placeLabel={item.label} />
+      <KeyCards view={inst} groups={groups.filter((g) => !isSwitch(g))} onChanged={loadInst} note={note} placeLabel={item.label} />
     </>
   );
 }

@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import { messageVisibleSql } from "@/app/lib/instanceSchema.generated.mjs";
 import { sourceVisible } from "@/app/lib/messageVisibility";
 import { isNativePlatform, normalizePlatform } from "@/app/lib/nativePlatform";
+import { pinSnapshotFrom } from "@/app/lib/pinSnapshot";
 
 // Pinned chat message (one active at a time — Twitch-style banner).
 //   GET    — current active pin (public; clients fetch on load, WS keeps live)
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
   const src = isNativePlatform(platform)
     ? await pool.query(
         `SELECT COALESCE(u.display_name, m.matrix_id) AS username, m.message,
-                NULL::jsonb AS emotes
+                NULL::jsonb AS emotes, m.event_kind, m.event_json
          FROM site.chat_messages m
          LEFT JOIN site.users u ON u.matrix_id = m.matrix_id
          WHERE m.id = $1 AND ${messageVisibleSql("m")}`,
@@ -127,6 +128,9 @@ export async function POST(req: NextRequest) {
         [id, platform]
       );
   if (src.rows.length === 0) return new Response("Not Found", { status: 404 });
+  // An event card with no account behind it (a guest's tip, a Ko-fi alert) has no
+  // account name; the card itself names it (lib/pinSnapshot.ts).
+  const snap = pinSnapshotFrom(src.rows[0]);
 
   const client = await pool.connect();
   let row: PinRow;
@@ -140,8 +144,7 @@ export async function POST(req: NextRequest) {
          (platform, message_id, username, message, emotes, auto, pinned_by)
        VALUES ($1, $2, $3, $4, $5, FALSE, $6)
        RETURNING *`,
-      [platform, id, src.rows[0].username, src.rows[0].message,
-       src.rows[0].emotes, me]
+      [platform, id, snap.username, snap.message, snap.emotes, me]
     );
     await client.query("COMMIT");
     row = rows[0] as PinRow;

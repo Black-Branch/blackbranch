@@ -223,7 +223,9 @@ export default memo(function ChatMessage({
   const ownOrMember = chatNameColor(msg);
   const usesFallback = ownOrMember == null;
   const usernameColor = usesFallback ? "var(--chat-fallback-name, #c3cddb)" : ownOrMember;
-  const username = showMatrixName && msg.matrixId
+  // A tip card shows the name the tipper typed: their account id is on the card only for
+  // badges, colour and style, and swapping it in would put back the name they chose not to show.
+  const username = showMatrixName && msg.matrixId && msg.system !== "donation"
     ? normalizeUsername(msg.matrixId)
     : normalizeUsername(msg.username);
   // The side room this name's own glyphs need (see nameInk.ts).
@@ -328,12 +330,6 @@ export default memo(function ChatMessage({
     [msg, emotes, indicatorColor, stickerScale, stickerImgRef, directory, stillEmotes, maskSwears]
   );
 
-  // Interactive poll card only — every other `system` kind now falls through
-  // to the normal row below (all hooks above run unconditionally, so this
-  // early return is safe).
-  if (msg.system === "poll" && msg.poll) {
-    return <PollCard poll={msg.poll} canModerate={!!onModDelete} signedIn={!!badgeState.myMatrixId} />;
-  }
 
   // Row background, one source so the classes never fight: reply-target
   // selection > reply-to-you tint > crowd verdict > event highlight. Negative
@@ -390,7 +386,12 @@ export default memo(function ChatMessage({
   const faded = crossedOut ? "line-through chat-msg-fade" : score < 0 ? "chat-msg-fade" : "";
   // Mod-only: a deleted message is struck out + muted (non-mods never receive it).
   const del = msg.deleted ? "line-through opacity-40" : "";
-  const canVote = onVote && msg.id != null;
+  const isPoll = msg.system === "poll";
+  const canVote = onVote && msg.id != null && !isPoll;
+  const canReplyTo = onReply && !isPoll ? onReply : undefined;
+  // Who a moderator's sender actions reach: the line's author, or a card's own sender (a paid
+  // highlight, a sticker, a tip with a message). A poll card names no sender, so it gets none.
+  const hasSender = !isPoll && (!msg.system || !!(modIds.matrixId ?? modIds.canonicalId));
 
   // The owner's click picks the highlight (chatSpotlight.ts). Not a click on
   // a control inside the row, and not the click that ends a drag-select — the
@@ -406,6 +407,160 @@ export default memo(function ChatMessage({
     : onSpotlight
     ? (spotlight ? "Click again to clear the highlight" : "Click to highlight this message for everyone")
     : undefined;
+
+  const toolbar = (
+    <>
+    {/* Hover action bar. `.row-actions` (globals.css) owns display, opacity,
+        the fade and the surface — it is the shared definition
+        MatrixMessageRow uses too, and it is deliberately not glass. Do NOT
+        add display/transition utilities here: globals.css is unlayered, so
+        the class beats them silently (check-layering). */}
+    {(canReplyTo || canVote || canReport || (onModDelete && msg.id != null)) ? (
+      <div
+        ref={barRef}
+        // Present only while open, so the CSS can key off its bare presence.
+        data-open={barOpen || undefined}
+        // No `onClick={closeBar}` on the container: that would dismiss on ANY
+        // action, including a vote. Voting is repeatable and toggleable, so
+        // the menu has to survive it; the one-shot actions (reply, pin,
+        // delete, ⋯) close it themselves, below.
+        // keepFocus on the CONTAINER too, not just its buttons: the padding
+        // and gaps between the targets are tappable surface that belongs to
+        // this div, and a press on a non-focusable element still blurs the
+        // composer and drops the keyboard. ContextMenu has no such hole
+        // because its MenuItems are full-width and each carries keepFocus.
+        onMouseDown={keepFocus}
+        className="row-actions absolute right-1 top-0 -translate-y-[75%] z-10 gap-0.5 rounded-md px-1.5 py-0.5">
+        {/* A vote refused by the per-target clamp (429) reverts optimistically,
+            so without this the arrow just bounces back and reads as a broken
+            button. `_voteCooling` is set for a few seconds by useChatMessages
+            and says WHY nothing happened. There is no toast system, and the
+            app surfaces errors in place — same call AutomodHoldBar makes. */}
+        {canVote && (
+          <button
+            type="button"
+            onClick={() => onVote(msg, msg.myVote === 1 ? 0 : 1)}
+            onMouseDown={keepFocus}
+            // aria-disabled, not disabled: the clamp is a few seconds and a
+            // real disabled would eject keyboard focus mid-interaction. This
+            // says "present but won't act" — the styled-disabled state was
+            // otherwise title-only (chatStateA11y.test.ts).
+            aria-disabled={msg._voteCooling || undefined}
+            className={`px-1 py-0.5 rounded transition-colors ${
+              msg._voteCooling
+                ? "text-muted opacity-40 cursor-not-allowed"
+                : `hover:bg-surface-3 ${msg.myVote === 1 ? "text-[color:var(--chat-vote-color,var(--chat-send-color,var(--accent)))]" : "text-muted hover:text-strong"}`
+            }`}
+            style={{ fontSize: "var(--text-chat-md)" }}
+            title={msg._voteCooling ? VOTE_COOLING_TITLE : msg.myVote === 1 ? "Remove upvote" : "Upvote"}
+          >
+            ▲
+          </button>
+        )}
+        {canVote && (
+          <button
+            type="button"
+            onClick={() => onVote(msg, msg.myVote === -1 ? 0 : -1)}
+            onMouseDown={keepFocus}
+            aria-disabled={msg._voteCooling || undefined}
+            className={`px-1 py-0.5 rounded transition-colors ${
+              msg._voteCooling
+                ? "text-muted opacity-40 cursor-not-allowed"
+                : `hover:bg-surface-3 ${msg.myVote === -1 ? "text-red-400" : "text-muted hover:text-strong"}`
+            }`}
+            style={{ fontSize: "var(--text-chat-md)" }}
+            title={msg._voteCooling ? VOTE_COOLING_TITLE : msg.myVote === -1 ? "Remove downvote" : "Downvote"}
+          >
+            ▼
+          </button>
+        )}
+        {canReplyTo && (
+          <button
+            type="button"
+            onClick={() => { canReplyTo(msg); closeBar(); }}
+            onMouseDown={keepFocus}
+            className="px-1.5 py-0.5 rounded text-muted hover:text-strong hover:bg-surface-3 transition-colors"
+            style={{ fontSize: "var(--text-chat-md)" }}
+            title="Reply"
+          >
+            ↩
+          </button>
+        )}
+        {/* Copy sits ON the bar: it is the one action every viewer has, so
+            it does not hide behind a second step in the ⋯ menu. */}
+        <button
+          type="button"
+          onClick={() => { void copyText(msg.message); closeBar(); }}
+          onMouseDown={keepFocus}
+          className="px-1 py-0.5 rounded text-muted hover:text-strong hover:bg-surface-3 transition-colors"
+          style={{ fontSize: "var(--text-chat-md)" }}
+          title="Copy text"
+          aria-label="Copy message text"
+        >
+          ⎘
+        </button>
+        {/* Overflow — the same ⋯ the Matrix row carries, so one toolbar
+            serves both pointer types. It holds ONLY the mod quick actions
+            (pin + two-step delete; a delete arm on the bar would speak only
+            through title=, invisible on touch) — hence gated to the mod
+            handlers; a viewer's menu would be empty. Both handlers are
+            mod-only at the call site (ChatSidebar). */}
+        {(onPin || onModDelete || canReport) && msg.id != null && (
+          <button
+            type="button"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              menuAnchorRef.current = e.currentTarget;
+              setCtxMenu({ x: r.left, y: r.bottom });
+              // Keyboard activation (click detail 0) HOLDS the bar open: the
+              // menu returns focus to this button on close, and a display:none
+              // target silently refuses focus (contextMenuKeyboard.test.ts).
+              // Pointer flows dismiss it.
+              if (e.detail === 0) setBarOpen(true); else closeBar();
+            }}
+            onMouseDown={keepFocus}
+            className="px-1 py-0.5 rounded text-muted hover:text-strong hover:bg-surface-3 transition-colors"
+            style={{ fontSize: "var(--text-chat-md)" }}
+            title="More"
+          >
+            ⋯
+          </button>
+        )}
+      </div>
+    ) : null}
+    </>
+  );
+  const menu = (
+    <>
+    {ctxMenu && (
+      <MessageContextMenu
+        x={ctxMenu.x}
+        y={ctxMenu.y}
+        onPin={onPin && msg.id != null ? () => onPin(msg) : undefined}
+        onDelete={onModDelete && msg.id != null ? () => onModDelete(msg) : undefined}
+        // The sender actions ride with the mod handler (mods only at the call site), and only
+        // where there is a sender to act on (hasSender).
+        msg={onModDelete && msg.id != null && hasSender ? { id: msg.id, platform: msg.platform, matrixId: msg.matrixId, canonicalId: modIds.canonicalId } : undefined}
+        onDetails={onModDelete && onUsernameClick && hasSender ? () => { if (menuAnchorRef.current) onUsernameClick(msg, menuAnchorRef.current); } : undefined}
+        onResult={emitChatNotice}
+        onReport={canReport ? () => openReportDialog({ platform: msg.platform, messageId: msg.id!, name: msg.username }) : undefined}
+        onClose={() => setCtxMenu(null)}
+      />
+    )}
+    </>
+  );
+
+  // The interactive poll card keeps its own controls (vote, and a mod's end / cancel / extend)
+  // and sits in a row like any other line, so a moderator's ⋯ menu (pin, delete) reaches it.
+  if (isPoll && msg.poll) {
+    return (
+      <div ref={rowRef} className="group relative chat-msg-row" onMouseDown={keepFocusCoarse} {...longPress}>
+        <PollCard poll={msg.poll} canModerate={!!onModDelete} signedIn={!!badgeState.myMatrixId} />
+        {toolbar}
+        {menu}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -678,124 +833,7 @@ export default memo(function ChatMessage({
         )}
       </div>
 
-      {/* Hover action bar. `.row-actions` (globals.css) owns display, opacity,
-          the fade and the surface — it is the shared definition
-          MatrixMessageRow uses too, and it is deliberately not glass. Do NOT
-          add display/transition utilities here: globals.css is unlayered, so
-          the class beats them silently (check-layering). */}
-      {(onReply || canVote || canReport || (onModDelete && msg.id != null)) && (
-        <div
-          ref={barRef}
-          // Present only while open, so the CSS can key off its bare presence.
-          data-open={barOpen || undefined}
-          // No `onClick={closeBar}` on the container: that would dismiss on ANY
-          // action, including a vote. Voting is repeatable and toggleable, so
-          // the menu has to survive it; the one-shot actions (reply, pin,
-          // delete, ⋯) close it themselves, below.
-          // keepFocus on the CONTAINER too, not just its buttons: the padding
-          // and gaps between the targets are tappable surface that belongs to
-          // this div, and a press on a non-focusable element still blurs the
-          // composer and drops the keyboard. ContextMenu has no such hole
-          // because its MenuItems are full-width and each carries keepFocus.
-          onMouseDown={keepFocus}
-          className="row-actions absolute right-1 top-0 -translate-y-[75%] z-10 gap-0.5 rounded-md px-1.5 py-0.5">
-          {/* A vote refused by the per-target clamp (429) reverts optimistically,
-              so without this the arrow just bounces back and reads as a broken
-              button. `_voteCooling` is set for a few seconds by useChatMessages
-              and says WHY nothing happened. There is no toast system, and the
-              app surfaces errors in place — same call AutomodHoldBar makes. */}
-          {canVote && (
-            <button
-              type="button"
-              onClick={() => onVote(msg, msg.myVote === 1 ? 0 : 1)}
-              onMouseDown={keepFocus}
-              // aria-disabled, not disabled: the clamp is a few seconds and a
-              // real disabled would eject keyboard focus mid-interaction. This
-              // says "present but won't act" — the styled-disabled state was
-              // otherwise title-only (chatStateA11y.test.ts).
-              aria-disabled={msg._voteCooling || undefined}
-              className={`px-1 py-0.5 rounded transition-colors ${
-                msg._voteCooling
-                  ? "text-muted opacity-40 cursor-not-allowed"
-                  : `hover:bg-surface-3 ${msg.myVote === 1 ? "text-[color:var(--chat-vote-color,var(--chat-send-color,var(--accent)))]" : "text-muted hover:text-strong"}`
-              }`}
-              style={{ fontSize: "var(--text-chat-md)" }}
-              title={msg._voteCooling ? VOTE_COOLING_TITLE : msg.myVote === 1 ? "Remove upvote" : "Upvote"}
-            >
-              ▲
-            </button>
-          )}
-          {canVote && (
-            <button
-              type="button"
-              onClick={() => onVote(msg, msg.myVote === -1 ? 0 : -1)}
-              onMouseDown={keepFocus}
-              aria-disabled={msg._voteCooling || undefined}
-              className={`px-1 py-0.5 rounded transition-colors ${
-                msg._voteCooling
-                  ? "text-muted opacity-40 cursor-not-allowed"
-                  : `hover:bg-surface-3 ${msg.myVote === -1 ? "text-red-400" : "text-muted hover:text-strong"}`
-              }`}
-              style={{ fontSize: "var(--text-chat-md)" }}
-              title={msg._voteCooling ? VOTE_COOLING_TITLE : msg.myVote === -1 ? "Remove downvote" : "Downvote"}
-            >
-              ▼
-            </button>
-          )}
-          {onReply && (
-            <button
-              type="button"
-              onClick={() => { onReply(msg); closeBar(); }}
-              onMouseDown={keepFocus}
-              className="px-1.5 py-0.5 rounded text-muted hover:text-strong hover:bg-surface-3 transition-colors"
-              style={{ fontSize: "var(--text-chat-md)" }}
-              title="Reply"
-            >
-              ↩
-            </button>
-          )}
-          {/* Copy sits ON the bar: it is the one action every viewer has, so
-              it does not hide behind a second step in the ⋯ menu. */}
-          <button
-            type="button"
-            onClick={() => { void copyText(msg.message); closeBar(); }}
-            onMouseDown={keepFocus}
-            className="px-1 py-0.5 rounded text-muted hover:text-strong hover:bg-surface-3 transition-colors"
-            style={{ fontSize: "var(--text-chat-md)" }}
-            title="Copy text"
-            aria-label="Copy message text"
-          >
-            ⎘
-          </button>
-          {/* Overflow — the same ⋯ the Matrix row carries, so one toolbar
-              serves both pointer types. It holds ONLY the mod quick actions
-              (pin + two-step delete; a delete arm on the bar would speak only
-              through title=, invisible on touch) — hence gated to the mod
-              handlers; a viewer's menu would be empty. Both handlers are
-              mod-only at the call site (ChatSidebar). */}
-          {(onPin || onModDelete || canReport) && msg.id != null && (
-            <button
-              type="button"
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                menuAnchorRef.current = e.currentTarget;
-                setCtxMenu({ x: r.left, y: r.bottom });
-                // Keyboard activation (click detail 0) HOLDS the bar open: the
-                // menu returns focus to this button on close, and a display:none
-                // target silently refuses focus (contextMenuKeyboard.test.ts).
-                // Pointer flows dismiss it.
-                if (e.detail === 0) setBarOpen(true); else closeBar();
-              }}
-              onMouseDown={keepFocus}
-              className="px-1 py-0.5 rounded text-muted hover:text-strong hover:bg-surface-3 transition-colors"
-              style={{ fontSize: "var(--text-chat-md)" }}
-              title="More"
-            >
-              ⋯
-            </button>
-          )}
-        </div>
-      )}
+      {toolbar}
 
       {/* Sticker boost trigger — anchored to the WHOLE ROW's own bottom-right
           corner (not the sticker image's), so it stays put as the image grows
@@ -833,21 +871,7 @@ export default memo(function ChatMessage({
         />
       )}
 
-      {ctxMenu && (
-        <MessageContextMenu
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          onPin={onPin && msg.id != null ? () => onPin(msg) : undefined}
-          onDelete={onModDelete && msg.id != null ? () => onModDelete(msg) : undefined}
-          // The sender actions ride with the mod handler (mods only at the call site), and only
-          // on a real chat line — a system card has no sender to act on.
-          msg={onModDelete && msg.id != null && !msg.system ? { id: msg.id, platform: msg.platform, matrixId: msg.matrixId, canonicalId: modIds.canonicalId } : undefined}
-          onDetails={onModDelete && onUsernameClick && !msg.system ? () => { if (menuAnchorRef.current) onUsernameClick(msg, menuAnchorRef.current); } : undefined}
-          onResult={emitChatNotice}
-          onReport={canReport ? () => openReportDialog({ platform: msg.platform, messageId: msg.id!, name: msg.username }) : undefined}
-          onClose={() => setCtxMenu(null)}
-        />
-      )}
+      {menu}
     </div>
   );
 });

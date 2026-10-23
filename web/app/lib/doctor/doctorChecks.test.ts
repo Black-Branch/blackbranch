@@ -91,7 +91,7 @@ test("alerts: no topic is amber with the plain sentence; one topic is enough", (
   const none = row("alerts.channel", (s) => { s.alerts = { topics: 0 }; });
   assert.equal(none.status, "warn");
   assert.equal(none.detail, "Alerts reach nobody: no alert topic is set. Important problems stay visible here in the Admin Panel; external notifications are optional.");
-  assert.match(none.fix, /^Optional: Admin Panel → Site → Health/);
+  assert.match(none.fix, /^Optional: Admin Panel → Site → Site, the "Alerts to your phone" card: /);
   assert.equal(row("alerts.channel", (s) => { s.alerts = { topics: 1 }; }).status, "ok");
   assert.equal(row("alerts.channel", (s) => { s.alerts = null; }).status, "grey");
 });

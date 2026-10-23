@@ -15,6 +15,7 @@ import { activeChatters } from "@/app/lib/activeChatters";
 import { matrixIdForCanonical } from "@/app/lib/canonicalIdentity";
 import { NextRequest } from "next/server";
 import { isNativePlatform, normalizePlatform } from "@/app/lib/nativePlatform";
+import { pinSnapshotFrom } from "@/app/lib/pinSnapshot";
 
 // POST /api/chat/vote — up/downvote a live-chat message.
 // Body: { platform, messageId, vote: 1 | -1 | 0 } (0 clears the vote).
@@ -238,7 +239,7 @@ async function tryAutoPin(platform: string, id: number) {
   const src = isNativePlatform(platform)
     ? await pool.query(
         `SELECT COALESCE(u.display_name, m.matrix_id) AS username, m.message,
-                NULL::jsonb AS emotes
+                NULL::jsonb AS emotes, m.event_kind, m.event_json
          FROM site.chat_messages m
          LEFT JOIN site.users u ON u.matrix_id = m.matrix_id
          WHERE m.id = $1 AND ${messageVisibleSql("m")}`,
@@ -250,6 +251,8 @@ async function tryAutoPin(platform: string, id: number) {
         [id, platform]
       );
   if (src.rows.length === 0) return;
+  // An authorless event card has no account name; the card names it (lib/pinSnapshot.ts).
+  const snap = pinSnapshotFrom(src.rows[0]);
 
   // Deactivate any current (auto-only, per the guard above) pin and insert
   // the new one in one transaction — same pattern as the mod POST in
@@ -268,7 +271,7 @@ async function tryAutoPin(platform: string, id: number) {
          (platform, message_id, username, message, emotes, auto, pinned_by)
        VALUES ($1, $2, $3, $4, $5, TRUE, NULL)
        RETURNING *`,
-      [platform, id, src.rows[0].username, src.rows[0].message, src.rows[0].emotes]
+      [platform, id, snap.username, snap.message, snap.emotes]
     );
     await client.query("COMMIT");
     r = rows[0];

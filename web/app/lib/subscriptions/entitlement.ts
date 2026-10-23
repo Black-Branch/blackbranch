@@ -76,11 +76,14 @@ export function columnEntitledSql(column: string, sourcesParam: string): string 
 
 /** The end of the period the viewer has paid for, across every entitling record (NULL when none):
  *  a gift to a paying subscriber starts after it, not alongside it. The period end the service
- *  reported, else the record's access end. */
+ *  reported, else the record's access end. A Stripe `trialing` record is NOT a paid period (a card
+ *  bought during a gift — checkout's trial_end): counted, a gift arriving during the trial would be
+ *  parked until the first charge day (design review 2026-10-22). It still entitles. */
 export function paidThroughSql(viewerParam: string, sourcesParam: string): string {
   if (!PARAM.test(viewerParam) || !PARAM.test(sourcesParam)) throw new Error("paidThroughSql: parameters only");
   return `(SELECT MAX(COALESCE(r.period_end, r.access_until)) FROM site.subscription_records r
-    WHERE r.matrix_id = ${viewerParam} AND ${entitledRecordsSql("r", sourcesParam)})`;
+    WHERE r.matrix_id = ${viewerParam} AND ${entitledRecordsSql("r", sourcesParam)}
+      AND r.provider_status <> 'trialing')`;
 }
 
 /** The tiers a viewer's entitling records give, for highestTier. `$1` viewer, `$2` sources. */

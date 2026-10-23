@@ -38,6 +38,21 @@ test("subscriptions only with a tier price", () => {
   assert.match(about({ paypal: true }), /optional donations \(processed by\s+PayPal\)/);
 });
 
+test("a site that sells subscriptions through PayPal only names them (no gifts: those are card checkouts)", () => {
+  const html = about({ paypal: true, subscriptions: true });
+  assert.match(html, /optional subscriptions and donations \(processed by\s+PayPal\)/);
+  assert.doesNotMatch(html, /gifts/);
+  // Stripe-only and both: unchanged.
+  assert.match(about({ stripe: true, paypal: true, subscriptions: true }), /optional subscriptions, donations and gifts \(processed by\s+Stripe and PayPal\)/);
+});
+
+test("wiring: the About page reads subscriptions from either provider's settings", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./page.tsx", import.meta.url), "utf8");
+  assert.match(src.trimEnd(), /\}$/, "vacuity anchor: read to the end");
+  assert.match(src, /subscriptions: subscriptionsSetUp\(\),/);
+});
+
 const yt = (publicData: boolean) =>
   renderToStaticMarkup(createElement(YoutubeUses, {
     siteName: "Example Stream", publicData, linking: createElement("li", null, "LINKING-ITEM"),

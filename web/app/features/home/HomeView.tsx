@@ -63,13 +63,13 @@ export function HomeView({
       case "vods":
         return <VodsWidget vods={data?.vods ?? null} loading={pending || loading} selectedVodId={selectedVodId} onPickVod={onPickVod} />;
       case "boards":
-        return <BoardsWidget boards={data?.boards ?? null} loading={pending || loading} live={data?.status?.live ?? false} signedIn={signedIn} />;
+        return <BoardsWidget boards={data?.boards ?? null} loading={pending || loading} live={data?.status?.live ?? false} signedIn={signedIn} hidden={data?.leaderboard?.hidden} />;
     }
   };
 
   // The Leaderboard draws its own header (its title is the face it shows).
   // News shows once a feed has items: no feed (or a feed that never answered) is no card.
-  const widgets = homeWidgets({ vods: vodPlaylist() !== null, news: (data?.news?.length ?? 0) > 0 }).map((def) => (
+  const widgets = homeWidgets({ vods: vodPlaylist() !== null, news: (data?.news?.length ?? 0) > 0, boards: data?.leaderboard?.on !== false }).map((def) => (
     <Widget key={def.id} def={def} header={def.id === "boards" ? null : undefined}>{body(def)}</Widget>
   ));
 

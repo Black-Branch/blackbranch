@@ -5,6 +5,7 @@
 // folder, and the site's (doctorFacts.ts). "Check again" asks the host for fresh facts through the
 // request folder (verb `doctor`) and waits for its answer.
 
+import { shownRows } from "./doctorRowsShown";
 import { DOCTOR } from "../doctor.generated.mjs";
 import type { DoctorRow } from "../doctor.generated.mjs";
 import { answers, hostFile, hostRequestsAvailable, hostResult, requestHost } from "../hostRequests";
@@ -30,7 +31,8 @@ export async function doctorView(hostNote?: string): Promise<DoctorView> {
   const bundle = hostRequestsAvailable();
   const [host, site] = await Promise.all([bundle ? readHostFacts() : Promise.resolve(null), gatherSiteFacts()]);
   const rows = DOCTOR.evaluate({ host, hostState: !bundle ? "none" : host ? "ok" : "missing", site, siteError: null });
-  return { rows, bundle, hostAt: typeof host?.at === "string" ? host.at : null, siteAt: site.at, ...(hostNote ? { hostNote } : {}) };
+  // The page lists the leftover-of-an-older-install checks only once set (doctorRowsShown.ts).
+  return { rows: shownRows(rows), bundle, hostAt: typeof host?.at === "string" ? host.at : null, siteAt: site.at, ...(hostNote ? { hostNote } : {}) };
 }
 
 /** "Check again": ask the host for fresh facts (a bundle only), wait up to `waitMs` for its

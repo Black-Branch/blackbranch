@@ -16,6 +16,8 @@
 
 import { instanceString } from "./instanceConfigServer.ts";
 import { getStripe, stripeConfigured } from "./stripe.ts";
+import { paypalPlanState, paypalPlans, paypalSubscriptionsConfigured, type PaypalPlanState } from "./paypalSubscriptions.ts";
+import { TIERS } from "./tiers.ts";
 
 export type SupporterPrice = {
   /** The Stripe Price id the checkout charges. */
@@ -114,4 +116,63 @@ const G = globalThis as typeof globalThis & { __supporterPrice?: () => Promise<S
 /** The usable Supporter price, or null (see the header). One cache per process. */
 export function supporterPrice(): Promise<SupporterPrice | null> {
   return (G.__supporterPrice ??= createSupporterPrice())();
+}
+
+// ── Is a subscription for sale here, and at what price? ─────────────────────────────────────────
+//
+// Subscriptions exist on a site when EITHER provider sells the Supporter tier (k, 2026-10-21):
+// a usable Stripe price (above), or a PayPal plan for the tier that PayPal prices as an active
+// monthly plan (paypalSubscriptions.ts paypalPlanState, cached the same way). The price shown is
+// Stripe's when there is one, so a Stripe-only or a both-providers site shows what it always
+// showed; else the PayPal plan's, as PayPal stores it. Never a number of our own. Gifts stay card
+// checkouts: they read `supporterPrice()` itself, not this.
+
+export type SubscriptionOffer = {
+  /** Per month, minor units, lower-case currency: Stripe's price, else the PayPal plan's. */
+  amount: number;
+  currency: string;
+  /** Which providers sell it right now. */
+  stripe: boolean;
+  paypal: boolean;
+};
+
+type OfferDeps = {
+  stripe: () => Promise<SupporterPrice | null>;
+  paypalOn: () => boolean;
+  paypalPlanId: () => string | undefined;
+  planState: (planId: string) => Promise<PaypalPlanState>;
+};
+
+const realOfferDeps: OfferDeps = {
+  stripe: () => supporterPrice(),
+  paypalOn: paypalSubscriptionsConfigured,
+  paypalPlanId: () => paypalPlans().supporter,
+  planState: (id) => paypalPlanState(id),
+};
+
+/** @test-only the factory takes stub deps; production uses `subscriptionOffer` below. */
+export function createSubscriptionOffer(deps: OfferDeps = realOfferDeps) {
+  return async function subscriptionOffer(): Promise<SubscriptionOffer | null> {
+    const planId = deps.paypalOn() ? deps.paypalPlanId() : undefined;
+    const [card, plan] = await Promise.all([
+      deps.stripe(),
+      // A failed PayPal read hides the PayPal subscription for that read (paypalPlanState holds
+      // the failure for a minute), the way a Stripe outage hides the card one.
+      planId ? deps.planState(planId).catch(() => "inactive" as const) : Promise.resolve("inactive" as const),
+    ]);
+    const paypal = plan === "inactive" ? null : plan;
+    const shown = card ?? paypal;
+    if (!shown) return null;
+    return { amount: shown.amount, currency: shown.currency, stripe: card !== null, paypal: paypal !== null };
+  };
+}
+
+/** The Supporter subscription as this site sells it now, or null when it sells none. Never throws. */
+export const subscriptionOffer = createSubscriptionOffer();
+
+/** The settings say a subscription is for sale: Stripe on with a Supporter price set, or PayPal
+ *  subscriptions configured (paypalSubscriptionsConfigured). No provider is asked, so it is right
+ *  for a page's words (the About page, the legal terms) and wrong for a price. */
+export function subscriptionsSetUp(): boolean {
+  return (stripeConfigured() && Boolean(TIERS.supporter.priceId)) || paypalSubscriptionsConfigured();
 }

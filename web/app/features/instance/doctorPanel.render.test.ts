@@ -1,12 +1,13 @@
-// Admin Panel → Doctor's header, mounted over a mixed set of rows: one line per group from
-// DOCTOR.summary (the same words `blackbranch doctor` prints) — its count, its words and, when it
-// has rows, what it asks of the reader — never four bare chips that read as one number.
+// Admin Panel → Doctor's header, mounted over a mixed set of rows: THREE lines — Failing N · To look
+// at N · OK N (N not checked) — each with what it asks of the reader when it has rows, never four
+// bare chips that read as one number. The two leftover-of-an-older-install checks show only once set.
 // Run: systemd-run --user --scope -p MemoryMax=8G node --test app/features/instance/doctorPanel.render.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dom, React, act } from "../../lib/testDom.ts";
 import "../../lib/testTsx.ts";
 const { default: DoctorPanel } = await import("./DoctorPanel.tsx");
+const { shownRows } = await import("../../lib/doctor/doctorRowsShown.ts");
 const { DOCTOR } = await import("../../lib/doctor.generated.mjs");
 const { createRoot } = await import("react-dom/client");
 
@@ -24,18 +25,27 @@ async function mount() {
   return { el, done: async () => { await act(async () => { root.unmount(); el.remove(); }); } };
 }
 
-test("one line per group, in the doctor's order, with its count, words and meaning", async () => {
+test("three lines: Failing N, To look at N, OK N (N not checked), each with what it asks", async () => {
   const groups = DOCTOR.summary(rows) as { status: string; words: string; meaning: string; n: number }[];
   assert.deepEqual(groups.map((g) => [g.status, g.n]), [["fail", 1], ["warn", 2], ["ok", 3], ["grey", 1]], "vacuity: the summary counted the mixed set");
   const { el, done } = await mount();
   const lines = [...el.querySelectorAll("[data-group]")];
-  assert.deepEqual(lines.map((l) => [l.getAttribute("data-group"), l.getAttribute("data-n")]), [["fail", "1"], ["warn", "2"], ["ok", "3"], ["grey", "1"]]);
-  for (const g of groups) {
-    const line = el.querySelector(`[data-group="${g.status}"]`)!;
-    assert.ok(line.textContent?.startsWith(`${g.n} ${g.words}`), `${g.status}: "${line.textContent}"`);
-    if (g.meaning) assert.ok(line.textContent?.includes(g.meaning), `${g.status} says what it asks`);
-  }
+  assert.deepEqual(lines.map((l) => l.getAttribute("data-group")), ["fail", "warn", "ok"], "three lines; not-checked is no line of its own");
+  const text = (st: string) => el.querySelector(`[data-group="${st}"]`)!.textContent ?? "";
+  assert.ok(text("fail").startsWith("Failing 1"), text("fail"));
+  assert.ok(text("warn").startsWith("To look at 2"), text("warn"));
+  assert.ok(text("ok").startsWith("OK 3 (1 not checked)"), text("ok"));
+  for (const g of groups.filter((x) => x.status !== "grey" && x.meaning)) assert.ok(text(g.status).includes(g.meaning), `${g.status} says what it asks`);
+  assert.ok(text("ok").includes(groups.find((g) => g.status === "grey")!.meaning), "why some are not checked");
   await done();
+});
+
+test("the old-install checks show only once their value is set, or when they ask for something", () => {
+  const r = (id: string, status: string, detail: string) => ({ id, area: "Database", title: id, status, detail, fix: "" }) as never;
+  const kept = (x: never[]) => shownRows(x).map((y: { id: string }) => y.id);
+  assert.deepEqual(kept([r("site.legacyId", "grey", "not needed: a fresh install has no older platform id"), r("matrix.namespace", "ok", "unset"), r("db.schema", "ok", "")]), ["db.schema"]);
+  assert.deepEqual(kept([r("site.legacyId", "ok", "set, on a database built by the migration chain"), r("matrix.namespace", "fail", "set on an install that started from the baseline")]), ["site.legacyId", "matrix.namespace"]);
+  assert.deepEqual(kept([r("site.legacyId", "warn", "unset, but this database has accounts from before the platform-key rename")]), ["site.legacyId"], "a warning always shows");
 });
 
 test("the groups that need something are buttons to their first row; ok and not-checked are plain", async () => {
@@ -43,7 +53,6 @@ test("the groups that need something are buttons to their first row; ok and not-
   assert.ok(el.querySelector('[data-group="fail"] button'));
   assert.ok(el.querySelector('[data-group="warn"] button'));
   assert.equal(el.querySelector('[data-group="ok"] button'), null);
-  assert.equal(el.querySelector('[data-group="grey"] button'), null);
   // The rows are still listed beneath, each with its status.
   assert.equal(el.querySelectorAll("[data-check]").length, rows.length);
   await done();

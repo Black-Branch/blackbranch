@@ -2,9 +2,9 @@
 
 # PayPal and Venmo
 
-Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers "not found", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them — cancel their subscriptions in PayPal first, or switch back on.
+Tips and points purchases through your own PayPal Business account, with Venmo when PayPal offers it. Tips, points and, with a billing plan set, the Supporter subscription; gifts are card payments (Stripe). Off: no PayPal button, and PayPal's webhook address answers "not found", so PayPal keeps its events and retries them for about three days. PayPal subscribers (a billing plan set) lose their Supporter perks at once while PayPal keeps charging them. Cancel their subscriptions in PayPal first, or switch back on.
 
-This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel → Site → Modules — it is off on a new install. Its setup page then appears with the steps below.
+This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel, at the top of its own page (Payments → Connections). It is off on a new install. Its setup steps are below.
 
 The addresses below are for a site at `example.com`; your setup page shows your own.
 
@@ -26,7 +26,7 @@ Its **Test** button checks the values work before the page moves on. A step you 
 
 ## 2. The webhook
 
-Open the app → Webhooks → Add webhook: the URL below, and tick the events below. PayPal then shows a webhook id; paste it here. The Test checks that the id exists at PayPal, points at this site and sends every event the site handles.
+Open the app → Webhooks → Add webhook: the URL below, and tick the events below. PayPal then shows a webhook id; paste it here. Check confirms that the id exists at PayPal, points at this site and sends every event the site handles.
 
 Links:
 
@@ -44,3 +44,17 @@ This step fills:
 - **PayPal webhook id** (kept encrypted). Verifies that a payment event really came from PayPal.
 
 Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.
+
+## 3. Supporter subscriptions through PayPal (optional)
+
+Optional: lets viewers pay the Supporter subscription with PayPal too. In PayPal, make a billing plan that bills monthly at a fixed price, with a payment failure threshold of 3. Paste it as {"supporter":"P-…"} with your plan id in place of P-…. Any other kind of plan is refused credit and flagged. Leave it empty and PayPal takes tips and points only.
+
+Links:
+
+- [PayPal: subscriptions](https://www.paypal.com/billing/plans)
+
+This step fills:
+
+- **Subscription plans**. The PayPal billing plan (P-…) for each tier this site sells, as JSON: {"supporter":"P-…"}. Set = subscriptions can be paid through PayPal; the plan's price and currency are read from PayPal. The plan must bill monthly at a fixed price; any other plan is refused credit and flagged. Unset = PayPal subscriptions are not offered.
+
+You can skip this step and come back to it from the Admin Panel.

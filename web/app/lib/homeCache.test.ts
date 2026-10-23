@@ -11,7 +11,8 @@ const src = stripComments(readFileSync(join(import.meta.dirname, "homeCache.ts")
 test("ONE 60s single-flight cache over buildHomePayload, read by getHomePayload", () => {
   assert.match(src, /createTtlCache<HomePayload>\(\{ ttlMs: 60_000,/);
   assert.match(src, /buildHomePayload\(\{/);
-  assert.match(src, /export function getHomePayload\(\): Promise<HomePayload> \{\s*return cache\.get\(\);\s*\}/);
+  assert.match(src, /export function getHomePayload\(\): Promise<HomePayload> \{\s*return cache\.get\(\)\.then\(\(p\) => \(\{ \.\.\.p, leaderboard: \{ on: !instanceBool\("leaderboard\.off"\), hidden: instanceList\("leaderboard\.hidden"\) \} \}\)\);\s*\}/,
+    "the Leaderboard's settings are read at every answer, never cached with the body");
 });
 
 test("every widget's loader is wired through the shared readers, never a second copy", () => {

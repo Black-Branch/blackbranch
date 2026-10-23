@@ -4,9 +4,10 @@
 #   From a checkout or an unpacked release:
 #     sudo ./install/install.sh                                   (asks two questions)
 #     sudo ./install/install.sh --domain example.com --mode tunnel
-#   The published one-liner runs this same script, fetching its release first (section 0 below):
+#   The published one-liner runs this same script, fetching its release first (section 0 below).
 #     curl -fsSL https://blackbranch.app/install.sh | sudo bash
 #     curl -fsSL https://blackbranch.app/install.sh | sudo bash -s -- --domain example.com --mode tunnel
+#   Until the first stable release, that address serves the beta installer, so the box follows beta.
 #
 # Options (each answers a question, so a test can run it unattended):
 #   --domain <name>        the site's domain; api.<name> and matrix.<name> are used too. PERMANENT.
@@ -27,9 +28,10 @@
 #                          its tunnel back, then starts it. Implies --skip-dns-check.
 #   --no-swap              do not add a swap file on a small box
 #   --release-key <key>    the key this box trusts to sign its updates ("ed25519:<base64>", or a
-#                          file holding it) instead of the project's (install/release-key.pub) —
-#                          for a pilot or test feed. Kept until a release signed by it names the
-#                          next key (a key rotation, docs/public/operate.md).
+#                          file holding it) instead of the project's (install/release-key.pub),
+#                          for a pilot or test feed. Written once into .env as BB_RELEASE_KEY. The
+#                          box then trusts that key alone: an update never changes it, and running
+#                          the installer again with another key is refused.
 #   --update-feed <url>    where this box reads its releases (default https://blackbranch.app/releases;
 #                          the one-line form passes the address it came from). Written once, with .env.
 #   --update-channel stable|beta   the releases this box follows (default stable; the beta one-line
@@ -531,6 +533,14 @@ BACKUP_PASSPHRASE=$SECRET_BACKUP_PASSPHRASE
 # ── First boot ──
 # sha256 of the setup link's token (\`blackbranch setup-link\`); written by \`blackbranch up\`.
 SETUP_TOKEN_HASH=
+# The Forums tab's reader (a read-only chat account) signs in with this; \`blackbranch up\` makes it.
+MATRIX_READER_TOKEN=
+
+# ── Alerts from the server (\`sudo blackbranch alerts test\` sends a test one) ──
+# An ntfy topic address, and/or a command that sends an email it reads on its input (sendmail you@example.com).
+# Neither set: alerts are in the server's log only.
+BB_ALERT_NTFY_URL=
+BB_ALERT_EMAIL_COMMAND=
 EOF
   # This install's recovery sheet is still to be shown (blackbranch: RECOVERY_DUE) — root's own
   # record, written only with a NEW .env: an install from before the sheet never gets one.

@@ -1,19 +1,19 @@
 // How a platform's chat failures are classified:
 //  - Kick's bare 403 "Forbidden" is classified per channel: followers-only → a viewer-actionable
 //    refusal (one note per session); not known → silent, logged by shape only.
-//  - a known refusal sentence on a 429 is the channel's mode, not infrastructure.
+//  - a refusal sentence on a 429 is the channel's mode, not infrastructure.
 //  - a YouTube /live page that could not be read is "unavailable", not "not live".
 //  - a TypeError from our own code is silent to viewers but its stack is logged, rate-limited.
 // Run: node --test app/lib/kickForbidden.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { kickForbiddenOutcome, kickKnownRefusal, bodyShape, thrownFailure, deliveryFailureKind, failureOf, FOLLOWERS_ONLY } from "./sendDelivery.ts";
+import { kickForbiddenOutcome, refusalByClass, bodyShape, thrownFailure, deliveryFailureKind, failureOf, FOLLOWERS_ONLY } from "./sendDelivery.ts";
 
 const KICK_403 = { data: {}, message: "Forbidden" };
 
 test("a bare Kick 403 on a followers-only channel is a followers-only refusal — persistent, one note per session", () => {
-  assert.equal(kickKnownRefusal(KICK_403), null, "'Forbidden' names no known refusal by itself");
+  assert.equal(refusalByClass(403, KICK_403), null, "'Forbidden' is the status in words, not a refusal by itself");
   const out = kickForbiddenOutcome(true);
   assert.deepEqual(out, { refused: true, reason: FOLLOWERS_ONLY });
   assert.equal(deliveryFailureKind({ platform: "kick", error: "refused", reason: FOLLOWERS_ONLY }), "persistent");
@@ -27,11 +27,11 @@ test("a bare Kick 403 where the channel is not followers-only, or its mode is un
   }
 });
 
-test("a known refusal sentence wins over the status: a 429 saying 'slow mode' is the channel's mode", () => {
-  assert.equal(kickKnownRefusal({ message: "Chatroom is in slow mode, please wait" }), "slow mode");
-  assert.equal(kickKnownRefusal({ message: "You must follow this channel to chat" }), FOLLOWERS_ONLY);
-  assert.equal(kickKnownRefusal({ message: "Too Many Requests" }), null, "a bare rate-limit sentence stays infrastructure");
-  assert.equal(kickKnownRefusal(null), null);
+test("a sentence wins over the status: a 429 saying 'slow mode' is the channel's mode, a bare one is not", () => {
+  assert.deepEqual(refusalByClass(429, { message: "Chatroom is in slow mode, please wait" }), { refused: true, reason: "Chatroom is in slow mode, please wait" });
+  assert.deepEqual(refusalByClass(400, { message: "You must follow this channel to chat" }), { refused: true, reason: FOLLOWERS_ONLY });
+  assert.equal(refusalByClass(429, { message: "Too Many Requests" }), null, "a bare rate-limit sentence stays infrastructure");
+  assert.equal(refusalByClass(429, null), null);
 });
 
 test("the log line carries the body's shape, never its text", () => {
@@ -56,12 +56,12 @@ test("a TypeError from our own code is internal, silent, and its stack is logged
   assert.equal(lines.length, 2);
 });
 
-test("wiring: the Kick sender checks a known sentence first, then the status, then the channel's mode for a bare 403, and logs only shapes", () => {
+test("wiring: the Kick sender asks the class rule first, then the status, then the channel's mode for a bare 403, and logs only shapes", () => {
   const src = readFileSync(new URL("./platformChat.ts", import.meta.url), "utf8");
-  const known = src.indexOf("const known = kickKnownRefusal(body);");
+  const known = src.indexOf("const refusal = refusalByClass(res.status, body);");
   const down = src.indexOf('const down = httpUnavailable("kick", res.status);');
   const forb = src.indexOf("kickForbiddenOutcome(await kickFollowersOnly(");
-  assert.ok(known > 0 && down > known && forb > down, "order: known sentence → infrastructure → per-channel 403");
+  assert.ok(known > 0 && down > known && forb > down, "order: class rule → infrastructure → per-channel 403");
   assert.doesNotMatch(src, /console\.error\("\[platformChat:kick\]", res\.status, text\)/, "the body text is no longer logged");
   assert.match(src, /chatroom\?\.followers_mode/);
   // YouTube: an unread /live page with no earlier video is unavailable, not "not live".

@@ -13,5 +13,6 @@ export const SETUP_GUIDES: readonly { section: string; sub: string; list: string
   { section: "platforms", sub: "twitch", list: "core:twitch" },
   { section: "platforms", sub: "kick", list: "core:kick" },
   { section: "platforms", sub: "streamplace", list: "core:streamplace" },
+  { section: "utility", sub: "tts", list: "core:voice" },
 ];
 

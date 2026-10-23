@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { CHECK_VIA } from "./setupExtras.ts";
 import { MODULES } from "../instanceSchema.generated.mjs";
 import { productModules, moduleSetupPage, fillTemplate, placeholderValues, coreSetupLists, moduleSetupKeys, coreSetupPage,
   wizardLists, wizardListPage, wizardListKeys, wizardSkipPrefix } from "./setupPages.ts";
@@ -39,7 +40,7 @@ test("paste values are computed from this install's own addresses, and a hole is
 
 test("the product's own lists are released, and every value to paste is THIS install's", () => {
   const core = coreSetupLists();
-  assert.deepEqual(core.map((c) => c.id), ["twitch", "kick", "streamplace", "donations"]);
+  assert.deepEqual(core.map((c) => c.id), ["twitch", "kick", "streamplace", "donations", "voice"]);
   assert.ok(core.every((c) => !c.later && c.label && c.description));
   const bb = { origin: "https://bb.test", apiOrigin: "https://api.bb.test", matrixOrigin: "https://matrix.bb.test", serverName: "bb.test" };
   const pastes = (page: ReturnType<typeof coreSetupPage>) => (page?.steps ?? []).flatMap((s) => s.paste.map((p) => [p.label, p.value]));
@@ -54,10 +55,11 @@ test("the product's own lists are released, and every value to paste is THIS ins
   assert.equal(stripe.steps.find((s) => s.id === "webhook")?.paste.find((p) => p.label === "Endpoint URL")?.value, "https://bb.test/api/billing/webhook");
   assert.match(stripe.steps.find((s) => s.id === "keys")?.paste.map((p) => p.value).join(" ") ?? "", /Checkout Sessions .* Customer portal .*Subscriptions/);
   assert.equal(moduleSetupPage("paypal", bb)!.steps.find((s) => s.id === "webhook")?.paste[0]?.value, "https://bb.test/api/billing/paypal/webhook");
-  // Every page's Test is a field of its own step, and the keys a list may write are its fields.
+  // Every page's Check is a field of its own step, or the value found from one (CHECK_VIA: the
+  // Streamplace handle's DID), and the keys a list may write are its fields.
   for (const c of core) {
     const page = coreSetupPage(c.id, bb)!;
-    for (const s of page.steps) if (s.test) assert.ok(s.fields.some((f) => f.key === s.test), `${c.id}/${s.id}`);
+    for (const s of page.steps) if (s.test) assert.ok(s.fields.some((f) => f.key === s.test || CHECK_VIA[f.key] === s.test), `${c.id}/${s.id}`);
     const wiz = c.id === "donations" ? ["kofi", "patreon", "streamlabs"] : [c.id];
     assert.deepEqual(wiz.flatMap((w) => [...wizardListKeys(w)]).filter((k) => page.steps.some((s) => s.fields.some((f) => f.key === k))).sort(),
       page.steps.flatMap((s) => s.fields.map((f) => f.key)).sort(), `${c.id}: the setup pages write every key of the list`);
@@ -67,13 +69,13 @@ test("the product's own lists are released, and every value to paste is THIS ins
   assert.deepEqual(moduleSetupPage("paypal", bb)!.steps[0]!.fields.find((f) => f.key === "paypal.env")?.values, ["live", "sandbox"]);
 });
 
-test("a public install's OBS page offers only the rig page (and the pause scene); the WebSocket steps are the owner's", () => {
+test("the OBS guide is the rig page and the pause scene, on every install: the product has no OBS WebSocket steps", () => {
   const pub = moduleSetupPage("obs", addr)!;
   assert.deepEqual(pub.steps.map((s) => s.id), ["rig", "pause"]);
-  assert.deepEqual([...moduleSetupKeys("obs")], ["timer.pauseScene"], "a public install's step save accepts no WebSocket key");
+  assert.deepEqual([...moduleSetupKeys("obs")], ["timer.pauseScene"], "the step save accepts no WebSocket key");
   const own = moduleSetupPage("obs", addr, { ownerPlugin: true })!;
-  assert.deepEqual(own.steps.map((s) => s.id), ["rig", "pause", "websocket", "names"]);
-  assert.ok(moduleSetupKeys("obs", { ownerPlugin: true }).has("obs.password"));
+  assert.deepEqual(own.steps.map((s) => s.id), ["rig", "pause"], "nor on an install with a site plugin");
+  assert.ok(!moduleSetupKeys("obs", { ownerPlugin: true }).has("obs.password"));
   assert.ok(pub.steps.every((s) => !("ownerOnly" in s)), "the flag is not part of the page");
   assert.match(pub.steps[0]!.explain, /Control audio via OBS/);
   assert.match(pub.steps[0]!.explain, /Advanced access to OBS/);
@@ -102,7 +104,7 @@ test("W4: each platform's channel step says it can be added later in the Admin P
   }
 });
 
-test("contract 6: the Stripe setup page gains the supporter price after the webhook; the Admin Panel guide does not (its own card holds the key)", () => {
+test("contract 6: the Stripe list has the supporter price after the webhook, on the setup page AND in the Admin Panel guide and public docs (one list)", () => {
   const wiz = moduleSetupPage("stripe", addr, { wizard: true })!;
   const ids = wiz.steps.map((s) => s.id);
   assert.equal(ids[ids.indexOf("webhook") + 1], "price", ids.join(","));
@@ -110,8 +112,8 @@ test("contract 6: the Stripe setup page gains the supporter price after the webh
   assert.deepEqual(price.fields.map((f) => f.key), ["stripe.supporterPriceId"]);
   assert.equal(price.test, "stripe.supporterPriceId");
   assert.ok(moduleSetupKeys("stripe", { wizard: true }).has("stripe.supporterPriceId"), "the step save accepts it");
-  assert.ok(!moduleSetupPage("stripe", addr)!.steps.some((s) => s.id === "price"));
-  assert.ok(!moduleSetupKeys("stripe").has("stripe.supporterPriceId"));
+  assert.ok(moduleSetupPage("stripe", addr)!.steps.some((s) => s.id === "price"), "the guide has it too");
+  assert.equal(moduleSetupPage("stripe", addr)!.steps.find((s) => s.id === "price")!.test, "stripe.supporterPriceId", "its own Check (OWN_CHECKS)");
 });
 
 test("W11: Ko-fi, Patreon and Streamlabs are three separate choices, each a one-step page, skips still recorded under the list the Admin Panel shows", () => {
@@ -141,7 +143,7 @@ test("the Kick page gains the optional chatroom and channel ids, with words that
   assert.equal(ids.need, "optional");
   assert.deepEqual(ids.fields.map((f) => f.key), ["kick.chatroomId", "kick.channelId"]);
   assert.match(ids.explain, /^Leave these empty\. Only if/);
-  assert.ok(!coreSetupPage("kick", addr)!.steps.some((s) => s.id === "ids"), "the Admin Panel guide stays the list's own");
+  assert.ok(coreSetupPage("kick", addr)!.steps.some((s) => s.id === "ids"), "the Admin Panel guide and the docs carry it too: one list");
 });
 
 test("W10: Streamplace's two addresses are shown for reference — no Copy, and no label that contradicts it", () => {
@@ -164,4 +166,45 @@ test("W8/W9: the Twitch and Kick pages print the scopes the site asks for, equal
   assert.equal(twitchApp.help!.extraPaste![0]!.value, TWITCH_SCOPES.everyone.join(" "));
   assert.match(twitchApp.help!.note!, /7TV/);
   assert.equal(wizardListPage("kick", addr)!.steps.find((s) => s.id === "app")!.paste[0]!.value, "https://example.test/api/auth/link/kick/callback");
+});
+
+test("every setup page links its guide on blackbranch.app by slug; a page without one links the setup guide", async () => {
+  const { PAGE_DOCS, SETUP_DOCS } = await import("./setupExtras.ts");
+  const slug = /^https:\/\/blackbranch\.app\/docs\/[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*\/$/;
+  for (const id of ["youtube", "stripe", "paypal"]) assert.match(moduleSetupPage(id, addr, { wizard: true })!.docs, slug, id);
+  for (const id of ["twitch", "kick", "streamplace", "kofi", "patreon", "streamlabs"]) {
+    const page = wizardListPage(id, addr)!;
+    assert.equal(page.docs, `https://blackbranch.app/docs/${PAGE_DOCS[id]}/`, id);
+  }
+  assert.equal(SETUP_DOCS, "install/the-setup-wizard");
+  assert.equal(moduleSetupPage("obs", addr)!.docs, "https://blackbranch.app/docs/install/the-setup-wizard/", "no page of its own: the setup guide");
+});
+
+test("PayPal: the Supporter subscription through PayPal is a step of its own, its plan checked by shape", async () => {
+  const { formatProblem } = await import("./setupExtras.ts");
+  const plans = moduleSetupPage("paypal", addr, { wizard: true })!.steps.find((s) => s.id === "plans")!;
+  assert.equal(plans.need, "optional");
+  assert.deepEqual(plans.fields.map((f) => f.key), ["paypal.plans"]);
+  assert.equal(formatProblem("paypal.plans", '{"supporter":"P-5ML4271244454362WXNWU5NQ"}'), null);
+  assert.match(formatProblem("paypal.plans", "P-5ML4271244454362WXNWU5NQ") ?? "", /supporter/);
+});
+
+test("the setup lists say Check, as the pages and the Admin Panel's button do, never Test", () => {
+  const pages = [moduleSetupPage("stripe", addr)!, moduleSetupPage("paypal", addr)!, moduleSetupPage("youtube", addr)!, coreSetupPage("twitch", addr)!, coreSetupPage("kick", addr)!, coreSetupPage("streamplace", addr)!];
+  const words = pages.flatMap((p) => p.steps.map((s) => s.explain)).join(" ");
+  assert.ok(words.length > 2000, "vacuity: the lists' words were read");
+  assert.doesNotMatch(words, /\bTests?\b/);
+  assert.match(words, /\bCheck\b/);
+});
+
+test("Streamplace: the setup page asks for the handle only; the DID is found from it on save, and Check checks the found account", () => {
+  const step = wizardListPage("streamplace", addr)!.steps.find((s) => s.id === "account")!;
+  assert.deepEqual(step.fields.map((f) => f.key), ["platform.streamplace.channel"], "nothing to type but the handle");
+  assert.equal(step.test, "platform.streamplace.did", "Check checks the account found from the handle");
+  assert.doesNotMatch(step.explain, /Paste your account.s DID/);
+  assert.match(step.explain, /handle/);
+  assert.ok(!wizardListKeys("streamplace").has("platform.streamplace.did"), "the page save never writes a typed DID");
+  // The setup test route accepts the DID's check for a page that fills the handle.
+  const server = readFileSync(new URL("./setupServer.ts", import.meta.url), "utf8");
+  assert.match(server, /CHECK_VIA/);
 });

@@ -53,7 +53,13 @@ export function renewalFromInvoice(inv: RenewalInvoiceLike): Renewal | null {
  * cycle invoice means at least two have been paid (the first + this one), so
  * a short or failed listing floors there rather than announcing "1 month" on
  * a renewal.
+ *
+ * `trialed`: the subscription began with a trial (a card bought during a gift —
+ * checkout's trial_end). Its first invoice is a $0 trial invoice that Stripe
+ * marks paid, and its first REAL charge is a subscription_cycle invoice — so
+ * the trial invoice is not a month, and a cycle invoice means at least one.
  */
-export function tenureMonths(paidInvoiceCount: number): number {
-  return Math.max(2, Math.floor(paidInvoiceCount) || 0);
+export function tenureMonths(paidInvoiceCount: number, trialed = false): number {
+  const n = Math.floor(paidInvoiceCount) || 0;
+  return trialed ? Math.max(1, n - 1) : Math.max(2, n);
 }

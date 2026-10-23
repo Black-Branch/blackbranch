@@ -32,6 +32,9 @@ export type HomePayload = {
    *  read failed: no logo is shown on a guess. */
   platforms: string[];
   generatedAt: string;
+  /** The Leaderboard's settings (leaderboard.off / leaderboard.hidden), read at every answer,
+   *  not cached with the body: a change shows on the next load. Absent = on, every board. */
+  leaderboard?: { on: boolean; hidden: string[] };
 };
 
 export type HomeLoaders = {

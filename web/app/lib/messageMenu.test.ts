@@ -412,7 +412,7 @@ test("a vote leaves the menu open; a one-shot action closes it", () => {
   // this button on close and a display:none target silently refuses focus —
   // contextMenuKeyboard.test.ts owns that half; the pointer flow still
   // dismisses, which is what this test pins.
-  for (const re of [/onReply\(msg\); closeBar\(\)/, /copyText\(msg\.message\); closeBar\(\)/,
+  for (const re of [/canReplyTo\(msg\); closeBar\(\)/, /copyText\(msg\.message\); closeBar\(\)/,
                     /setCtxMenu\(\{ x: r\.left[\s\S]{0,160}if \(e\.detail === 0\) setBarOpen\(true\); else closeBar\(\)/])
     assert.match(chat, re, `a one-shot action no longer dismisses the menu: ${re}`);
   // Matrix: reactions are the repeatable ones there.

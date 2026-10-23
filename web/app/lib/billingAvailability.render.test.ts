@@ -23,7 +23,7 @@ g.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 
 delete process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY; // the first answer is the server's, not a build's
 
-type Answer = { publishableKey: string | null; paypalClientId: string | null; supporter?: { amount: number; currency: string } | null };
+type Answer = { publishableKey: string | null; paypalClientId: string | null; supporter?: { amount: number; currency: string } | null; subscribe?: { amount: number; currency: string } | null };
 const MONTH = { amount: 500, currency: "usd" };
 const COMBOS: Record<"stripe" | "paypal" | "both" | "neither", Answer> = {
   stripe: { publishableKey: "pk_test_casey", paypalClientId: null, supporter: MONTH },
@@ -264,6 +264,73 @@ test("restart: a Supporter price set after the page opened shows on the next rea
   await focus();
   assert.ok(text(m.host).includes("Become a Supporter"), "the price arrived: subscriptions are offered");
   assert.match(text(m.host), /\$5\/month/);
+  m.unmount();
+  served = COMBOS.neither;
+});
+
+// -- `subscribe`: a subscription is for sale through EITHER provider (k, 2026-10-21) --
+// What the player's Subscribe button reads (subscribeButton, features/support). Read by mounting the
+// hook itself: a PayPal-only answer carries no publishable key, and `subscribe` must not hide behind it.
+const { useBillingAvailability } = await import("./useStripe.ts");
+async function mountProbe() {
+  const host = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(host);
+  const root = createRoot(host);
+  function Probe() {
+    const b = useBillingAvailability();
+    return React.createElement("output", null, JSON.stringify({ subscribe: b.subscribe, supporter: b.supporter }));
+  }
+  act(() => root.render(React.createElement(Probe)));
+  const unmount = () => { if (!host.isConnected) return; act(() => root.unmount()); host.remove(); };
+  live.push(unmount);
+  await settle();
+  return { read: () => JSON.parse(text(host)) as { subscribe: unknown; supporter: unknown }, unmount };
+}
+const PAYPAL_PLAN_SITE: Answer = { ...COMBOS.paypal, subscribe: MONTH };
+
+test("a site that sells subscriptions through PayPal only: the hook's `subscribe` carries the plan's price with no card key; `supporter` (gifts) stays null", async () => {
+  served = PAYPAL_PLAN_SITE;
+  const m = await mountProbe();
+  assert.deepEqual(m.read(), { subscribe: MONTH, supporter: null });
+  m.unmount();
+  served = COMBOS.neither;
+});
+
+test("Stripe only and both: `subscribe` is the server's answer, as before (Stripe's price)", async () => {
+  for (const combo of ["stripe", "both"] as const) {
+    served = { ...COMBOS[combo], subscribe: MONTH };
+    const m = await mountProbe();
+    assert.deepEqual(m.read(), { subscribe: MONTH, supporter: MONTH }, combo);
+    m.unmount();
+  }
+  served = COMBOS.neither;
+});
+
+test("restart: a PayPal plan set after the page opened shows on the next read (window focus); cleared, it goes", async () => {
+  served = COMBOS.paypal;
+  const m = await mountProbe();
+  assert.equal(m.read().subscribe, null);
+  served = PAYPAL_PLAN_SITE;
+  await focus();
+  assert.deepEqual(m.read().subscribe, MONTH);
+  served = COMBOS.paypal;
+  await focus();
+  assert.equal(m.read().subscribe, null);
+  m.unmount();
+  served = COMBOS.neither;
+});
+
+test("retry: a failed read keeps the last `subscribe` answer, and the next good read replaces it", async () => {
+  served = PAYPAL_PLAN_SITE;
+  const m = await mountProbe();
+  const realFetch = globalThis.fetch;
+  (globalThis as unknown as { fetch: unknown }).fetch = async () => new Response("down", { status: 502 });
+  await focus();
+  (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+  assert.deepEqual(m.read().subscribe, MONTH, "a failed read does not hide the Subscribe button");
+  served = { ...PAYPAL_PLAN_SITE, subscribe: { amount: 600, currency: "usd" } };
+  await focus();
+  assert.deepEqual(m.read().subscribe, { amount: 600, currency: "usd" });
   m.unmount();
   served = COMBOS.neither;
 });

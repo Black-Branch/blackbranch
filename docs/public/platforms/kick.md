@@ -10,7 +10,7 @@ The addresses below are for a site at `example.com`; your setup page shows your 
 
 ## 1. Your Kick channel
 
-The channel name as it appears in your Kick address (kick.com/&lt;name&gt;). Chat is read with this alone; the app below makes it more reliable.
+The channel name as it appears in your Kick address (kick.com/&lt;name&gt;). Without the app below, the site still tries to read Kick chat and your live status, but Kick often blocks a site that has no app, so live status can show as unknown. Viewers cannot link their Kick account and moderators cannot act on Kick from the site until the app is set.
 
 Links:
 
@@ -18,11 +18,11 @@ Links:
 
 This step fills:
 
-- **Kick channel**. The Kick channel slug — the chat connection and live detection.
+- **Kick channel**. The Kick channel name, as in kick.com/&lt;name&gt;. Used for the chat connection and live detection.
 
 ## 2. Your Kick app (optional)
 
-Needed for viewers to link their Kick account and for moderation from the site. Turn on two-factor sign-in on the Kick account first. Then Kick → Settings → Developer → Create app: any name and the redirect URL below. Paste the client id and secret. The Test fetches an app token and finds the channel; it shows the channel's numeric id — paste it as the Kick user id.
+Makes live status reliable, lets viewers link their Kick account and lets moderators act on Kick from the site. Turn on two-factor sign-in on the Kick account first. Then Kick → Settings → Developer → Create app: any name and the redirect URL below. Paste the client id and secret. Check fetches an app token and finds the channel. The channel's numeric id is found and saved for you.
 
 Links:
 
@@ -38,6 +38,16 @@ This step fills:
 
 - **Kick app client id** (kept encrypted). Kick account linking and the chat reader.
 - **Kick app client secret** (kept encrypted). Pairs with the Kick app client id.
-- **Kick user id**. The channel's numeric Kick id. Kick moderation refuses without it.
 
 Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.
+
+## 3. Kick's chatroom and channel ids (only if needed) (optional)
+
+Leave these empty. Only if the Doctor says the Kick reader cannot find your chatroom (Kick's bot protection can block the lookup): open kick.com/api/v2/channels/&lt;your name&gt; in your own browser, and copy the number after "chatroom":{"id": as the chatroom id and the first "id" as the channel id.
+
+This step fills:
+
+- **Kick chatroom id**. Only when the reader cannot look it up itself (Kick's bot protection). Open kick.com/api/v2/channels/YOUR-CHANNEL in a browser: this is the number under chatroom.id. Unset = looked up automatically.
+- **Kick channel id**. Pairs with the Kick chatroom id. On the same page (kick.com/api/v2/channels/YOUR-CHANNEL), this is the first "id" number. Unset = looked up automatically.
+
+You can skip this step and come back to it from the Admin Panel.

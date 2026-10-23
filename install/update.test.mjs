@@ -463,7 +463,10 @@ async function box({ from = "1.1.0", envExtra = "", tls = null } = {}) {
       encoding: "utf8", timeout: 120_000,
       env: { ...process.env, BB_HOME: home, FAKE: fake, PATH: `${path.join(fake, "bin")}:/usr/bin:/bin`, BB_UPDATE_NODE: process.execPath,
         BB_BIN_DIR: path.join(home, "bin"), BB_SYSTEMD_DIR: path.join(home, "systemd"), BB_BACKUP_TARGET_FILE: path.join(fake, "target.env"),
-        BB_LIVE_POLL: "1", ...extraEnv },
+        // The disk check reads the HOST's real free space (df on BB_HOME: the fake docker names no
+        // root): left at its 5 GB default, every update here failed on a runner with 3 GB free
+        // (2026-10-22). 0 = no floor; the refusal itself is tested with an explicit 9999.
+        BB_LIVE_POLL: "1", BB_UPDATE_MIN_FREE_GB: "0", ...extraEnv },
     }, (err, stdout, stderr) => resolve({ status: err ? (typeof err.code === "number" ? err.code : 1) : 0, stdout, stderr }));
   });
   // The same run as a child the test can signal (a unit stopped mid-update, a reboot).
@@ -471,7 +474,10 @@ async function box({ from = "1.1.0", envExtra = "", tls = null } = {}) {
     const child = spawn("bash", [path.join(here, "blackbranch"), ...args], {
       env: { ...process.env, BB_HOME: home, FAKE: fake, PATH: `${path.join(fake, "bin")}:/usr/bin:/bin`, BB_UPDATE_NODE: process.execPath,
         BB_BIN_DIR: path.join(home, "bin"), BB_SYSTEMD_DIR: path.join(home, "systemd"), BB_BACKUP_TARGET_FILE: path.join(fake, "target.env"),
-        BB_LIVE_POLL: "1", ...extraEnv },
+        // The disk check reads the HOST's real free space (df on BB_HOME: the fake docker names no
+        // root): left at its 5 GB default, every update here failed on a runner with 3 GB free
+        // (2026-10-22). 0 = no floor; the refusal itself is tested with an explicit 9999.
+        BB_LIVE_POLL: "1", BB_UPDATE_MIN_FREE_GB: "0", ...extraEnv },
     });
     let stdout = "", stderr = "";
     child.stdout.on("data", (d) => { stdout += d; }); child.stderr.on("data", (d) => { stderr += d; });
@@ -521,13 +527,13 @@ test("an update, in order: fetched and checked, .env migrated on a copy, built, 
     writeFileSync(path.join(b.home, "releases/1.0.0/MANIFEST.json"), JSON.stringify({ images: { caddy: `caddy:2.9.0-alpine@${D("e")}` } }));
     // 1.2.0 renames a key with a migration (and its .env.example says so).
     const example = read(".env.example").replace(/^LEGAL_OPERATOR=/m, "LEGAL_OPERATOR_NAME=");
-    b.publish("1.2.0", { envExample: example, migrations: { "003-legal-operator-name.sh": '#!/usr/bin/env bash\n. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"\nenvm_rename LEGAL_OPERATOR LEGAL_OPERATOR_NAME\n' } });
+    b.publish("1.2.0", { envExample: example, migrations: { "005-legal-operator-name.sh": '#!/usr/bin/env bash\n. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"\nenvm_rename LEGAL_OPERATOR LEGAL_OPERATOR_NAME\n' } });
     const before = b.env();
     const r = await b.run(["update", "--apply", "1.2.0"]);
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
     assert.equal(b.release(), "releases/1.2.0");
     const env = b.env();
-    assert.match(env, /^BB_RELEASE="?1\.2\.0"?$/m); assert.match(env, /^BB_ENV_VERSION="?3"?$/m);
+    assert.match(env, /^BB_RELEASE="?1\.2\.0"?$/m); assert.match(env, /^BB_ENV_VERSION="?5"?$/m);
     assert.match(env, /^LEGAL_OPERATOR_NAME=/m); assert.doesNotMatch(env, /^LEGAL_OPERATOR=/m);
     assert.equal(env.match(/^BB_RELEASE_KEY=.*$/m)[0], before.match(/^BB_RELEASE_KEY=.*$/m)[0], "the key is never changed by an update");
     assert.equal(readFileSync(path.join(b.home, "releases/1.2.0/RELEASE"), "utf8"), "1.2.0\n");
@@ -569,7 +575,7 @@ test("a release that fails its health check: the box goes back to the previous r
   const b = await box();
   try {
     const example = read(".env.example").replace(/^LEGAL_OPERATOR=/m, "LEGAL_OPERATOR_NAME=");
-    b.publish("1.2.0", { envExample: example, migrations: { "003-x.sh": '#!/usr/bin/env bash\n. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"\nenvm_rename LEGAL_OPERATOR LEGAL_OPERATOR_NAME\n' } });
+    b.publish("1.2.0", { envExample: example, migrations: { "005-x.sh": '#!/usr/bin/env bash\n. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"\nenvm_rename LEGAL_OPERATOR LEGAL_OPERATOR_NAME\n' } });
     writeFileSync(path.join(b.fake, "health-1.2.0"), "1");
     const before = b.env();
     const r = await b.run(["update", "--apply", "1.2.0"]);
@@ -1424,6 +1430,50 @@ async function stopMidStep(b, run) {
   try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch { /* already gone */ }
   return r;
 }
+
+// Alerts (round 11, ops item 3): an update that went back, could not go back cleanly, or stopped
+// before it finished reaches the operator's channel (here an email command); one that passes does not.
+async function alertBox() {
+  const b = await box();
+  const mail = path.join(b.home, "mail.txt");
+  writeFileSync(path.join(b.home, ".env"), b.env().replace(/^BB_ALERT_EMAIL_COMMAND=.*$/m, `BB_ALERT_EMAIL_COMMAND='cat >> ${mail}'`), { mode: 0o600 });
+  b.publish("1.2.0");
+  return { ...b, mail: () => b.file("mail.txt") };
+}
+test("alerts: an update rolled back, one whose going back failed and one stopped before it finished each reach the channel; one that passes sends nothing", async () => {
+  let b = await alertBox();
+  try {
+    writeFileSync(path.join(b.fake, "health-1.2.0"), "1");
+    const r = await b.run(["update", "--apply", "1.2.0"]);
+    assert.notEqual(r.status, 0);
+    assert.equal(b.json("results/update-last.json").result, "rolled-back");
+    assert.match(b.mail(), /^Subject: \[Black Branch\] example\.test: the update to 1\.2\.0 was rolled back\n/);
+    assert.match(b.mail(), /The update to 1\.2\.0 failed its health check\. The server went back to 1\.1\.0, with its data from just before the update, and the site runs\./);
+    assert.equal((b.mail().match(/^Subject:/gm) ?? []).length, 1, "sent once");
+  } finally { b.close(); }
+  b = await alertBox();
+  try {
+    writeFileSync(path.join(b.fake, "health-1.2.0"), "1"); writeFileSync(path.join(b.fake, "restore-1.1.0"), "1");
+    await b.run(["update", "--apply", "1.2.0"]);
+    assert.equal(b.json("results/update-last.json").result, "rollback-failed");
+    assert.match(b.mail(), /^Subject: \[Black Branch\] example\.test: the update to 1\.2\.0 failed and going back did not finish\n/);
+    assert.match(b.mail(), /run: sudo blackbranch status, then sudo blackbranch update --reconcile/);
+  } finally { b.close(); }
+  b = await alertBox();
+  try {
+    writeFileSync(path.join(b.fake, "backup-hang"), "");
+    await stopMidStep(b, b.spawnRun(["update", "--apply", "1.2.0"]));
+    assert.equal(b.json("results/update-last.json").result, "interrupted");
+    assert.match(b.mail(), /^Subject: \[Black Branch\] example\.test: the update to 1\.2\.0 stopped before it finished\n/);
+  } finally { b.close(); }
+  b = await alertBox();
+  try {
+    const r = await b.run(["update", "--apply", "1.2.0"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(b.json("results/update-last.json").result, "updated");
+    assert.equal(b.mail(), "", "an update that passed sent an alert");
+  } finally { b.close(); }
+});
 
 test("an update stopped while the site is down for its backup starts the site again, and says so", async () => {
   const b = await box();

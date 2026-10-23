@@ -47,7 +47,7 @@ export const OVERLAY_SOURCES: OverlaySource[] = [
   {
     id: "chat",
     name: "Chat",
-    shows: "Live chat, newest at the bottom, transparent behind — always follows the feed.",
+    shows: "Live chat, newest at the bottom, transparent behind. It always follows the feed.",
     served: "site",
     path: "/overlay/chat?scale=1.5",
     size: "Any — ?scale= multiplies the text (0.5–4, default 1.5).",
@@ -57,7 +57,7 @@ export const OVERLAY_SOURCES: OverlaySource[] = [
   {
     id: "credit",
     name: "Credit line",
-    shows: "“This stream is made possible by” — the rotating sponsor credit, styled like chat names.",
+    shows: "“This stream is made possible by”: the rotating sponsor credit, styled like chat names.",
     served: "site",
     path: "/overlay/credit",
     size: "800×600 (the design space scales with the source width; widen it for a long name).",
@@ -81,12 +81,13 @@ export const OVERLAY_SOURCES: OverlaySource[] = [
     size: "Full canvas: 1920×1080.",
     status: "live",
   },
-  // The four generic money overlays — served by stream-api like the
-  // poll and the sticker, driven by the same socket frames.
+  // The generic money overlays, served by stream-api like the poll and the sticker, driven by the
+  // same socket frames. The meter's page is the owner's module (a finance table outside the
+  // product), so it never moves on a standard install and is not listed.
   {
     id: "alert",
     name: "Alerts",
-    shows: "Each tip, subscription, gift and follow as a pop-up alert on stream.",
+    shows: "Each tip, subscription and gift as a pop-up alert on stream.",
     served: "stream-api",
     path: "/overlay/alert",
     size: "Full canvas: 1920×1080.",
@@ -95,18 +96,9 @@ export const OVERLAY_SOURCES: OverlaySource[] = [
   {
     id: "support-bar",
     name: "Support bar",
-    shows: "The stream's support bar and timer, filling as support comes in.",
+    shows: "The stream's support bar, filling as support comes in.",
     served: "stream-api",
     path: "/overlay/support-bar",
-    size: "Full canvas: 1920×1080.",
-    status: "live",
-  },
-  {
-    id: "meter",
-    name: "Meter",
-    shows: "The support meter rising with each contribution.",
-    served: "stream-api",
-    path: "/overlay/meter",
     size: "Full canvas: 1920×1080.",
     status: "live",
   },

@@ -62,13 +62,28 @@ case "$*" in
   "inspect -f {{.RestartCount}}"*) id="\${@: -1}"; f="$FAKE/restarts-\${id#id-}"
     if [ -f "$f" ]; then n=$(cat "$f"); echo "$n"; echo $(( n + 1 )) > "$f"; else echo 0; fi ;;
   "logs "*) id="\${@: -1}"; cat "$FAKE/logs-\${id#id-}" 2>/dev/null ;;
+  # When a container last started: fake/started-<service>, else long ago.
+  "inspect -f {{.State.StartedAt}}"*) id="\${@: -1}"; cat "$FAKE/started-\${id#id-}" 2>/dev/null || echo 2026-01-01T00:00:00Z ;;
   "compose ps -a -q "*) echo "id-\${@: -1}" ;;
-  "compose exec -T mas mas-cli manage issue-compatibility-token"*) cat "$FAKE/mas-token" 2>/dev/null; exit 0 ;;
+  # A sign-in for one account: fake/mas-token-<account> when there is one, else fake/mas-token.
+  "compose exec -T mas mas-cli manage issue-compatibility-token"*) cat "$FAKE/mas-token-$8" 2>/dev/null || cat "$FAKE/mas-token" 2>/dev/null; exit 0 ;;
+  # The homeserver asked from inside its container (the token on stdin, never here): whoami fails
+  # when fake/reader-invalid exists (a token MAS no longer knows); a join is logged and works.
+  "compose exec -T synapse curl"*"/account/whoami"*) cat >/dev/null; [ -f "$FAKE/reader-invalid" ] && exit 22; exit 0 ;;
+  "compose exec -T synapse curl"*"/join/"*) cat >> "$FAKE/join-stdin"; exit "\${FAKE_JOIN_STATUS:-0}" ;;
   "compose exec -T postgres psql"*)
     sql=$(cat)
     case "$sql" in *jsonb_each_text*) cat "$FAKE/install.tsv" 2>/dev/null; exit 0 ;; esac
     # The sign-in service's account count (the bootstrap's "does this account exist"): fake/mas-users.
-    case "$sql" in *"FROM users WHERE username"*) cat "$FAKE/mas-users" 2>/dev/null; exit 0 ;; esac
+    # Synapse has the account MAS made (the reader's first sign-in waits for it).
+    case "$sql" in *"FROM users WHERE name ="*) echo 1; exit 0 ;; esac
+    case "$sql" in *"FROM users WHERE username"*)
+      for a in "$@"; do case "$a" in u=*) u="\${a#u=}" ;; esac; done
+      cat "$FAKE/mas-users-$u" 2>/dev/null || cat "$FAKE/mas-users" 2>/dev/null; exit 0 ;; esac
+    # Synapse's own tables (the community rooms' check): fake/rooms-state, "complete" or "missing".
+    case "$sql" in *"FROM room_aliases"*) cat "$FAKE/rooms-state" 2>/dev/null; exit 0 ;; esac
+    # The restart-only settings' last writes (status): fake/changed, "<key> <epoch seconds>" lines.
+    case "$sql" in *"restart-pending"*) cat "$FAKE/changed" 2>/dev/null; exit 0 ;; esac
     for a in "$@"; do case "$a" in k=*) key="\${a#k=}" ;; esac; done
     cat "$FAKE/cfg/$key" 2>/dev/null; exit 0 ;;
   "compose run "*)

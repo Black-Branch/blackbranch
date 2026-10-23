@@ -5,7 +5,7 @@ import { installValue } from "@/app/lib/installValues";
 import { modulesShown } from "@/app/lib/moduleRunningServer";
 import { stripeConfigured } from "@/app/lib/stripe";
 import { paypalConfigured } from "@/app/lib/paypalClient";
-import { TIERS } from "@/app/lib/tiers";
+import { subscriptionsSetUp } from "@/app/lib/supporterPrice";
 import { chatPlatformsSetUp } from "@/app/lib/streamPlatformsServer";
 import { youtubeUse } from "@/app/legal/legalFactsServer";
 import { AboutFeatures, YoutubeUses } from "./AboutFeatures";
@@ -69,7 +69,7 @@ export default async function AboutPage() {
           facts={{
             shown,
             stripe: stripeConfigured(),
-            subscriptions: stripeConfigured() && !!TIERS.supporter.priceId,
+            subscriptions: subscriptionsSetUp(),
             paypal: paypalConfigured(),
             platforms: chatPlatformsSetUp(),
           }}

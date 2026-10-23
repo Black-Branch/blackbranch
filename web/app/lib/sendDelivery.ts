@@ -67,16 +67,22 @@ const TWITCH_DROP: Record<string, string> = {
   automod_held: "held by AutoMod",
 };
 
-// Kick gives no code, only a sentence. Recognised by what the sentence is about.
-const KICK_PATTERNS: [RegExp, string][] = [
+// A platform's words that name a state the site ACTS on: the channel's mode or the
+// sender's standing there, which will refuse the next message too. Mapped to the one
+// phrase the once-per-session note is written for. Every other sentence reaches the
+// sender as the platform wrote it.
+const STANDING_PATTERNS: [RegExp, string][] = [
   [/follow/i, FOLLOWERS_ONLY],
   [/subscri/i, SUBSCRIBERS_ONLY],
-  [/emote/i, "emote-only"],
-  [/slow/i, "slow mode"],
-  [/duplicate|same message/i, "duplicate message"],
-  [/timed? ?out/i, TIMED_OUT_THERE],
   [/bann/i, BANNED_THERE],
 ];
+
+// An HTTP reason phrase is the status in words, not the platform saying anything
+// about the message ("Forbidden" is Kick's bare 403, contract 10).
+const STATUS_PHRASES: ReadonlySet<string> = new Set([
+  "bad request", "unauthorized", "forbidden", "not found", "method not allowed", "conflict", "gone",
+  "payload too large", "unprocessable entity", "unprocessable content", "too many requests", "request timeout",
+]);
 
 const MAX_REASON = 80;
 
@@ -101,29 +107,49 @@ export function twitchSendOutcome(body: unknown): SendOutcome {
   return { sent: true, ...(row?.message_id ? { id: row.message_id } : {}) };
 }
 
-/** A Kick sentence → a known phrase, else the sentence itself. */
-function kickReason(message: unknown): string | undefined {
-  if (typeof message !== "string") return undefined;
-  for (const [re, phrase] of KICK_PATTERNS) if (re.test(message)) return phrase;
-  return tidy(message);
+/** The platform's own words in an answer body, made safe to show, or null when it
+ *  carries none: `message` (Kick, Twitch), a string `data` (Kick's
+ *  `{"data":"MAX_SPECIAL_CHARS_ERROR"}`), a string `error`, or `error.message`
+ *  (Google). A bare HTTP reason phrase is not words about the message. */
+function platformSentence(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const b = body as { message?: unknown; data?: unknown; error?: unknown };
+  const nested = b.error && typeof b.error === "object" ? (b.error as { message?: unknown }).message : undefined;
+  for (const candidate of [b.message, b.data, nested, b.error]) {
+    const t = tidy(candidate);
+    if (t && !STATUS_PHRASES.has(t.toLowerCase())) return t;
+  }
+  return null;
+}
+
+/** The reason a refusal carries: a standing phrase when the words name one, else the words. */
+function refusalReason(sentence: string): string {
+  for (const [re, phrase] of STANDING_PATTERNS) if (re.test(sentence)) return phrase;
+  return sentence;
+}
+
+/**
+ * THE class rule for a platform's non-2xx answer: a 4xx that carries the platform's
+ * own words is the platform refusing this message, and the sender is shown those
+ * words. Everything else is not a refusal: a 5xx is infrastructure, 401 is the
+ * viewer's link and 404 the channel being offline (each sender's own line), and a
+ * 4xx with no words falls back to the sender's generic line.
+ */
+export function refusalByClass(status: number, body: unknown): { refused: true; reason: string } | null {
+  if (status < 400 || status >= 500 || status === 401 || status === 404) return null;
+  const sentence = platformSentence(body);
+  return sentence ? { refused: true, reason: refusalReason(sentence) } : null;
 }
 
 /** Kick's 2xx answer: `{ data: { is_sent, message_id } }`; `is_sent: false` is a refusal. */
 export function kickSendOutcome(body: unknown): SendOutcome {
   const b = body as { message?: string; data?: { message_id?: string | number; is_sent?: boolean } } | null;
-  if (b?.data?.is_sent === false) return { sent: false, reason: kickReason(b.message) };
+  if (b?.data?.is_sent === false) {
+    const sentence = tidy(b.message);
+    return { sent: false, reason: sentence ? refusalReason(sentence) : undefined };
+  }
   const id = b?.data?.message_id;
   return { sent: true, ...(id != null && id !== "" ? { id: String(id) } : {}) };
-}
-
-/** A Kick answer whose sentence names a KNOWN refusal ("slow mode", "followers"…), or null.
- *  Checked before the status is judged: a 429 carrying "slow mode" is the channel's mode, not
- *  Kick failing. */
-export function kickKnownRefusal(body: unknown): string | null {
-  const message = (body as { message?: unknown } | null)?.message;
-  if (typeof message !== "string") return null;
-  for (const [re, phrase] of KICK_PATTERNS) if (re.test(message)) return phrase;
-  return null;
 }
 
 /**
@@ -149,15 +175,6 @@ export function bodyShape(body: unknown, depth = 0): string {
   return `{${Object.keys(body as Record<string, unknown>).slice(0, 12).map((k) => `${k}:${bodyShape((body as Record<string, unknown>)[k], depth + 1)}`).join(",")}}`;
 }
 
-/** Kick's non-2xx answer. A 4xx carrying a sentence is the channel refusing the
- *  message (followers-only, banned…); anything else is a failure to reach it. */
-export function kickErrorOutcome(status: number, body: unknown): { refused: true; reason?: string } | { refused: false } {
-  if (status < 400 || status >= 500 || status === 401 || status === 404) return { refused: false };
-  const message = (body as { message?: unknown } | null)?.message;
-  if (typeof message !== "string" || !message.trim()) return { refused: false };
-  return { refused: true, reason: kickReason(message) };
-}
-
 // ── Infrastructure: failures the viewer cannot act on ───────────────────────
 // The platform's API quota, a rate limit, an upstream 5xx, a timeout, our own
 // token/DB throw. The route reports them as error `unavailable` with one of these
@@ -180,10 +197,12 @@ export function httpUnavailable(platform: string, status: number): Unavailable |
 }
 
 /** YouTube's non-2xx answer (`{ error: { errors: [{ domain, reason }] } }`) to a Data API call. */
-export function youtubeErrorOutcome(status: number, body: string): Unavailable | { error: "missing_scope" | "send_failed" } {
+export function youtubeErrorOutcome(status: number, body: string): Unavailable | { error: "missing_scope" | "send_failed" } | { error: "refused"; reason: string } {
   let errs: { domain?: unknown; reason?: unknown }[] = [];
+  let parsed: unknown = null;
   try {
-    const list = (JSON.parse(body) as { error?: { errors?: unknown } } | null)?.error?.errors;
+    parsed = JSON.parse(body);
+    const list = (parsed as { error?: { errors?: unknown } } | null)?.error?.errors;
     if (Array.isArray(list)) errs = list.filter((e): e is { domain?: unknown; reason?: unknown } => !!e && typeof e === "object");
   } catch { /* not JSON — judged by the status alone */ }
   if (errs.some((e) => e.domain === "youtube.quota" || YT_QUOTA_REASONS.has(String(e.reason)))) {
@@ -193,6 +212,9 @@ export function youtubeErrorOutcome(status: number, body: string): Unavailable |
   if (rate) return { error: UNAVAILABLE, reason: "rate_limited", code: `youtube.${String(rate.reason)}` };
   // The viewer unchecked "Manage your YouTube account" on Google's consent screen: re-linking fixes it.
   if (status === 403 && /insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT/.test(body)) return { error: "missing_scope" };
+  // Google's 429 is always its own rate limit, whatever its words say.
+  const refusal = status === 429 ? null : refusalByClass(status, parsed);
+  if (refusal) return { error: "refused", reason: refusal.reason };
   return httpUnavailable("youtube", status) ?? { error: "send_failed" };
 }
 
@@ -238,9 +260,9 @@ export function failureOf(platform: string, r: { error: string; reason?: string 
  *                  | channel suspended, needs a verified email / phone        | platform skipped until re-picked
  *   transient      | refused: duplicate, unique-chat, emote-only, slow mode,  | a note at most once per platform
  *                  | timed out there (a moderator's timeout), AutoMod,        | per window; the ⊘ on the line
- *                  | blocked term, an unknown sentence; not_live,             |
- *                  | missing_scope, not_linked, crosspost_locked,             |
- *                  | command_native_only, send_failed (an unclassified 4xx)   |
+ *                  | blocked term, any other 4xx in the platform's words;     |
+ *                  | not_live, missing_scope, not_linked, crosspost_locked,   |
+ *                  | command_native_only, send_failed (a 4xx with no words)   |
  *   infrastructure | unavailable: quota, rate_limited, upstream (5xx,         | nothing when the line went to
  *                  | network), timeout (our abort), internal (our token/DB    | All; ONE "Couldn't reach X chat
  *                  | throw, the channel not configured)                       | right now." per platform per

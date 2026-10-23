@@ -191,7 +191,9 @@ async function resolveViaBrowser(slug) {
 // app keys open) has NO chatroom or channel id in its channel answer — only the slug and the
 // broadcaster's user id (docs.kick.com, checked 2026-10-21) — so app keys cannot stand in for this
 // lookup; the settings can.
-export const KICK_IDS_HELP = 'Kick refused the chatroom lookup (its bot protection) — set "Kick chatroom id" and "Kick channel id" in the Admin Panel settings (open kick.com/api/v2/channels/YOUR-CHANNEL in a browser: chatroom.id and id)';
+// One line the Doctor shows whole: the host cuts a reader's reason at 160 characters, and the
+// no-browser variant adds 24 (install/doctor.test.mjs holds both).
+export const KICK_IDS_HELP = 'Kick refused the lookup. Open kick.com/api/v2/channels/YOUR-CHANNEL and set "Kick chatroom id" to chatroom.id, "Kick channel id" to id';
 
 /**
  * The chatroom + channel id of a Kick channel. Tried in order: the settings (kick.chatroomId +

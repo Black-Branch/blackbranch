@@ -2,7 +2,9 @@
 # blackbranch — the host command for a Black Branch install. It works when the site is
 # down, which is why it is not a page.
 #
-#   blackbranch status                 what runs, its health, the release, the site's image
+#   blackbranch status                 what runs, its health, the release, the site's image, and any
+#                                      setting changed in the Admin Panel that waits for a restart
+#   blackbranch help                   this text, then every setting that applies only at a restart
 #   blackbranch logs <service> [-f]    recent logs of one service
 #   blackbranch restart <service>      restart one service
 #   blackbranch render                 regenerate the router, Synapse and MAS config from .env
@@ -10,8 +12,11 @@
 #   blackbranch set <KEY> <value>      change one display value; the site restarts with it
 #   blackbranch migrate                apply database migrations now (also runs on every start)
 #   blackbranch up                     bring the whole bundle to its configured state
-#   blackbranch matrix bootstrap [--as <name>]   create the community space and #general as the
-#                                      streamer's account, record their ids (safe to repeat)
+#   blackbranch matrix bootstrap [--as <name>] [--recreate]   create the community space, #general
+#                                      and #forum as the streamer's account, record their ids (safe
+#                                      to repeat); --recreate: replace a recorded room that is gone
+#   blackbranch matrix ensure          check the community rooms are in place and make what is
+#                                      missing (every start and every boot run it)
 #   blackbranch federation [on|off]    show or switch federation (re-renders, restarts Synapse)
 #   blackbranch setup-link [--new]     print the setup link again while no admin exists (--new:
 #                                      a fresh token; the old link stops working)
@@ -42,6 +47,10 @@
 #                                      start the stopped site, or go back to the previous release
 #   blackbranch health                 the update's health check, on demand: every doctor check an
 #                                      update can affect, a WebSocket frame, a sign-in round trip
+#   blackbranch alerts check|test      check: the daily check (low disk, certificates, a backup gone
+#                                      quiet) that alerts on a problem; test: send a test alert. The
+#                                      channel is BB_ALERT_NTFY_URL and/or BB_ALERT_EMAIL_COMMAND in
+#                                      .env; with neither, alerts are logged only
 #   blackbranch install-files          put the release's host files in place (the installer's step)
 #   blackbranch user                   not in this release yet
 #
@@ -57,6 +66,8 @@ BB_HOME="${BB_HOME:-/opt/blackbranch}"
 ENV_FILE="${BB_DOTENV:-$BB_HOME/.env}"
 STATE="$BB_HOME/state"
 LONG_RUNNING=(postgres stream-api stream-ingest web caddy synapse mas)
+# What `up` was started after: "after-restore" lets its rooms check replace a recorded room that is gone.
+UP_AFTER=""
 # The display values `set` may change: the site's install values (compose.yaml x-install-values)
 # that are not part of the install's identity. Origins, the server name and the sign-in client are
 # permanent. install/bundle.test.mjs checks this list against the schema and compose.yaml.
@@ -81,6 +92,9 @@ MAS_UID=65532
 # installed release on a box.
 MATRIX_LIB="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/matrix/render.sh"
 [ -f "$MATRIX_LIB" ] || MATRIX_LIB="$BB_HOME/release/install/matrix/render.sh"
+# The settings that apply only at a restart (generated from the schema; `help` and `status` read it).
+RESTART_SETTINGS="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/restart-settings.tsv"
+[ -f "$RESTART_SETTINGS" ] || RESTART_SETTINGS="$BB_HOME/release/install/restart-settings.tsv"
 # shellcheck source-path=SCRIPTDIR source=matrix/render.sh
 . "$MATRIX_LIB"
 
@@ -560,6 +574,8 @@ cmd_up() {
   wait_healthy 240 synapse || die "synapse did not become healthy — blackbranch logs synapse"
   wait_mas 120 || die "MAS did not answer its health check — blackbranch logs mas"
   info "synapse healthy; MAS answers"
+  # The Forums tab's reader, before the site starts (it reads the sign-in from its environment).
+  reader_ensure || true
   say "Starting stream-api and stream-ingest"
   docker_step "stream-api or stream-ingest failed to start (blackbranch logs stream-api)" compose up -d stream-api stream-ingest
   wait_healthy 180 stream-api || die "stream-api did not become healthy"
@@ -572,6 +588,9 @@ cmd_up() {
   wait_healthy 240 $(expected_services) || die "not every service became healthy ($HEALTH_PROBLEM) — blackbranch status"
   export_lab_ca
   info "all services healthy"
+  # The community rooms, at every start (a restore's start may replace one that is gone). Never
+  # fails the start: the site is up; a missing room is said, with the command that makes it.
+  matrix_ensure "$UP_AFTER" || true
 }
 
 cmd_migrate() {
@@ -599,6 +618,7 @@ cmd_status() {
     else printf '  setup        not started — blackbranch setup-link\n'; fi
   fi
   printf '  backups      %s\n' "$(backup_status_line)"
+  restart_status_lines
   printf '  update check %s\n' "$(update_check_line)"
   printf '  last update  %s\n\n' "$(update_last_line)"
   printf '  %-15s %s\n' SERVICE STATE
@@ -616,6 +636,70 @@ cmd_status() {
       "$(docker logs --tail 1 "$mid" 2>&1 | sed 's/^\[migrate\] //')"
   fi
   return "$rc"
+}
+
+# ── settings that apply only at a restart (install/restart-settings.tsv, generated from the schema) ──
+# `help` prints the whole list; `status` names the Admin Panel ones changed after the service that
+# reads them last started — each is a change the site does not show yet until that restart.
+restart_settings_text() { # the same text as `node install/restart-settings.mjs` (restart-settings.test.mjs)
+  [ -f "$RESTART_SETTINGS" ] || return 0
+  awk -F'\t' '
+    /^#/ { next }
+    { n++; g[n] = $2; nm[n] = ($2 == "panel") ? $1 : $3; s = $4; gsub(/,/, ", ", s); sv[n] = s; lb[n] = $5 }
+    function group(want, head,   i) {
+      print head
+      for (i = 1; i <= n; i++) if (g[i] == want) printf "    %-30s %-26s %s\n", nm[i], sv[i], lb[i]
+    }
+    END {
+      printf "Settings that apply only when their service restarts (%d):\n", n
+      group("panel", "  Changed in the Admin Panel: afterwards run sudo blackbranch restart <service> for each service named.")
+      group("set", "  Display values in .env: sudo blackbranch set <KEY> <value> restarts what reads them.")
+      group("permanent", "  The install'"'"'s identity in .env: permanent, never change these.")
+    }' "$RESTART_SETTINGS"
+}
+service_started() { # service_started <service> → when its container last started (epoch seconds), or nothing
+  local id t
+  id=$(compose ps -a -q "$1" 2>/dev/null | head -1); [ -n "$id" ] || return 0
+  t=$(docker inspect -f '{{.State.StartedAt}}' "$id" 2>/dev/null || true)
+  if [ -n "$t" ]; then date -d "$t" +%s 2>/dev/null || true; fi
+}
+# "<service> <key>" for each Admin Panel restart-only setting written after that service started.
+restart_pending() {
+  [ -f "$RESTART_SETTINGS" ] || return 0
+  postgres_up || return 0
+  local keys rows key at svc
+  local -A started=()
+  keys=$(awk -F'\t' '!/^#/ && $2 == "panel" { printf "%s%s", sep, $1; sep = " " }' "$RESTART_SETTINGS")
+  [ -n "$keys" ] || return 0
+  # -- restart-pending: the stand-in docker (scratch-home.mjs) answers this query by that word.
+  rows=$(printf '%s\n' "-- restart-pending" \
+    "SELECT key, extract(epoch FROM updated_at)::bigint FROM site.instance_config WHERE key = ANY (string_to_array(:'keys', ' '))
+     UNION ALL SELECT key, extract(epoch FROM updated_at)::bigint FROM site.instance_secrets WHERE key = ANY (string_to_array(:'keys', ' '));" \
+    | compose exec -T postgres psql -U postgres -d stream -qAt -F ' ' -v ON_ERROR_STOP=1 -v keys="$keys" 2>/dev/null) || return 0
+  while read -r key at; do
+    if ! [[ "$at" =~ ^[0-9]+$ ]] || ! [[ "$key" =~ ^[A-Za-z0-9._]+$ ]]; then continue; fi
+    while read -r svc; do
+      [[ "$svc" =~ ^[a-z-]+$ ]] || continue
+      [ -n "${started[$svc]+x}" ] || started[$svc]=$(service_started "$svc")
+      if [ -n "${started[$svc]}" ] && [ "$at" -gt "${started[$svc]}" ]; then printf '%s %s\n' "$svc" "$key"; fi
+    done < <(awk -F'\t' -v k="$key" '$1 == k { n = split($4, s, ","); for (i = 1; i <= n; i++) print s[i] }' "$RESTART_SETTINGS")
+  done <<< "$rows"
+}
+restart_status_lines() {
+  local pending svc keys n
+  [ -f "$RESTART_SETTINGS" ] || return 0
+  n=$(grep -cv '^#' "$RESTART_SETTINGS" || true)
+  if ! postgres_up; then
+    printf '  restart      not checked: the database is not running (%s settings apply only at a restart: blackbranch help lists them)\n' "$n"; return 0
+  fi
+  pending=$(restart_pending | LC_ALL=C sort -u)
+  if [ -z "$pending" ]; then
+    printf '  restart      nothing waiting (%s settings apply only at a restart: blackbranch help lists them)\n' "$n"; return 0
+  fi
+  for svc in $(printf '%s\n' "$pending" | cut -d' ' -f1 | uniq); do
+    keys=$(printf '%s\n' "$pending" | awk -v s="$svc" '$1 == s { printf "%s%s", sep, $2; sep = ", " }')
+    printf '  restart      WAITING: %s changed after %s started, not applied yet. Run: sudo blackbranch restart %s\n' "$keys" "$svc" "$svc"
+  done
 }
 
 update_check_line() {
@@ -1049,7 +1133,8 @@ env_report_shape() { # `up` says so (an update refuses; a restart must not)
 BIN_DIR="${BB_BIN_DIR:-/usr/local/bin}"
 BUNDLE_HOME_FILES=(compose.yaml compose.public.yaml compose.lab.yaml)
 BUNDLE_UNITS=(blackbranch-requests.path blackbranch-requests.service blackbranch-backup.service blackbranch-verify.service
-  blackbranch-update.service blackbranch-update@.service blackbranch-reconcile.service)
+  blackbranch-update.service blackbranch-update@.service blackbranch-reconcile.service blackbranch-matrix.service
+  blackbranch-check.service blackbranch-check.timer)
 put_file() { # put_file <src> <dest> <mode> — replaced by a rename (a running copy keeps the old one); prints dest when changed
   if [ -f "$2" ] && cmp -s "$1" "$2"; then return 0; fi
   install -m "$3" "$1" "$2.new.$$" && mv -f "$2.new.$$" "$2" && printf '%s\n' "$2"
@@ -1067,9 +1152,13 @@ install_files() { # install_files <release dir> → the files that changed, one 
   done
   if [ -n "$units" ] && [ -z "${BB_SYSTEMD_DIR:-}" ]; then systemctl daemon-reload; fi
   # At boot: finish an update a power loss cut off (update_reconcile). Enabled, never started here.
-  if [ -z "${BB_SYSTEMD_DIR:-}" ] && ! systemctl is-enabled -q blackbranch-reconcile.service 2>/dev/null; then
-    systemctl enable -q blackbranch-reconcile.service || true
-  fi
+  # At boot, too: the community rooms are still in place (blackbranch matrix ensure --boot).
+  [ -z "${BB_SYSTEMD_DIR:-}" ] || return 0
+  for f in blackbranch-reconcile.service blackbranch-matrix.service; do
+    systemctl is-enabled -q "$f" 2>/dev/null || systemctl enable -q "$f" || true
+  done
+  # The daily check (low disk, certificates, a backup gone quiet): enabled and started.
+  systemctl is-enabled -q blackbranch-check.timer 2>/dev/null || systemctl enable -q --now blackbranch-check.timer || true
   return 0
 }
 cmd_install_files() { need_root install-files; need_install; install_files "$BB_HOME/release"; }
@@ -1093,7 +1182,7 @@ ensure_env_shape() {
 }
 
 # ── the homeserver's bootstrap ───────────────────────────────────────────────────────────────
-# Creates the community space and #general AS the streamer's own account (the creator's power level
+# Creates the community space, #general and #forum AS the streamer's own account (the creator's power level
 # is permanent, so the rooms must be theirs) and records
 # their ids in instance config; each step looks first, so a second run changes nothing. The account
 # is `streamer.matrixId`, which the setup pages' first step writes. Before that exists, `--as <name>`
@@ -1102,7 +1191,8 @@ cmd_matrix() {
   local sub="${1:-}"; shift || true
   case "$sub" in
     bootstrap) matrix_bootstrap "$@" ;;
-    *) die "usage: blackbranch matrix bootstrap [--as <name>]" ;;
+    ensure) cmd_matrix_ensure "$@" ;;
+    *) die "usage: blackbranch matrix bootstrap [--as <name>] [--recreate] | blackbranch matrix ensure [--boot|--after-restore]" ;;
   esac
 }
 room_id_ok() { [[ "$1" =~ ^![A-Za-z0-9._~=/+:-]+$ ]]; }
@@ -1110,7 +1200,12 @@ matrix_bootstrap() {
   need_root matrix; need_install
   local as="" domain owner localpart device token out hub general forum stored_hub stored_general space_name
   while [ $# -gt 0 ]; do
-    case "$1" in --as) as="${2:?--as needs an account name}"; shift 2 ;; *) die "unknown option $1" ;; esac
+    case "$1" in
+      --as) as="${2:?--as needs an account name}"; shift 2 ;;
+      # A recorded room that is gone is replaced — never silently: the operator asked, or a restore did.
+      --recreate) BB_RECREATE=1; shift ;;
+      *) die "unknown option $1" ;;
+    esac
   done
   domain=$(env_get BB_DOMAIN)
   wait_healthy 120 postgres synapse || die "the database and Synapse must be running (blackbranch up)"
@@ -1152,12 +1247,133 @@ matrix_bootstrap() {
   [ "$hub" = "$stored_hub" ] || { config_set matrix.rooms.hub "\"$hub\""; info "recorded matrix.rooms.hub"; }
   [ "$general" = "$stored_general" ] || { config_set matrix.rooms.general "\"$general\""; info "recorded matrix.rooms.general"; }
   info "community space $hub · #general $general · #forum $forum"
+  # The Forums tab reads #forum as the reader: it joins once the room exists (a join it already has changes nothing).
+  if reader_join_forum; then info "forum reader: in #forum"
+  else printf '   forum reader: could not join #forum; the Forums tab stays empty until it does. The next start tries again (sudo blackbranch up)\n' >&2; fi
   # The bot's account belongs with the bot module's setup page, a later release.
   if [ "$(config_get bot.enabled)" = true ]; then info "bot account: not in this release yet"; fi
   # Last, so the host request's answer ends with it: what exists and what this run made (W12 —
   # the setup page says it). Only the bootstrap's own JSON line, rebuilt from checked parts.
   printf '{"hub":"%s","general":"%s","forum":"%s","created":%s}\n' "$hub" "$general" "$forum" \
     "$(printf '%s' "$out" | grep -oE '"created":\[[^]]*\]' | head -1 | cut -d: -f2- | grep -E '^\[("[A-Za-z0-9 #._-]*"(,"[A-Za-z0-9 #._-]*")*)?\]$' || echo '[]')"
+}
+
+# ── the forum reader ─────────────────────────────────────────────────────────────────────────
+# The Forums tab and Home's active threads read the forum rooms as a read-only service account
+# (web app/lib/forumReader.ts, MATRIX_READER_TOKEN), an ordinary member of #forum with no powers.
+# `up` makes the account once (before the site starts: sign-up is still closed then, so nobody can
+# take the name first) and keeps its sign-in in .env like the other secrets (mode 600, never printed,
+# never on a command line: the token reaches the homeserver on stdin). A sign-in MAS no longer knows
+# (a restore of an older snapshot) is replaced at the next start; an account of that name this server
+# did not make (state/forum-reader records the one it did) is never signed in as.
+READER_LOCALPART="forum-reader"
+reader_token_ok() {
+  local t; t=$(env_get MATRIX_READER_TOKEN); [ -n "$t" ] || return 1
+  printf 'Authorization: Bearer %s\n' "$t" \
+    | compose exec -T synapse curl -fsS -o /dev/null -H @- http://localhost:8008/_matrix/client/v3/account/whoami >/dev/null 2>&1
+}
+reader_ensure() { # → 1 when there is no working sign-in (the Forums tab then says forums are unavailable)
+  local tok exists made="signed in again"
+  reader_token_ok && return 0
+  exists=$(printf '%s\n' "SELECT count(*) FROM users WHERE username = :'u';" \
+    | compose exec -T postgres psql -U postgres -d mas -qAt -v ON_ERROR_STOP=1 -v u="$READER_LOCALPART" 2>/dev/null || true)
+  if [ "$exists" = 1 ]; then
+    # Ours if this server made it, or if .env holds a sign-in it issued (a restore's older one).
+    if [ ! -f "$STATE/forum-reader" ] && [ -z "$(env_get MATRIX_READER_TOKEN)" ]; then
+      printf '   ⚠ forum reader: an account named %s exists and this server did not make it, so the Forums tab has no reader. Rename or remove that account, then run: sudo blackbranch up\n' "$READER_LOCALPART" >&2
+      return 1
+    fi
+  elif ! compose exec -T mas mas-cli manage register-user --yes --no-admin "$READER_LOCALPART" >/dev/null 2>&1; then
+    printf '   ⚠ forum reader: the account could not be made (sudo blackbranch logs mas); the Forums tab has no reader until the next start\n' >&2
+    return 1
+  else made="made"
+  fi
+  stamp_set forum-reader made || true
+  # MAS hands a new account to Synapse in the background. On the throwaway a first sign-in was once
+  # refused for the whole run (not reproduced since), so the sign-in is issued only once Synapse has
+  # the account (waited up to a minute); a sign-in that still fails is replaced at the next start.
+  local i
+  for i in $(seq 1 30); do reader_in_synapse && break; sleep 2; done
+  tok=$(compose exec -T mas mas-cli manage issue-compatibility-token "$READER_LOCALPART" "BBFORUMREADER$(date +%s)" 2>&1 | grep -oE 'mct_[A-Za-z0-9_]+' | head -1 || true)
+  if [ -z "$tok" ]; then printf '   ⚠ forum reader: MAS did not issue a sign-in; the Forums tab has no reader until the next start\n' >&2; return 1; fi
+  env_set MATRIX_READER_TOKEN "$tok" || { printf '   ⚠ forum reader: its sign-in could not be written to .env\n' >&2; return 1; }
+  info "forum reader: @$READER_LOCALPART:$(env_get BB_DOMAIN) $made; its sign-in is in .env"
+}
+reader_in_synapse() {
+  printf '%s\n' "SELECT count(*) FROM users WHERE name = :'n';" \
+    | compose exec -T postgres psql -U postgres -d synapse -qAt -v ON_ERROR_STOP=1 -v n="@$READER_LOCALPART:$(env_get BB_DOMAIN)" 2>/dev/null | grep -qx 1
+}
+reader_join_forum() {
+  local t; t=$(env_get MATRIX_READER_TOKEN); [ -n "$t" ] || return 1
+  printf 'Authorization: Bearer %s\n' "$t" | compose exec -T synapse curl -fsS -o /dev/null -X POST -H @- -H 'Content-Type: application/json' \
+    -d '{}' "http://localhost:8008/_matrix/client/v3/join/%23forum%3A$(env_get BB_DOMAIN)" >/dev/null 2>&1
+}
+
+# ── the community rooms, kept in place ────────────────────────────────────────────────────────
+# The bootstrap above runs once at setup (the Community page). After that the rooms must stay: at
+# every start (`up` — the installer, every update, every restore) and at every boot
+# (blackbranch-matrix.service) this reads Synapse's own tables — no sign-in, no container — and
+# runs the bootstrap only when something it makes is missing. After a restore it may replace a
+# recorded room that is gone (the snapshot's settings can name a room its homeserver data does not
+# hold); a plain start never does that by itself: it says so, with the command.
+# matrix_rooms_state <hub> <general> → "complete" when the recorded space and #general exist, #forum
+# has its alias, the four space links carry a `via` and the three rooms are in the public list.
+matrix_rooms_state() {
+  printf '%s\n' "WITH f AS (SELECT room_id FROM room_aliases WHERE room_alias = :'fa' LIMIT 1),
+  links AS (SELECT c.room_id, c.type, c.state_key FROM current_state_events c JOIN event_json j ON j.event_id = c.event_id
+    WHERE c.type IN ('m.space.child', 'm.space.parent')
+      AND CASE WHEN jsonb_typeof(j.json::jsonb #> '{content,via}') = 'array' THEN jsonb_array_length(j.json::jsonb #> '{content,via}') ELSE 0 END > 0)
+SELECT CASE WHEN (SELECT count(*) FROM rooms WHERE room_id IN (:'hub', :'gen')) = 2
+  AND (SELECT count(*) FROM f) = 1
+  AND (SELECT count(*) FROM rooms WHERE is_public AND room_id IN (:'hub', :'gen', (SELECT room_id FROM f))) = 3
+  AND (SELECT count(*) FROM links WHERE type = 'm.space.child' AND room_id = :'hub' AND state_key IN (:'gen', (SELECT room_id FROM f))) = 2
+  AND (SELECT count(*) FROM links WHERE type = 'm.space.parent' AND state_key = :'hub' AND room_id IN (:'gen', (SELECT room_id FROM f))) = 2
+  AND (SELECT count(*) FROM current_state_events WHERE type = 'm.room.member' AND state_key = :'reader' AND membership = 'join' AND room_id = (SELECT room_id FROM f)) = 1
+THEN 'complete' ELSE 'missing' END;" \
+    | compose exec -T postgres psql -U postgres -d synapse -qAt -v ON_ERROR_STOP=1 \
+        -v hub="$1" -v gen="$2" -v fa="#forum:$(env_get BB_DOMAIN)" -v reader="@$READER_LOCALPART:$(env_get BB_DOMAIN)"
+}
+matrix_ensure() { # matrix_ensure [after-restore] → 1 when something is missing and could not be made again
+  local hub general owner state out rc=0 why
+  if ! postgres_up; then info "community rooms: not checked, the database is not running"; return 1; fi
+  hub=$(config_get matrix.rooms.hub 2>/dev/null || true); general=$(config_get matrix.rooms.general 2>/dev/null || true)
+  owner=$(config_get streamer.matrixId 2>/dev/null || true)
+  if [ -z "$hub" ] || [ -z "$general" ] || [ -z "$owner" ]; then
+    info "community rooms: not made yet (the setup pages' Community page makes them)"; return 0
+  fi
+  state=$(matrix_rooms_state "$hub" "$general" 2>/dev/null || true)
+  if [ "$state" = complete ]; then info "community rooms: in place"; return 0; fi
+  if [ "${1:-}" = after-restore ]; then info "community rooms: something is missing; making it again (after a restore, a recorded room that is gone is replaced)"
+  else info "community rooms: something is missing; making it again"; fi
+  # In a subshell: the bootstrap's own exit (die) and its sign-out trap stay inside it.
+  out=$( (if [ "${1:-}" = after-restore ]; then BB_RECREATE=1; fi; matrix_bootstrap) 2>&1 ) || rc=$?
+  { printf '%s\n' "$out" | grep -v '^{' | sed 's/^/   /'; } || true
+  [ "$rc" != 0 ] || return 0
+  # The bootstrap's own reason when it gave one, else the last line. (A grep that finds nothing
+  # fails its pipeline: never the reason this function stops.)
+  why=$({ printf '%s\n' "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep -E '^bootstrap: ' | tail -n 1 | sed 's/^bootstrap: //'; } || true)
+  [ -n "$why" ] || why=$({ printf '%s\n' "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep -v '^[[:space:]]*$' | tail -n 1 | sed 's/^blackbranch: //'; } || true)
+  case "$out" in
+    *"not making a second one silently"*)
+      printf '   ⚠ community rooms: a recorded room is gone. To make a new one in its place: sudo blackbranch matrix bootstrap --recreate\n' >&2 ;;
+    *) printf '   ⚠ community rooms: could not be made again (%s). Run: sudo blackbranch matrix bootstrap\n' "$why" >&2 ;;
+  esac
+  return 1
+}
+cmd_matrix_ensure() {
+  need_root matrix; need_install
+  local after=""
+  case "${1:-}" in
+    "") ;;
+    --after-restore) after="after-restore" ;;
+    # The boot unit: the services start by themselves (restart: unless-stopped); wait for them.
+    --boot)
+      if update_running || [ -f "$UPDATE_DIR/progress" ]; then info "an update is running or unfinished: its own start checks the community rooms"; return 0; fi
+      wait_healthy 600 postgres synapse || die "the database or Synapse did not come up (blackbranch status)"
+      wait_mas 300 || die "MAS does not answer (blackbranch logs mas)" ;;
+    *) die "usage: blackbranch matrix ensure [--boot|--after-restore]" ;;
+  esac
+  matrix_ensure "$after"
 }
 
 cmd_federation() {
@@ -1469,7 +1685,7 @@ bb_restore() { # bb_restore <snapshot> <with_env 0|1> [--from address]
   [ "$(jfield "$res" ok)" = true ] || die "RESTORE FAILED on the media store: $(jfield "$res" message) — the databases are restored; run the restore again"
   info "restored snapshot ${id:0:8} (made $when): the three databases, Synapse's media and signing key, MAS's keys"
   if [ -n "${BB_RESTORE_NO_START:-}" ]; then return 0; fi   # test hook: the stack is not this test's
-  cmd_up
+  UP_AFTER=after-restore cmd_up
 }
 
 backup_ssh_key() { # the SFTP key's public half (made once, kept in backup-ssh/, root's)
@@ -1485,7 +1701,9 @@ cmd_backup() {
   case "${1:-}" in
     "") bb_backup ;;
     # The nightly timer: an update makes its own backup, and must not have one run beside it.
-    --scheduled) if update_running; then info "an update is running (it makes its own backup): skipped"; return 0; fi; bb_backup ;;
+    --scheduled) if update_running; then info "an update is running (it makes its own backup): skipped"; return 0; fi
+                 # The nightly timer's run: a failure reaches the operator (alerts below).
+                 trap 'alert_on_failure backup' EXIT; bb_backup; trap - EXIT ;;
     list) backup_target || die "the backup target is not usable (see above)"; backup_image || die "the backup image did not build"; backup_run backup snapshots ;;
     key) backup_ssh_key ;;
     *) die "usage: blackbranch backup [list|key]" ;;
@@ -1499,7 +1717,9 @@ cmd_restore() {
     case "$a" in
       --verify) verify=1 ;; --with-env) with_env=1 ;; --yes) yes=1 ;;
       --from) from="${1:?--from needs an address}"; shift ;;
-      --scheduled) if update_running; then info "an update is running: the weekly check waits for next week"; return 0; fi ;;
+      --scheduled) if update_running; then info "an update is running: the weekly check waits for next week"; return 0; fi
+                   # The weekly timer's run: a failed check reaches the operator (alerts below).
+                   trap 'alert_on_failure verify' EXIT ;;
       -*) die "unknown option $a" ;;
       *) [ -z "$snap" ] || die "one snapshot at a time"; snap="$a" ;;
     esac
@@ -1507,7 +1727,7 @@ cmd_restore() {
   [ -n "$snap" ] || die "usage: blackbranch restore <snapshot|latest> [--verify] [--with-env] [--from <address>] [--yes]   (snapshots: blackbranch backup list)"
   [[ "$snap" =~ ^(latest|[0-9a-f]{8,64})$ ]] || die "a snapshot is \"latest\" or its id (blackbranch backup list)"
   if [ -n "$from" ] && { [[ "$from" == *$'\n'* ]] || [ "${#from}" -gt 512 ]; }; then die "--from takes one address"; fi
-  if [ "$verify" = 1 ]; then bb_verify "$snap" "$from"; return; fi
+  if [ "$verify" = 1 ]; then bb_verify "$snap" "$from"; trap - EXIT; return; fi
   if [ "$yes" != 1 ]; then
     ( : < /dev/tty ) 2>/dev/null || die "a restore replaces the site's data: run it from a terminal, or add --yes"
     printf '   This replaces the three databases, Synapse'"'"'s media and signing key and MAS'"'"'s keys with snapshot %s.\n   Everything since that snapshot is lost. Type the domain (%s) to go on: ' "$snap" "$(env_get BB_DOMAIN)"
@@ -1515,6 +1735,124 @@ cmd_restore() {
     [ "$typed" = "$(env_get BB_DOMAIN)" ] || die "not restored"
   fi
   bb_restore "$snap" "$with_env" "$from"
+}
+
+# ── alerts: the box tells the operator ─────────────────────────────────────────────────────────
+# What only the box can see reaches the person who runs it: a nightly backup or weekly restore check
+# that failed, an update that went back (or could not, or stopped), and the daily check (low disk,
+# a certificate about to run out in direct mode, no good backup for 36 hours). ONE channel, kept in
+# .env and never printed or put on a command line: an ntfy topic address (BB_ALERT_NTFY_URL) and/or
+# a command that sends an email it reads on its standard input, headers first, like
+# `sendmail you@example.com` (BB_ALERT_EMAIL_COMMAND; $BB_ALERT_SUBJECT holds the subject too).
+# No channel set: the alert is logged only (the journal of the unit that raised it). Sending never
+# changes the outcome of what raised it. Like the site's own alerts (stream-api notify.js), an ntfy
+# topic is unauthenticated: only fixed words, versions, numbers and the site's public names go out,
+# never a tool's own error text (`blackbranch status` and the doctor say why).
+# The daily check's floors are the doctor's (config/doctor.mjs; alerts.test.mjs holds them equal).
+ALERT_DISK_FREE_PCT=15
+ALERT_CERT_DAYS=14
+ALERT_BACKUP_AGE_H=36
+alert() { # alert <priority 3|4|5> <title> <message>
+  local prio="$1" title msg url cmd sent="" failed="" subject
+  title="$(jsafe "$(env_get BB_DOMAIN)" | tr -cd 'A-Za-z0-9.-'): $(jsafe "$2" | cut -c1-120)"
+  msg=$(printf '%s' "$3" | tr -d '\000-\010\013-\037\177' | head -c 2000)
+  printf 'ALERT: %s\n%s\n' "$title" "$msg" | sed '2,$s/^/   /' >&2
+  if command -v logger >/dev/null 2>&1; then logger -t blackbranch-alert -- "$title: $(printf '%s' "$msg" | tr '\n' ' ')" 2>/dev/null || true; fi
+  url=$(env_get BB_ALERT_NTFY_URL); cmd=$(env_get BB_ALERT_EMAIL_COMMAND)
+  if [ -z "$url" ] && [ -z "$cmd" ]; then
+    info "no alert channel is set (BB_ALERT_NTFY_URL or BB_ALERT_EMAIL_COMMAND in .env): this alert is in the log only" >&2; return 0
+  fi
+  if [ -n "$url" ]; then
+    # The address reaches curl through a config file on a descriptor, never its command line.
+    if [[ "$url" =~ ^https?://[^[:space:]\"\\]+$ ]] && printf '%s\n' "$msg" | curl -fsS -o /dev/null --max-time 20 \
+         -K <(printf 'url = "%s"\n' "$url") -H "Title: Black Branch $title" -H "Priority: $prio" -H "Tags: warning" --data-binary @- 2>/dev/null; then
+      sent+=" ntfy"
+    else failed+=" the ntfy topic (BB_ALERT_NTFY_URL)"; fi
+  fi
+  if [ -n "$cmd" ]; then
+    subject="[Black Branch] $title"
+    if printf 'Subject: %s\nContent-Type: text/plain; charset=UTF-8\n\n%s\n' "$subject" "$msg" \
+         | BB_ALERT_SUBJECT="$subject" timeout 60 bash -c "$cmd" >/dev/null 2>&1; then sent+=" email"
+    else failed+=" the email command (BB_ALERT_EMAIL_COMMAND)"; fi
+  fi
+  [ -z "$sent" ] || info "alert sent:$sent" >&2
+  [ -z "$failed" ] || info "the alert could not be sent through$failed: check it with sudo blackbranch alerts test" >&2
+  return 0
+}
+# An EXIT trap for the timers' runs: alert_on_failure backup|verify (the run's own status decides).
+alert_on_failure() {
+  local rc=$? last ok_at
+  [ "$rc" != 0 ] || return 0
+  case "$1" in
+    backup)
+      last=$(cat "$BB_HOME/results/$BACKUP_LAST" 2>/dev/null || true)
+      ok_at=$(jfield "$last" lastOkAt | tr -cd '0-9TZ:-')
+      alert 4 "the nightly backup failed" "The nightly backup failed at $(now_utc). The last good backup: ${ok_at:-none yet}.
+See why on the server: sudo blackbranch status" ;;
+    verify)
+      alert 4 "the weekly restore check failed" "The weekly check that the newest backup restores failed at $(now_utc). A backup that does not restore cannot bring the site back.
+See why on the server: sudo blackbranch restore latest --verify" ;;
+  esac
+  return "$rc"
+}
+alert_update() { # alert_update rolled-back|rollback-failed|interrupted (U_FROM, U_VERSION: checked versions)
+  local from to
+  from=$(printf '%s' "$U_FROM" | tr -cd 'A-Za-z0-9._+-'); to=$(printf '%s' "$U_VERSION" | tr -cd 'A-Za-z0-9._+-')
+  case "$1" in
+    rolled-back) alert 4 "the update to $to was rolled back" "The update to $to failed its health check. The server went back to $from, with its data from just before the update, and the site runs.
+See why on the server: sudo blackbranch status" ;;
+    rollback-failed) alert 5 "the update to $to failed and going back did not finish" "The update to $to failed, and going back to $from did not finish cleanly. The site may be down.
+On the server, run: sudo blackbranch status, then sudo blackbranch update --reconcile" ;;
+    interrupted) alert 4 "the update to $to stopped before it finished" "The update to $to stopped before it finished (the server shut down, or the update was stopped).
+On the server, run: sudo blackbranch status" ;;
+  esac
+}
+# Days until the certificate caddy serves for <name> on this box runs out, or nothing when none was read.
+cert_days_left() {
+  local end
+  end=$(echo | timeout 10 openssl s_client -connect 127.0.0.1:443 -servername "$1" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+  [ -n "$end" ] || return 0
+  end=$(date -d "$end" +%s 2>/dev/null) || return 0
+  printf '%s' $(( (end - $(date +%s)) / 86400 ))
+}
+# The daily check (blackbranch-check.timer): one alert naming every problem, or nothing.
+alerts_check() {
+  local problems=() what dir free l h days last ok_at age
+  for what in "install:$BB_HOME" "docker:$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || true)"; do
+    dir="${what#*:}"; [ -n "$dir" ] || continue
+    free=$(disk_free_pct "$dir")
+    if [[ "$free" =~ ^[0-9]+$ ]] && [ "$free" -lt "$ALERT_DISK_FREE_PCT" ]; then
+      problems+=("Low disk: $free% free where the ${what%%:*} data lives ($dir). Free some space or add disk; at 0% the database stops.")
+    fi
+  done
+  if [ "$(env_get BB_TLS_MODE)" = direct ]; then
+    while IFS=: read -r l h; do
+      days=$(cert_days_left "$h")
+      if [ -z "$days" ]; then problems+=("No certificate could be read for $h. Check: sudo blackbranch doctor")
+      elif [ "$days" -le "$ALERT_CERT_DAYS" ]; then problems+=("The certificate for $h runs out in $days days. The router renews it by itself, so something stops it: sudo blackbranch logs caddy")
+      fi
+    done < <(public_names)
+  fi
+  # A backup gone quiet (the timer stopped, every night failing): nothing to say before the first one.
+  last=$(cat "$BB_HOME/results/$BACKUP_LAST" 2>/dev/null || true)
+  if [ -n "$last" ]; then
+    ok_at=$(jfield "$last" lastOkAt | tr -cd '0-9TZ:-')
+    age=""; [ -z "$ok_at" ] || age=$(( ( $(date +%s) - $(date -d "$ok_at" +%s 2>/dev/null || echo 0) ) / 3600 ))
+    if [ -z "$age" ] || [ "$age" -ge "$ALERT_BACKUP_AGE_H" ]; then
+      problems+=("No good backup in the last $ALERT_BACKUP_AGE_H hours (the last good one: ${ok_at:-none}). See why: sudo blackbranch status")
+    fi
+  fi
+  if [ "${#problems[@]}" -eq 0 ]; then info "daily check: disk, certificates and backups are fine"; return 0; fi
+  alert 4 "the daily check found $( [ "${#problems[@]}" = 1 ] && echo "a problem" || echo "${#problems[@]} problems")" "$(printf '%s\n' "${problems[@]}")"
+  return 1
+}
+cmd_alerts() {
+  need_root alerts; need_install
+  case "${1:-}" in
+    check) alerts_check ;;
+    test) alert 3 "a test alert" "This is a test of the server's alerts. If you read this, they reach you." ;;
+    *) die "usage: blackbranch alerts check|test" ;;
+  esac
 }
 
 # ── the timers: nightly backup at the quiet hour, weekly verify ─────────────────────────────────
@@ -1659,7 +1997,7 @@ setup_facts_json() {
 
 doctor_host_facts() { # doctor_host_facts [health] — health: the update's run, which skips the outside check
   local mode mem docker_root disk="" clock upg name_json="" tunnel=null certs="" answers="" outside="" via rendered="" render_err=false
-  local l h ok code end days missing="" k v n=0 maskeys signing=null release sep
+  local l h ok code days missing="" k v n=0 maskeys signing=null release sep
   local caddy_txt hs_txt log_txt mas_txt
   mode=$(env_get BB_TLS_MODE)
   release=$(head -1 "$BB_HOME/release/RELEASE" 2>/dev/null | tr ' ' '-' | tr -cd 'A-Za-z0-9._+-' | cut -c1-40)
@@ -1702,8 +2040,7 @@ doctor_host_facts() { # doctor_host_facts [health] — health: the update's run,
       outside+="$sep{\"name\":\"$l\",\"status\":$(jnum "$((10#${code:-0}))")}"
     fi
     if [ "$mode" = direct ]; then
-      end=$(echo | timeout 10 openssl s_client -connect 127.0.0.1:443 -servername "$h" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
-      days=null; [ -n "$end" ] && days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+      days=$(cert_days_left "$h"); days="${days:-null}"
       certs+="$sep{\"name\":\"$l\",\"daysLeft\":$(jnum "$days")}"
     fi
     sep=","
@@ -1989,6 +2326,8 @@ u_record() { # u_record updated|rolled-back|rollback-failed|not-applied|interrup
   printf '{"v":1,"at":"%s","started":"%s","from":"%s","to":"%s","result":"%s","ok":%s,"message":"%s","snapshot":"%s","reason":"%s","attempts":%s,"health":%s,"rollbackHealth":%s}\n' \
     "$(now_utc)" "$(printf '%s' "$U_SINCE" | tr -cd '0-9TZ:-')" "$(jsafe "$U_FROM")" "$(jsafe "$U_VERSION")" "$1" "$ok" "$(jsafe "$2")" \
     "$(printf '%s' "${5:-}" | tr -cd '0-9a-f' | cut -c1-16)" "$reason" "$(jnum "$U_ATTEMPT")" "$(hjson "${3:-}")" "$(hjson "${4:-}")" | results_put update-last.json || true
+  # An update that went back, could not go back cleanly, or stopped without finishing reaches the operator.
+  case "$1" in rolled-back|rollback-failed|interrupted) alert_update "$1" || true ;; esac
 }
 # This release's attempt number: one more than the last, when the last was the same release rolled
 # back for a reader regression alone; else 1.
@@ -2631,8 +2970,9 @@ case "$cmd" in
   restore)          cmd_restore "$@" ;;
   update)           cmd_update "$@" ;;
   health)           cmd_health "$@" ;;
+  alerts)           cmd_alerts "$@" ;;
   install-files)    cmd_install_files "$@" ;;
   user)             not_yet "$cmd" ;;
-  ""|help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
+  ""|help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; echo; restart_settings_text ;;
   *) die "unknown command \"$cmd\" (blackbranch help)" ;;
 esac

@@ -19,7 +19,7 @@ import { isMissingCustomer } from "./stripeCustomer.ts";
 import type { createConcurrencyGate } from "./concurrencyGate.ts";
 import { webhookConnections } from "./billingConnections.ts";
 import { heldRecordIds, writeTransition } from "./subscriptions/state.ts";
-import { missingStripeObservation, stripeObservation } from "./subscriptions/stripeRecords.ts";
+import { missingStripeObservation, needsPaymentHistory, settleNeverPaid, stripeObservation, stripeRenewalOff } from "./subscriptions/stripeRecords.ts";
 
 export type SubscriptionWrite = {
   matrixId: string;
@@ -112,6 +112,16 @@ export function createSubscriptionSync(deps: {
     return all;
   }
 
+  /** A subscription as it counts here: a past_due one that came out of a trial and was never paid
+   *  reads as `incomplete` (stripeRecords.ts settleNeverPaid). Its paid invoices are asked of Stripe
+   *  only in that case; a failed lookup throws, so the webhook answers 500 and Stripe redelivers —
+   *  never a guess either way. */
+  async function settle(sub: Stripe.Subscription): Promise<Stripe.Subscription> {
+    if (!needsPaymentHistory(sub)) return sub;
+    const paid = await deps.stripe().invoices.list({ subscription: sub.id, status: "paid", limit: 100 });
+    return settleNeverPaid(sub, paid.data.map((i) => i.amount_paid));
+  }
+
   /** Mirror a subscription's viewer into their row. `eventAt` is the Stripe
    *  Event's `created` (unix seconds). Returns what was written, or null when
    *  nothing was (no viewer for it, or a stale event).
@@ -169,8 +179,8 @@ export function createSubscriptionSync(deps: {
       client = await deps.pool.connect();
       await client.query("BEGIN");
       await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`billing:viewer:${matrixId}`]);
-      const all = await viewerSubscriptions(client, matrixId, eventCustomer);
-      const sub = countsForViewer(all) ?? (await deps.stripe().subscriptions.retrieve(ref.id));
+      const all = await Promise.all((await viewerSubscriptions(client, matrixId, eventCustomer)).map(settle));
+      const sub = countsForViewer(all) ?? (await settle(await deps.stripe().subscriptions.retrieve(ref.id)));
       // Every subscription the viewer holds becomes its own record, each stamped with this
       // Event's `created` — the one writer, in this transaction, under this lock. Then the
       // legacy row, from the subscription that counts, exactly as before.
@@ -186,7 +196,7 @@ export function createSubscriptionSync(deps: {
       for (const id of new Set([ref.id, ...(await heldRecordIds(client, matrixId, "stripe"))])) {
         if (seen.has(id)) continue;
         try {
-          observations.push(stripeObservation(await deps.stripe().subscriptions.retrieve(id), stamp));
+          observations.push(stripeObservation(await settle(await deps.stripe().subscriptions.retrieve(id)), stamp));
         } catch (e) {
           if (!isMissingCustomer(e)) throw e; // the same resource_missing test, for a subscription
           observations.push(missingStripeObservation(id, stamp));
@@ -250,8 +260,9 @@ export function createSubscriptionSync(deps: {
        RETURNING matrix_id`,
       // cancel_at_period_end: the viewer switched renewal off in the portal.
       // Stripe keeps status 'active' until the period ends, so this flag is the
-      // only way the Support panel can say "renewal is off".
-      [matrixId, customerId, sub.id, effectiveTier, sub.status, periodEnd, stamp, Boolean(sub.cancel_at_period_end)]
+      // only way the Support panel can say "renewal is off". Stripe's either
+      // field (cancel_at_period_end, or the newer portal's cancel_at) — stripeRenewalOff.
+      [matrixId, customerId, sub.id, effectiveTier, sub.status, periodEnd, stamp, stripeRenewalOff(sub)]
     );
 
     // Stale event — a newer one already wrote this row.

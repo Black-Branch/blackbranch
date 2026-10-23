@@ -18,11 +18,11 @@ Links:
 
 This step fills:
 
-- **Twitch channel**. The Twitch channel login (lower case) — the embed, emotes and the chat connection.
+- **Twitch channel**. The Twitch channel login (lower case). Used for the embed, emotes and the chat connection.
 
 ## 2. Your Twitch app (optional)
 
-Needed for viewers to link their Twitch account, for moderation from the site and for live status. Turn on two-factor sign-in on the Twitch account first (Settings → Security). Then Twitch Developers → Your Console → Applications → Register: any unique name, the redirect URL below, category Website Integration. Copy the client id; New Secret gives the secret. The Test fetches an app token and finds the channel; it shows the channel's numeric id — paste it as the broadcaster id. Signing the bot account in from this page comes in a later release.
+Needed for viewers to link their Twitch account, for moderation from the site and for live status. Turn on two-factor sign-in on the Twitch account first (Settings → Security). Then Twitch Developers → Your Console → Applications → Register: any unique name, the redirect URL below, category Website Integration. Copy the client id; New Secret gives the secret. Check fetches an app token and finds the channel. The channel's numeric id is found and saved for you. Signing the bot account in from this page comes in a later release.
 
 Links:
 
@@ -38,6 +38,5 @@ This step fills:
 
 - **Twitch app client id** (kept encrypted). Twitch sign-in, account linking, moderation and stream status.
 - **Twitch app client secret** (kept encrypted). Pairs with the Twitch app client id.
-- **Twitch broadcaster id**. The channel's numeric Twitch id. Moderation refuses to act without it; the viewer poller reads it.
 
 Its **Test** button checks the values work before the page moves on. A step you skip stays on the Admin Panel's checklist.

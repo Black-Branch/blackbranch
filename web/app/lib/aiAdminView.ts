@@ -73,6 +73,8 @@ export type AiView = {
   /** Automod's settings as stream-api resolves them (the one that runs the check), each with
    *  whether env pins it. */
   automod: Record<string, { value: unknown; envName: string | null }>;
+  /** memory.minWords as stream-ingest (the one that applies it) resolves it. */
+  memoryMinWords: { value: number; envName: string | null };
   connections: {
     id: string; kind: "anthropic" | "openai-compatible"; label: string; baseUrl: string; builtin: boolean; keyName: string;
     key: { stored: null | { display: string; updatedBy: string; updatedAt: string; readable: boolean };
@@ -182,6 +184,12 @@ export function buildAiView(cfg: StreamApiSnapshot | null, routes: AiRoutesSnaps
       const value = self ? self.display : e.key in values ? values[e.key] : e.default;
       return [e.key, { value: value ?? e.default, envName: self?.source === "env" ? self.envName : null }];
     })),
+    memoryMinWords: (() => {
+      const st = cfg?.reports?.["stream-ingest"]?.keys?.["memory.minWords"];
+      const floor = Number(INSTANCE_KEYS.find((e) => e.key === "memory.minWords")?.default);
+      const v = Number(st?.display ?? values["memory.minWords"] ?? floor);
+      return { value: Number.isInteger(v) && v > 0 ? v : floor, envName: st?.source === "env" ? st.envName ?? null : null };
+    })(),
     connections, slots,
     memory: routes?.memory ?? null,
     providesBot: routes?.providesBot ?? null,

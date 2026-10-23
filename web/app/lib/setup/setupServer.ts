@@ -12,7 +12,8 @@
 
 import pool from "@/lib/db";
 import { instanceResolve, instanceState, instanceString, instanceBool, reloadInstanceConfig } from "../instanceConfigServer";
-import { writeInstanceValue, clearInstanceValue, requireAdminResponse, requireAdminMutation, runInstanceTest } from "../instanceAdminServer";
+import { writeInstanceValue, clearInstanceValue, requireAdminResponse, requireAdminMutation, runInstanceTest, refindDerivedIds } from "../instanceAdminServer";
+import { idsFoundFrom } from "../derivedIds";
 import type { StreamApiSnapshot } from "../instanceAdminView";
 import { streamApiFetch } from "../streamApi";
 import { sameOriginRequest } from "../instanceAdminView";
@@ -26,7 +27,7 @@ import { setupLinkConfigured, setupTokenMatches, setupLinkUsable } from "./setup
 import { stepOrder, resumeStep, nextStep, maySave, recordVisit } from "./setupFlow";
 import { productModules, moduleSetupKeys, moduleSetupPage, coreSetupLists, wizardLists, wizardListPage, wizardListKeys, wizardSkipPrefix,
   type SetupAddresses, type SetupPage } from "./setupPages";
-import { ADMIN_ONLY_SETUP, expandChosen, formatProblem } from "./setupExtras";
+import { ADMIN_ONLY_SETUP, CHECK_VIA, expandChosen, formatProblem } from "./setupExtras";
 import { checkStripePrice } from "./setupChecks";
 import { checkIconSet, writeIconSet, iconAnswer, stageIconSet } from "./setupIcons";
 import { ownerPluginInstalled } from "../plugins/installed";
@@ -247,7 +248,9 @@ async function stepData(step: string): Promise<Record<string, unknown>> {
   if (step === "modules") {
     const chosen = chosenCoreSteps(state);
     return {
-      modules: productModules().map((m) => ({ ...m, on: instanceBool(`modules.${m.id}`), ...(ADMIN_ONLY_SETUP[m.id] ? { note: ADMIN_ONLY_SETUP[m.id] } : {}) })),
+      // A module set up only in the Admin Panel (OBS) is not offered here at all, only named.
+      modules: productModules().filter((m) => !(m.id in ADMIN_ONLY_SETUP)).map((m) => ({ ...m, on: instanceBool(`modules.${m.id}`) })),
+      elsewhere: Object.values(ADMIN_ONLY_SETUP),
       core: wizardLists().map((c) => ({ ...c, chosen: chosen.includes(c.id) })),
       later: coreSetupLists().filter((c) => c.later),
       donateUrl: instanceString("site.donateUrl") ?? "",
@@ -277,7 +280,7 @@ async function stepData(step: string): Promise<Record<string, unknown>> {
   if (step === "finish") {
     const q = instanceResolve("updates.quietHour").value;
     const alerts = await savedAlerts();
-    return { quietHour: typeof q === "number" ? q : 4, bugReports: instanceBool("bugReports.enabled"),
+    return { quietHour: typeof q === "number" ? q : 4,
       // The zone the quiet hour is in; null = UTC (the page says so beside the hour).
       timeZone: instanceString("site.timeZone"),
       pending: pendingInstall(state), hostRequests: hostRequestsAvailable(),
@@ -406,7 +409,7 @@ export async function saveStep(req: Request, body: { step?: unknown; data?: unkn
         if (problem) return fail(400, `Donate link: ${problem}`);
       }
       for (const m of productModules()) {
-        if (typeof want[m.id] !== "boolean") continue;
+        if (typeof want[m.id] !== "boolean" || m.id in ADMIN_ONLY_SETUP) continue;
         if (want[m.id] !== instanceBool(`modules.${m.id}`)) await writeSetting(`modules.${m.id}`, want[m.id]);
       }
       if (typeof data.donateUrl === "string" && data.donateUrl.trim() !== (instanceString("site.donateUrl") ?? "")) {
@@ -431,6 +434,11 @@ export async function saveStep(req: Request, body: { step?: unknown; data?: unkn
         const e = INSTANCE_KEYS.find((k) => k.key === key);
         if (e?.secret && !value.trim()) continue; // a blank secret field keeps what is stored
         await writeSetting(key, value.trim() || null);
+      }
+      // A channel or app key saved here: the platform id behind the channel is found and saved too.
+      if (Object.keys(values).some((k) => idsFoundFrom(k).length)) {
+        await reloadInstanceConfig();
+        if ((await refindDerivedIds(Object.keys(values), by)).some((f) => f.ok)) await reloadInstanceConfig();
       }
       const skippedNow = Array.isArray(data.skipped) ? data.skipped.filter((x): x is string => typeof x === "string") : [];
       const own = ownSkips(skip, page);
@@ -473,7 +481,8 @@ export async function setupTest(req: Request, body: { key?: unknown }): Promise<
   const key = typeof body.key === "string" ? body.key : "";
   const audience = { ownerPlugin: ownerPluginInstalled(), wizard: true };
   const onPages = [...enabledModuleSteps().map((id) => moduleSetupKeys(id, audience)), ...chosenCoreSteps().map((id) => wizardListKeys(id))];
-  if (!onPages.some((keys) => keys.has(key))) return fail(404, "no such test on these pages");
+  // A key checked through another (CHECK_VIA: the handle's found DID) counts as that page's too.
+  if (!onPages.some((keys) => keys.has(key) || [...keys].some((k) => CHECK_VIA[k] === key))) return fail(404, "no such test on these pages");
   // The subscription price has no check in the schema: the setup pages' own (contract 6).
   if (key === "stripe.supporterPriceId") {
     if (Date.now() - lastPriceCheck < 3000) return fail(429, "checked a moment ago — wait a few seconds");
@@ -487,7 +496,7 @@ export async function setupTest(req: Request, body: { key?: unknown }): Promise<
 // ── "Your site": the icons ──────────────────────────────────────────────────────────────────
 
 async function uploadIcons(files: unknown): Promise<Out> {
-  if (!hostRequestsAvailable()) return fail(503, "this install cannot hand files to its server — put the icons in site-files/ there and run blackbranch set SITE_ICON_SET /site-files");
+  if (!hostRequestsAvailable()) return fail(503, "this install cannot hand files to its server — put the icons in site-files/ there and run sudo blackbranch set SITE_ICON_SET /site-files");
   const v = checkIconSet(files);
   if (!v.ok) return fail(400, v.error);
   try { await writeIconSet(v.files); } catch (e) {
@@ -549,7 +558,7 @@ export async function startBackupTest(req: Request, body: Record<string, unknown
   const who = await requireSetupAdmin(req, true);
   if (typeof who !== "string") return who;
   if (resumeStep(readState().step, currentOrder(), true) !== "finish") return fail(409, "finish the earlier steps first");
-  if (!hostRequestsAvailable()) return fail(503, "this install cannot ask its server for a backup; run blackbranch backup there");
+  if (!hostRequestsAvailable()) return fail(503, "this install cannot ask its server for a backup; run sudo blackbranch backup there");
   const v = validateBackupTarget(body);
   if (!v.ok) return fail(400, v.error);
   try {
@@ -600,7 +609,7 @@ async function complete(): Promise<void> {
   if (hostRequestsAvailable()) for (const v of ["restart-stream-api", "restart-stream-ingest", "render"] as const) await requestHost(v);
 }
 
-export async function finishSetup(req: Request, body: { quietHour?: unknown; bugReports?: unknown; alerts?: unknown; complete?: unknown }): Promise<Out> {
+export async function finishSetup(req: Request, body: { quietHour?: unknown; alerts?: unknown; complete?: unknown }): Promise<Out> {
   const who = await requireSetupAdmin(req, true);
   if (typeof who !== "string") return who;
   const order = currentOrder();
@@ -619,12 +628,10 @@ export async function finishSetup(req: Request, body: { quietHour?: unknown; bug
     }
     const q = body.quietHour;
     if (typeof q !== "number" || !Number.isInteger(q) || q < 0 || q > 23) return fail(400, "quiet hour: 0–23");
-    if (typeof body.bugReports !== "boolean") return fail(400, "bug reports: on or off");
-    // Phone alerts are optional: both topics or neither. Unknown (stream-api did not say) counts as unset.
+    // Phone alerts are optional: one topic, both, or neither. Unknown (stream-api did not say) counts as unset.
     const alerts = validateAlertTopics(body.alerts, (await savedAlerts()) ?? { wake: false, quiet: false });
     if (!alerts.ok) return fail(400, alerts.error);
     await writeSetting("updates.quietHour", q);
-    await writeSetting("bugReports.enabled", body.bugReports);
     for (const [key, value] of Object.entries(alerts.write)) await writeSetting(key, value);
     const pending = pendingInstall(readState());
     if (!pending.length) {
@@ -632,7 +639,7 @@ export async function finishSetup(req: Request, body: { quietHour?: unknown; bug
       return { status: 200, body: { ok: true, phase: "done" } };
     }
     const r = await requestHost("apply-install");
-    if (!r.ok) return fail(503, `${r.error} — set the values with \`blackbranch set\`, then finish again`);
+    if (!r.ok) return fail(503, `${r.error} — set the values with \`sudo blackbranch set\`, then finish again`);
     return { status: 200, body: { ok: true, phase: "applying", requestedAt: r.requestedAt, pending } };
   } catch (e) {
     return fail(502, e instanceof Error ? e.message.slice(0, 300) : "could not save");

@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstanceConfig } from './instanceConfig.js';
-import { choosePlatforms } from './platformsEnv.js';
+import { choosePlatforms, PLATFORM_KEYS } from './platformsEnv.js';
 import { createPlatformStarter, startPlatformsWhenLoaded, oneLine } from './platformStarter.js';
 
 process.env.STREAM_API_URL = 'http://stream-api.test';
@@ -175,4 +175,71 @@ test('oneLine: no stack, no URL path or query, at most 200 characters', () => {
   assert.equal(oneLine('Login authentication failed'), 'Login authentication failed');
   assert.equal(oneLine(new Error('x'.repeat(500))).length, 200);
   assert.equal(oneLine(null), 'unknown error');
+});
+
+// The panel says a restart-applied switch is "waiting for a restart" while this process reports
+// the value it booted with. A reader that STOPS because its switch went off has applied that
+// switch too, so the report must follow the stop as it follows a start (index.js's wiring).
+const wired = (config, starters) => starterFor(config, starters, { onApplied: (name) => config.markApplied(PLATFORM_KEYS[name] || []) });
+const shown = (config) => config.statusReport()['modules.youtube'].display;
+
+test('YouTube switched off: the report says off at once, with no restart (original path)', async () => {
+  const { config, stored } = reader({ 'platform.youtube.channelId': 'UCcaseytest', 'modules.youtube': true });
+  const { log, starters } = spies();
+  try {
+    const platforms = wired(config, starters);
+    await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
+    assert.deepEqual(log, ['start youtube']);
+    assert.equal(shown(config), true);
+    stored['modules.youtube'] = false;
+    await config.load();
+    await platforms.settled();
+    assert.deepEqual(log, ['start youtube', 'stop youtube']);
+    assert.equal(shown(config), false, 'the reader stopped, but the report still says on: "waiting for a restart"');
+  } finally { config.stop(); }
+});
+
+test('retry: off, on, off again: the report follows every flip', async () => {
+  const { config, stored } = reader({ 'platform.youtube.channelId': 'UCcaseytest', 'modules.youtube': true });
+  const { starters } = spies();
+  try {
+    const platforms = wired(config, starters);
+    await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
+    for (const v of [false, true, false, true]) {
+      stored['modules.youtube'] = v;
+      await config.load();
+      await platforms.settled();
+      assert.equal(shown(config), v, `after switching ${v ? 'on' : 'off'}`);
+    }
+  } finally { config.stop(); }
+});
+
+test('a reader that never started (it failed) and is then switched off: the report says off too', async () => {
+  const { config, stored } = reader({ 'platform.youtube.channelId': 'UCcaseytest', 'modules.youtube': true });
+  const { starters } = spies();
+  starters.youtube = async () => { throw new Error('browser missing: no chromium'); };
+  try {
+    const platforms = wired(config, starters);
+    await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
+    assert.equal(platforms.states().youtube.state, 'failed');
+    stored['modules.youtube'] = false;
+    await config.load();
+    await platforms.settled();
+    assert.equal(platforms.states().youtube.state, 'off');
+    assert.equal(shown(config), false);
+  } finally { config.stop(); }
+});
+
+test('restart: a process that boots with YouTube off reports off, and a later re-read changes nothing', async () => {
+  const { config } = reader({ 'platform.youtube.channelId': 'UCcaseytest', 'modules.youtube': false });
+  const { log, starters } = spies();
+  try {
+    const platforms = wired(config, starters);
+    await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
+    assert.equal(shown(config), false);
+    await config.load();
+    await platforms.settled();
+    assert.equal(shown(config), false);
+    assert.deepEqual(log, []);
+  } finally { config.stop(); }
 });

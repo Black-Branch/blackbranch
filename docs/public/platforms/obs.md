@@ -2,15 +2,15 @@
 
 # OBS control
 
-One browser source in OBS — the rig page — plays the bot's voice and the sound alerts into your stream, draws the bot's avatar, switches scenes on request and pauses the timer on a scene. It connects out from OBS, so it works from any network. Off: the rig page is refused and nothing reaches OBS.
+One browser source in OBS, the rig page, plays the bot's voice into your stream, draws the bot's avatar, switches scenes on request and pauses the timer on a scene. It connects out from OBS, so it works from any network. Off: the rig page is refused and nothing reaches OBS.
 
-This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel → Site → Modules — it is off on a new install. Its setup page then appears with the steps below.
+This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel, at the top of its own page (Utility → OBS). It is off on a new install. Its setup steps are below.
 
 The addresses below are for a site at `example.com`; your setup page shows your own.
 
 ## 1. Add the rig page to OBS
 
-In OBS: Sources → + → Browser. Paste the rig page address from Admin Panel → Utility → OBS (it carries this site's key — keep it private), width 1920, height 1080. Tick "Control audio via OBS" so the voice and sounds reach your stream. For scene switching, set "Page permissions" to "Advanced access to OBS". Put the source in every scene you stream from (or in a scene you nest into each). Nothing is installed on your computer.
+In OBS: Sources → + → Browser. Paste the rig page address from Admin Panel → Utility → OBS (it carries this site's key, so keep it private), width 1920, height 1080. Tick "Control audio via OBS" so the voice reaches your stream. For scene switching, set "Page permissions" to "Advanced access to OBS". Put the source in every scene you stream from (or in a scene you nest into each). Nothing is installed on your computer.
 
 Links:
 

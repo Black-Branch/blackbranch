@@ -13,7 +13,7 @@ import { ownerPluginInstalled, pluginPrivacy } from "@/app/lib/plugins/installed
 import { viewerLinkAllowed } from "@/app/lib/viewerLinkPolicy";
 import { stripeConfigured } from "@/app/lib/stripe";
 import { paypalConfigured } from "@/app/lib/paypalClient";
-import { TIERS } from "@/app/lib/tiers";
+import { subscriptionsSetUp } from "@/app/lib/supporterPrice";
 import { currencyName } from "@/app/lib/currency";
 import { hostFile, hostRequestsAvailable } from "@/app/lib/hostRequests";
 import { chatPlatformsSetUp } from "@/app/lib/streamPlatformsServer";
@@ -89,7 +89,7 @@ export async function legalFacts(): Promise<LegalFacts> {
     botName: instanceString("bot.name"),
     youtube,
     stripe: stripeConfigured(),
-    subscriptions: !!TIERS.supporter.priceId,
+    subscriptions: subscriptionsSetUp(),
     paypal: paypalConfigured(),
     pointsPurchase: instanceBool("currency.purchasable"),
     currencyName: currencyName(),
