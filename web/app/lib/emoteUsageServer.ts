@@ -14,6 +14,7 @@
 // The pool comes in by relative path (as boards.ts does) so the test can import
 // the pure part without an alias loader.
 import pool from "../../lib/db.ts";
+import type { EmoteMap } from "./emoteMap.ts";
 
 const TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -27,35 +28,66 @@ const USAGE_SQL = `SELECT tok
  GROUP BY tok
  ORDER BY count(*) DESC, tok`;
 
-/** Pure: tokens in descending use → rank (1 = most used) for the catalog names only. */
+/** Pure: tokens in descending use → rank (1 = most used) for the catalog names only.
+ *  @test-only exported so the rank rule is tested directly; mergeRanks is its caller. */
 export function rankByUsage(tokens: readonly string[], names: ReadonlySet<string>): Map<string, number> {
   const out = new Map<string, number>();
   for (const t of tokens) if (names.has(t) && !out.has(t)) out.set(t, out.size + 1);
   return out;
 }
 
-let tokens: string[] | null = null;
-let loadedAt = 0;
-let inflight: Promise<void> | null = null;
-
-/** The ranked token list as it stands (null before the first load), refreshing in the background when stale. */
-function usageTokens(names: readonly string[]): string[] | null {
-  if ((!tokens || Date.now() - loadedAt > TTL_MS) && !inflight) {
-    inflight = pool.query<{ tok: string }>(USAGE_SQL, [names])
-      .then(({ rows }) => { tokens = rows.map((r) => r.tok); loadedAt = Date.now(); })
-      .catch((err) => { console.warn("[emotes] usage ranks failed:", (err as Error).message); loadedAt = Date.now() - TTL_MS + 10 * 60_000; })
-      .finally(() => { inflight = null; });
+/** Pure: the manifest with `r` (usage rank) and `s` (sticker rank) merged in — a new object;
+ *  emotes with neither keep their own info object. */
+export function mergeRanks(base: EmoteMap, tokens: readonly string[] | null, stickers: readonly string[] | null): EmoteMap {
+  const names = new Set(Object.keys(base));
+  const ranks = rankByUsage(tokens ?? [], names);
+  const sRanks = rankByUsage(stickers ?? [], names);
+  const map: EmoteMap = {};
+  for (const [name, info] of Object.entries(base)) {
+    const r = ranks.get(name);
+    const s = sRanks.get(name);
+    map[name] = r || s ? { ...info, ...(r ? { r } : {}), ...(s ? { s } : {}) } : info;
   }
-  return tokens;
+  return map;
 }
 
-/** usageTokens(), but on a cold server waits up to `ms` for the first load — so the
- *  first manifest after a deploy carries ranks (browsers keep it for 5 minutes). */
-export async function usageTokensWithin(names: readonly string[], ms = 800): Promise<string[] | null> {
-  const now = usageTokens(names);
-  if (now || !inflight) return now;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([inflight, new Promise<void>((r) => { timer = setTimeout(r, ms); })]);
-  clearTimeout(timer);
-  return tokens;
+// The same ranks for STICKERS (a coin spend whose body is one big emote): which emotes this chat
+// has sent as stickers lately. The warmer fetches their sticker rung, which chat never renders.
+const STICKER_SQL = `SELECT meta->>'emote' AS tok
+  FROM site.coin_ledger
+ WHERE sink = 'sticker' AND created_at > now() - interval '30 days'
+   AND meta->>'emote' = ANY($1::text[])
+ GROUP BY 1
+ ORDER BY count(*) DESC, 1`;
+
+/** A ranked token list loaded in the background, at most once per TTL (header). */
+function rankLoader(sql: string, label: string) {
+  let tokens: string[] | null = null;
+  let loadedAt = 0;
+  let inflight: Promise<void> | null = null;
+
+  /** The list as it stands (null before the first load), refreshing in the background when stale. */
+  function current(names: readonly string[]): string[] | null {
+    if ((!tokens || Date.now() - loadedAt > TTL_MS) && !inflight) {
+      inflight = pool.query<{ tok: string }>(sql, [names])
+        .then(({ rows }) => { tokens = rows.map((r) => r.tok); loadedAt = Date.now(); })
+        .catch((err) => { console.warn(`[emotes] ${label} ranks failed:`, (err as Error).message); loadedAt = Date.now() - TTL_MS + 10 * 60_000; })
+        .finally(() => { inflight = null; });
+    }
+    return tokens;
+  }
+
+  /** current(), but on a cold server waits up to `ms` for the first load — so the first
+   *  manifest after a deploy carries ranks (browsers keep it for 5 minutes). */
+  return async function within(names: readonly string[], ms = 800): Promise<string[] | null> {
+    const now = current(names);
+    if (now || !inflight) return now;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([inflight, new Promise<void>((r) => { timer = setTimeout(r, ms); })]);
+    clearTimeout(timer);
+    return tokens;
+  };
 }
+
+export const usageTokensWithin = rankLoader(USAGE_SQL, "usage");
+export const stickerTokensWithin = rankLoader(STICKER_SQL, "sticker");

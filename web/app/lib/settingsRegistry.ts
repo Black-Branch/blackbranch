@@ -370,6 +370,10 @@ export const DEFAULTS = {
   emoteAutoSuggest:   false,
   streamAutoMute:     false,
   playerSmooth:       false,
+  pictureCache:          true,
+  pictureCacheEmotes:    true,
+  pictureCacheAvatars:   true,
+  pictureCachePreviews:  true,
   histLength:         "default" as HistoryLength,
   winDock:            "float",
   winFrom:            "bottom",
@@ -766,6 +770,25 @@ export const ENTRIES: Record<SettingKey, Entry> = {
     serialize: ser1, parse: bool1,
     effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_playerSmooth" })),
     control: { kind: "toggle", label: "Smoother playback (adds delay)" } }),
+  // Storage on this device (#244): which pictures the service worker keeps. Per DEVICE (a
+  // phone's storage is its own) and behavior (Reset and presets leave them). On by default.
+  // pictureCache.ts sends them to the worker on every change.
+  pictureCache: E({ ls: "chatStyle_pictureCache", prePaint: false, deviceLocal: true, behavior: true,
+    serialize: ser1, parse: bool1,
+    effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_pictureCache" })),
+    control: { kind: "toggle", label: "Cache pictures on this device" } }),
+  pictureCacheEmotes: E({ ls: "chatStyle_pictureCacheEmotes", prePaint: false, deviceLocal: true, behavior: true,
+    serialize: ser1, parse: bool1,
+    effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_pictureCacheEmotes" })),
+    control: { kind: "toggle", label: "Emotes and stickers" } }),
+  pictureCacheAvatars: E({ ls: "chatStyle_pictureCacheAvatars", prePaint: false, deviceLocal: true, behavior: true,
+    serialize: ser1, parse: bool1,
+    effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_pictureCacheAvatars" })),
+    control: { kind: "toggle", label: "Profile pictures" } }),
+  pictureCachePreviews: E({ ls: "chatStyle_pictureCachePreviews", prePaint: false, deviceLocal: true, behavior: true,
+    serialize: ser1, parse: bool1,
+    effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_pictureCachePreviews" })),
+    control: { kind: "toggle", label: "Link previews" } }),
 
   // Performance. Per-DEVICE — a phone's perf choices must never roam onto the
   // desktop via preset sync. Consumed via useLocalStorageString (the

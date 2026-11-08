@@ -565,7 +565,7 @@ signin_state() { host_state signin.cjs "$SIGNIN_CACHE" "sign-in providers" BB_SI
 # (results/mail-test.json: when, whether it was sent, the fixed code — no address, no password).
 cmd_mail() {
   need_root mail; need_install
-  [ "${1:-}" = test ] && [ "$#" -eq 2 ] || die "usage: blackbranch mail test <address>"
+  { [ "${1:-}" = test ] && [ "$#" -eq 2 ]; } || die "usage: blackbranch mail test <address>"
   [[ "$2" =~ ^[A-Za-z0-9._%+=-]{1,64}@[A-Za-z0-9.-]{1,253}$ ]] || die "not an address: $2"
   mail_state strict || die "the mail settings could not be read"
   [ -n "$MX_SMTP_HOST" ] || die "no mail server is set (Admin Panel → Site → Site, card Mail, or MAIL_SMTP_HOST in .env)"
@@ -1864,7 +1864,7 @@ discord_read() { # discord_read bot | guild <discord server id>
   local out file
   case "${1:-}" in
     bot) file=$DISCORD_BOT_RESULT; [ $# = 1 ] || { echo "not a Discord read"; return 1; } ;;
-    guild) [ $# = 2 ] && [[ "$2" =~ $DISCORD_GUILD_RE ]] || { echo "a Discord server id is 17 to 20 digits"; return 1; }; file=$DISCORD_GUILD_RESULT ;;
+    guild) { [ $# = 2 ] && [[ "$2" =~ $DISCORD_GUILD_RE ]]; } || { echo "a Discord server id is 17 to 20 digits"; return 1; }; file=$DISCORD_GUILD_RESULT ;;
     *) echo "not a Discord read"; return 1 ;;
   esac
   discord_bridge_up || return 1
@@ -2020,7 +2020,7 @@ To read what the last run found, on the server run: sudo blackbranch community r
   elif [ "$now" = ok ] && [ "$was" = failed ]; then
     alert 3 "community reconcile is working again" "The community's rooms are kept as the Admin Panel sets them again (a run worked at $(now_utc))."
   fi
-  printf '%s\n' "$now" > "$STATE/$COMMUNITY_OUTCOME.tmp" && mv -f "$STATE/$COMMUNITY_OUTCOME.tmp" "$STATE/$COMMUNITY_OUTCOME" || true
+  { printf '%s\n' "$now" > "$STATE/$COMMUNITY_OUTCOME.tmp" && mv -f "$STATE/$COMMUNITY_OUTCOME.tmp" "$STATE/$COMMUNITY_OUTCOME"; } || true
 }
 community_switch() { # community_switch true|false
   local want="$1" old
@@ -2512,7 +2512,7 @@ site_alert_topic() { # site_alert_topic <priority> → a topic address, or nothi
   local lines line k v wake="" quiet=""
   if postgres_up && lines=$(compose run --rm --no-deps -T -v "$BB_HOME/release/install/alerts:/bb-alerts:ro" \
        --entrypoint node stream-api /bb-alerts/topic.cjs 2>/dev/null); then
-    mkdir -p "$STATE" && ( umask 077; printf '%s\n' "$lines" > "$ALERT_TOPIC_CACHE.new" ) && mv -f "$ALERT_TOPIC_CACHE.new" "$ALERT_TOPIC_CACHE" || true
+    { mkdir -p "$STATE" && ( umask 077; printf '%s\n' "$lines" > "$ALERT_TOPIC_CACHE.new" ) && mv -f "$ALERT_TOPIC_CACHE.new" "$ALERT_TOPIC_CACHE"; } || true
   else
     lines=$(cat "$ALERT_TOPIC_CACHE" 2>/dev/null || true)
   fi
@@ -3871,7 +3871,7 @@ SQL
 cmd_user() {
   need_root user; need_install
   local usage="usage: blackbranch user admin <name> on|off"
-  [ "${1:-}" = admin ] && [ "$#" -eq 3 ] || die "$usage"
+  { [ "${1:-}" = admin ] && [ "$#" -eq 3 ]; } || die "$usage"
   case "$3" in on|off) ;; *) die "$usage" ;; esac
   local name="$2" server mxid out
   server=$(env_get MATRIX_SERVER_NAME)

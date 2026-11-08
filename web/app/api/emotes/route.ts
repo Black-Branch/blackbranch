@@ -2,7 +2,7 @@ import { timingSafeEqual } from "crypto";
 import { createCooldown } from "@/app/lib/rateLimit";
 import { sliceDecision } from "@/app/lib/emoteManifestGuard";
 import { twitchAppToken, twitchClientId } from "@/app/lib/twitch";
-import { usageTokensWithin, rankByUsage } from "@/app/lib/emoteUsageServer";
+import { usageTokensWithin, stickerTokensWithin, mergeRanks } from "@/app/lib/emoteUsageServer";
 import { instanceString } from "@/app/lib/instanceConfigServer";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 // visibly squish the emote. Omitted for BTTV (no dimensions in its API).
 // `still` = a static (first-frame) URL for an animated emote — see emoteMap.ts.
 // `h` = the emote's real 1x height (px), so the client sizes per emote (emoteRes.ts).
-// `r` (usage rank) is merged at GET time from emoteUsageServer — never cached in here.
+// `r` (usage rank) and `s` (sticker rank) are merged at GET time from emoteUsageServer — never cached in here.
 type EmoteInfo = { url: string; zeroWidth: boolean; ar?: number; still?: string; h?: number; r?: number };
 type EmoteMap = Record<string, EmoteInfo>;
 
@@ -338,20 +338,16 @@ async function rebuild(force: boolean, commit: boolean): Promise<RebuildResult> 
   return { map, slices, guarded };
 }
 
-// The manifest with each used emote's 30-day rank (`r`) merged in — a NEW object,
-// memoized per (manifest, usage list), so the module cache that emoteSubset and the
-// server pages read never carries ranks. Ranks are a warm-order hint only.
-let ranked: { base: EmoteMap; tokens: string[] | null; map: EmoteMap } | null = null;
-function withRanks(base: EmoteMap, tokens: string[] | null): EmoteMap {
-  if (!tokens) return base;
-  if (ranked && ranked.base === base && ranked.tokens === tokens) return ranked.map;
-  const ranks = rankByUsage(tokens, new Set(Object.keys(base)));
-  const map: EmoteMap = {};
-  for (const [name, info] of Object.entries(base)) {
-    const r = ranks.get(name);
-    map[name] = r ? { ...info, r } : info;
-  }
-  ranked = { base, tokens, map };
+// The manifest with each used emote's 30-day rank (`r`) and each stickered one's sticker rank
+// (`s`) merged in — a NEW object, memoized per (manifest, usage list, sticker list), so the module
+// cache that emoteSubset and the server pages read never carries ranks. Ranks are a warm-order
+// hint only.
+let ranked: { base: EmoteMap; tokens: string[] | null; stickers: string[] | null; map: EmoteMap } | null = null;
+function withRanks(base: EmoteMap, tokens: string[] | null, stickers: string[] | null): EmoteMap {
+  if (!tokens && !stickers) return base;
+  if (ranked && ranked.base === base && ranked.tokens === tokens && ranked.stickers === stickers) return ranked.map;
+  const map = mergeRanks(base, tokens, stickers);
+  ranked = { base, tokens, stickers, map };
   return map;
 }
 
@@ -359,8 +355,9 @@ export async function GET() {
   // Named `map`, not `manifest` — shadowing the module-level cache here made
   // the cache invisible to anyone reading this handler.
   const base = await getManifest();
-  const tokens = await usageTokensWithin(Object.keys(base));
-  const map = withRanks(base, tokens);
+  const names = Object.keys(base);
+  const [tokens, stickers] = await Promise.all([usageTokensWithin(names), stickerTokensWithin(names)]);
+  const map = withRanks(base, tokens, stickers);
   // Let the browser/edge cache the manifest so repeat loads and new tabs skip the
   // origin round-trip. The route is server-memoized already (30-min SWR above), and
   // the client always refetches once per load, so a short max-age + long SWR keeps

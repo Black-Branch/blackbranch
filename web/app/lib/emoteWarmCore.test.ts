@@ -58,6 +58,38 @@ test("a finished walk is skipped; a half one resumes at the tail; a stale or dif
   assert.deepEqual(warmNeeded(null, "K", now, plan), plan);
 });
 
+// Stickers render the largest rung (stickerResEmoteUrl), which chat never fetches.
+const big = (u: string, still: boolean) => (still ? u.replace("/2x.webp", "/4x_static.webp") : u.replace("/2x.webp", "/4x.webp"));
+const S: EmoteMap = {
+  ...E,
+  gA: { ...E.gA!, s: 2 },
+  far: { ...E.far!, s: 1 },
+};
+
+test("stickers: the recently-stickered emotes' sticker rung heads the tail, by sticker rank", () => {
+  const p = planWarm({ ...base, emotes: S, sticker: big });
+  assert.deepEqual(p.tail.slice(0, 2), ["https://cdn.7tv.app/emote/far/4x.webp", "https://cdn.7tv.app/emote/gA/4x.webp"]);
+  assert.ok(p.tail.includes("https://cdn.7tv.app/emote/far/2x.webp"), "the chat rung of a stickered emote still warms");
+  assert.ok(!p.hot.some((u) => u.includes("/4x")), "sticker rungs jumped ahead of the hot chat set");
+});
+
+test("stickers: animated off warms the sticker's still; 3g and Save-Data warm no sticker", () => {
+  const still = planWarm({ ...base, emotes: S, sticker: big, still: true });
+  assert.ok(still.tail.includes("https://cdn.7tv.app/emote/far/4x_static.webp"));
+  assert.ok(!still.tail.includes("https://cdn.7tv.app/emote/far/4x.webp"));
+  assert.ok(!planWarm({ ...base, emotes: S, sticker: big, net: { effectiveType: "3g" } }).tail.length);
+  assert.deepEqual(planWarm({ ...base, emotes: S, sticker: big, net: { saveData: true } }), { hot: [], tail: [] });
+});
+
+test("stickers: no sticker ranks (an older cached manifest) → the plan is the chat plan", () => {
+  assert.deepEqual(planWarm({ ...base, sticker: big }), planWarm(base));
+});
+
+test("the record key moves when the set of stickered emotes changes", () => {
+  assert.notEqual(warmRecordKey("1@31", false, E), warmRecordKey("1@31", false, S));
+  assert.notEqual(warmRecordKey("1@31", false, S), warmRecordKey("1@31", false, { ...S, gA: E.gA! }));
+});
+
 test("the record key moves with the display size, the still switch and the catalog", () => {
   const k = warmRecordKey("1@31", false, E);
   assert.notEqual(k, warmRecordKey("2@61", false, E));

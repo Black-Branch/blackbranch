@@ -28,7 +28,7 @@ test("27c: the emote cache sweeps to a cap — phone storage must not grow forev
   const src = readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8");
   assert.match(src, /EMOTE_CACHE_MAX\s*=\s*\d+/,
     "no cap constant — jtvnw pfps land in emote-cache-v3 with zero eviction");
-  const sweepAt = src.indexOf("async function sweepEmoteCache");
+  const sweepAt = src.indexOf("async function sweepCache");
   assert.notEqual(sweepAt, -1, "the sweep is gone");
   const sweep = src.slice(sweepAt, src.indexOf("\n}", sweepAt));
   assert.match(sweep, /cache\.keys\(\)/);
@@ -36,8 +36,10 @@ test("27c: the emote cache sweeps to a cap — phone storage must not grow forev
   // The sweep must actually be wired into the put path, not just defined.
   const putAt = src.indexOf("cache.put(href");
   assert.notEqual(putAt, -1, "vacuity anchor: the cache.put is gone");
-  assert.match(src.slice(putAt, putAt + 800), /sweepEmoteCache\(cache\)/,
+  assert.match(src.slice(putAt, putAt + 800), /sweepCache\(storeObj, cache\)/,
     "the sweep exists but nothing calls it after a put");
+  // …and the emote path stores through that put.
+  assert.match(src, /putPicture\(EMOTES, cache, href, res\)/, "the emote cache no longer stores through the swept put");
 });
 
 test("30: home page — signed-in reads chain off auth(), not off Twitch/YouTube", () => {

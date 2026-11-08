@@ -27,5 +27,6 @@
 // provider's nominal (BTTV squares that are not 28 px, per-message emotes).
 // `r` = 30-day usage rank (1 = most used) from /api/emotes; the warmer warms
 // by it. Absent = not used in that window.
-export type EmoteInfo = { url: string; zeroWidth: boolean; ar?: number; ch?: string | null; still?: string; h?: number; r?: number };
+// `s` = 30-day STICKER rank (1 = most stickered); the warmer fetches those emotes' sticker rung.
+export type EmoteInfo = { url: string; zeroWidth: boolean; ar?: number; ch?: string | null; still?: string; h?: number; r?: number; s?: number };
 export type EmoteMap = Record<string, EmoteInfo>;

@@ -50,9 +50,9 @@ export interface MenuSection {
   title: string;
   items: MenuItem[];
   tab: MenuTab;
-  /** ⑤ Behavior half B: an account-list editor drawn after the items
-   *  (BehaviorListPanel) — the hidden people or the highlighted words. */
-  panel?: "people" | "words";
+  /** A panel drawn after the items: an account-list editor (BehaviorListPanel) — the hidden
+   *  people or the highlighted words — or the device's picture storage (PictureStoragePanel). */
+  panel?: "people" | "words" | "storage";
   /** A sample drawn under the group's controls, in the colours they set (MentionColourPreview). */
   preview?: "mentionColours";
   /** One line under the group title — what the group does not say by its rows alone. */
@@ -112,6 +112,10 @@ export const SECTIONS: MenuSection[] = [
     hint: "Only on screens narrower than 608 px." },
   { title: "Tabs", tab: "site", items: [s("hideTabBar")] },
   { title: "Player", tab: "site", items: [s("streamAutoMute"), s("playerSmooth")] },
+  { title: "Storage on this device", tab: "site", items: [
+    s("pictureCache"),
+    s("pictureCacheEmotes", (v) => v.pictureCache), s("pictureCacheAvatars", (v) => v.pictureCache), s("pictureCachePreviews", (v) => v.pictureCache),
+  ], panel: "storage", hint: "Pictures you have seen show at once the next time. Kept on this device only." },
   // ── Effects ── (each switch lives here ONCE)
   // GLASS ≠ TRANSPARENCY: `transparencyOn` governs every translucent surface
   // (glass fill, bar tint, chat body tint); `glassOn` governs the blur ONLY,

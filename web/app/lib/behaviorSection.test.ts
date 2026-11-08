@@ -19,7 +19,10 @@ const BEHAVIOR_KEYS = ["mentionSound", "mentionHl", "upvoteHl", "eventHl", "spot
   // ⑥ Community: what shows + privacy (its four LOOK keys are not Behavior).
   "mxDeleted", "mxEditedTag", "mxUnread", "mxHideMuted", "mxReceipts", "mxTyping",
   // Task 17: the community Return key is behaviour (listed under Community › Composer since #242).
-  "communityReturnKey"];
+  "communityReturnKey",
+  // #244: the picture-cache switches (Site & bars › Storage on this device) are this device's
+  // storage, not a look — Reset and a preset must never turn caching back on or off.
+  "pictureCache", "pictureCacheEmotes", "pictureCacheAvatars", "pictureCachePreviews"];
 
 const behaviorSections = () => [...menu.matchAll(/\{ title: "([^"]+)", tab: "behavior", items: \[([^\]]*)\]/g)];
 
@@ -94,9 +97,10 @@ test("Reset and applying a look touch LOOK_KEYS only; a saved look omits Behavio
 test("People and Words carry the account-list panels", () => {
   assert.match(menu, /\{ title: "People", tab: "behavior", items: \[s\("hideBots"\)\], panel: "people" \}/);
   assert.match(menu, /\{ title: "Words", tab: "behavior", items: \[\], panel: "words" \}/);
-  assert.match(menu, /panel\?: "people" \| "words";/);
+  assert.match(menu, /panel\?: "people" \| "words" \| "storage";/);
   const cs = read("app", "components", "ChatSettings.tsx");
-  assert.match(cs, /\{section\.panel && <BehaviorListPanel kind=\{section\.panel\} \/>\}/);
+  // The storage panel (#244) is the one that is not an account list.
+  assert.match(cs, /\{section\.panel === "storage" \? <PictureStoragePanel \/> : section\.panel && <BehaviorListPanel kind=\{section\.panel\} \/>\}/);
   // No terminal.conf box in Settings — and so no /api/term call from opening Settings.
   assert.equal(existsSync(join(root, "app", "components", "TerminalConfPanel.tsx")), false, "the terminal.conf box is gone");
 });

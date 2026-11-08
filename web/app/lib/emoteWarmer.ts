@@ -3,9 +3,10 @@
 import type { EmoteMap } from "./emoteMap";
 import { planWarm, warmNeeded, warmRecordKey, type WarmNet, type WarmRecord } from "./emoteWarmCore";
 import { getRecentEmotes } from "./recentEmotes";
-import { emoteCrossOrigin, emoteSizingKey, rightSizeEmoteUrl } from "./emoteRes";
+import { emoteCrossOrigin, emoteSizingKey, rightSizeEmoteUrl, stickerResEmoteUrl, stickerStillUrl } from "./emoteRes";
 import { settingGet } from "./settingsRegistry";
 import { lsGetJSON, lsSetJSON } from "./safeLocalStorage";
+import { emoteCacheOn, readPicturePolicy, WARM_RECORD_KEY } from "./pictureCache";
 
 // Background emote warm — usage first, the tail after, ONCE per device.
 //
@@ -28,10 +29,13 @@ import { lsGetJSON, lsSetJSON } from "./safeLocalStorage";
 //
 // Animated emotes off (and Low power, which turns that switch off) → only the
 // still frames are warmed. Save-Data or a 2g link → nothing at all; 3g → hot only.
+// Stickers render the LARGEST rung, which chat never fetches: the emotes this chat has
+// stickered lately (`s` from /api/emotes) have that rung warmed at the head of the tail.
+// "Emotes and stickers" switched off in Settings › Storage on this device → no warm at all.
 
 const HOT_CONCURRENCY = 6;
 const TAIL_CONCURRENCY = 4;
-const RECORD_KEY = "emoteWarm_v1";
+const RECORD_KEY = WARM_RECORD_KEY;
 
 function prefetch(url: string): Promise<void> {
   // A GET warms the cache WITHOUT decoding — the later <img> for the same URL is a
@@ -89,14 +93,24 @@ export function warmEmotes(emotes: EmoteMap, withTail = true): void {
   latestTail = withTail;
   if (!listening) {
     listening = true;
-    // Flipping "Animated emotes" (or Low power) changes which URLs chat renders.
+    // Flipping "Animated emotes" (or Low power) changes which URLs chat renders; turning the
+    // emote cache back on refills it.
+    // (A beat later for the cache switches: the worker must hear "on" before the warm's fetches.)
+    const CACHE_SWITCHES = new Set(["chatStyle_pictureCache", "chatStyle_pictureCacheEmotes"]);
     window.addEventListener("bb:setting", (e) => {
-      if ((e as CustomEvent).detail === "chatStyle_animEmotes" && latest) warmEmotes(latest, latestTail);
+      const key = (e as CustomEvent).detail;
+      if (!latest) return;
+      if (key === "chatStyle_animEmotes") warmEmotes(latest, latestTail);
+      else if (CACHE_SWITCHES.has(key)) setTimeout(() => { if (latest) warmEmotes(latest, latestTail); }, 1000);
     });
   }
+  if (!emoteCacheOn(readPicturePolicy())) return;
   const still = settingGet("chatStyle_animEmotes") === "0";
   const key = warmRecordKey(emoteSizingKey(), still, emotes);
-  const plan = planWarm({ emotes, recent: getRecentEmotes(emotes), still, net: net(), size: (u, h) => rightSizeEmoteUrl(u, h) });
+  const plan = planWarm({
+    emotes, recent: getRecentEmotes(emotes), still, net: net(), size: (u, h) => rightSizeEmoteUrl(u, h),
+    sticker: (u, st) => { const big = stickerResEmoteUrl(u); return (st && stickerStillUrl(big)) || big; },
+  });
   const todo = warmNeeded(lsGetJSON<WarmRecord | null>(RECORD_KEY, null), key, Date.now(), plan);
   const fresh = (l: string[]) => l.filter((u) => !inFlight.has(u) && (inFlight.add(u), true));
   const hot = fresh(todo.hot);

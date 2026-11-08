@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { startPictureCache } from "@/app/lib/pictureCache";
 
 // Registers `public/sw.js` on EVERY route.
 //
@@ -24,6 +25,8 @@ export default function ServiceWorkerRegistrar() {
     // survive to the browser. This flag is decided client-side and cannot be
     // overridden by any CDN.
     navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => {});
+    // The viewer's picture-cache switches (Settings › Storage on this device), now and on change.
+    startPictureCache();
   }, []);
 
   return null;

@@ -24,8 +24,10 @@ export function planWarm(args: {
   still: boolean;
   net: WarmNet;
   size: (url: string, h?: number) => string;
+  /** The rung a sticker of this emote renders (the largest — emoteRes stickerResEmoteUrl). */
+  sticker?: (url: string, still: boolean) => string;
 }): WarmPlan {
-  const { emotes, recent, still, net, size } = args;
+  const { emotes, recent, still, net, size, sticker } = args;
   const et = net.effectiveType ?? "";
   if (net.saveData || et === "slow-2g" || et === "2g") return { hot: [], tail: [] };
 
@@ -56,14 +58,28 @@ export function planWarm(args: {
     return out;
   };
   const hot = urls(hotNames);
-  const tail = et === "3g" ? [] : urls([...ranked, ...unranked]);
-  return { hot, tail };
+  if (et === "3g") return { hot, tail: [] };
+  // Stickers head the tail: a sticker renders the largest rung, which chat never fetches, and
+  // it is the biggest thing on screen when it pops in late. The emotes this chat has stickered
+  // in the last 30 days (`s`), by rank.
+  const stickers: string[] = [];
+  if (sticker) {
+    for (const n of names.filter((x) => emotes[x]!.s).sort((a, b) => emotes[a]!.s! - emotes[b]!.s!)) {
+      const u = sticker(emotes[n]!.url, still);
+      if (u && !seen.has(u)) { seen.add(u); stickers.push(u); }
+    }
+  }
+  return { hot, tail: [...stickers, ...urls([...ranked, ...unranked])] };
 }
 
-/** Pure: the record key — any change in display size, still/animated or catalog re-runs the walk. */
+/** Pure: the record key — any change in display size, still/animated, catalog or the set of
+ *  stickered emotes re-runs the walk. */
 export function warmRecordKey(sizingKey: string, still: boolean, emotes: EmoteMap): string {
   let h = 0;
-  for (const n of Object.keys(emotes)) for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) | 0;
+  for (const n of Object.keys(emotes)) {
+    for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) | 0;
+    if (emotes[n]!.s) h = (h * 31 + 7) | 0;
+  }
   return `${sizingKey}|${still ? "s" : "a"}|${Object.keys(emotes).length}:${(h >>> 0).toString(36)}`;
 }
 

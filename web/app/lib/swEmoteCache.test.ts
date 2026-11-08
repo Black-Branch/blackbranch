@@ -1,6 +1,6 @@
 // Runs the REAL public/sw.js in a vm with fake `caches`/`fetch`, and drives its
 // fetch handler — behaviour, not a source scan. LRU by last use, a 30-day max
-// age, emotes only (no Twitch profile pictures), BTTV left to the HTTP cache,
+// age, emotes only in the emote cache (no Twitch profile pictures), BTTV left to the HTTP cache,
 // the <img>/warm priority split forwarded, and an error never cached.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,7 +31,7 @@ function makeEnv(opts: { fail?: (url: string) => boolean } = {}) {
   let now = 1_700_000_000_000;
   const timers: Array<() => void> = [];
   const ctx = {
-    self: { addEventListener: (t: string, f: (e: unknown) => void) => { listeners[t] = f; }, skipWaiting() {}, clients: { claim: async () => {} } },
+    self: { addEventListener: (t: string, f: (e: unknown) => void) => { listeners[t] = f; }, skipWaiting() {}, clients: { claim: async () => {} }, location: { origin: "https://site.example" } },
     caches: { open, keys: async () => [...stores.keys()], delete: async (n: string) => stores.delete(n), match: async () => undefined },
     fetch: async (url: string, init?: RequestInit) => {
       calls.push({ url: typeof url === "string" ? url : (url as { url: string }).url, init, ownRequest: typeof url !== "string" });
@@ -87,10 +87,13 @@ test("a CORS-mode request is fetched as the page's own request; a no-cors one ke
   assert.equal(up.init!.mode, "cors");
 });
 
-test("BTTV and Twitch profile pictures are NOT intercepted; Twitch emotes are", async () => {
+// Twitch profile pictures have their own capped cache (swPictureCache.test.ts): every chatter
+// ever seen must never compete with the emotes for the emote cache's slots.
+test("BTTV is NOT intercepted; Twitch emotes are; Twitch profile pictures never enter the emote cache", async () => {
   const env = makeEnv();
   assert.equal(await env.request("https://cdn.betterttv.net/emote/abc/2x.png"), null);
-  assert.equal(await env.request("https://static-cdn.jtvnw.net/jtv_user_pictures/x-profile_image-70x70.png"), null);
+  await env.request("https://static-cdn.jtvnw.net/jtv_user_pictures/x-profile_image-70x70.png");
+  assert.deepEqual(await env.emoteKeys(), [], "a profile picture landed in the emote cache");
   assert.notEqual(await env.request("https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0"), null);
 });
 

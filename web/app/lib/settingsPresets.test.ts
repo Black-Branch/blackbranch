@@ -227,7 +227,8 @@ test("the seven rail sections carry the agreed grouping", () => {
     rows: ["Names & badges", "Platform", "Avatars", "Layout", "Emotes"],
     colours: ["Text colours", "Mentions & highlights", "Panel colours", "Borders", "Shape", "Buttons"],
     // "On a phone": client polish Task 17 (the brief's phone group; edge to edge + community text).
-    site: ["Composer", "Sizes", "On a phone", "Tabs", "Player"],
+    // "Storage on this device": the picture-cache switches (#244, task 22, 2026-11-08).
+    site: ["Composer", "Sizes", "On a phone", "Tabs", "Player", "Storage on this device"],
     effects: ["Effects"],
     // Behavior (Highlights lives here, including "hide streamer highlight").
     behavior: ["Sound", "Highlights", "Messages", "People", "Words", "Tabs", "History", "Windows", "Terminal"],
@@ -245,5 +246,5 @@ test("the seven rail sections carry the agreed grouping", () => {
   // The group count is pinned — a regroup moves sections, it never loses one.
   // A removed SETTING can remove a group; a merge or a new section changes the
   // count on purpose. Update the number only with such a change.
-  assert.equal(SECTIONS.length, 35); // 34: Task 17 added "On a phone"; 35: #242 added Community › Composer
+  assert.equal(SECTIONS.length, 36); // 34: Task 17 added "On a phone"; 35: #242 added Community › Composer; 36: #244 added Site & bars › Storage on this device
 });

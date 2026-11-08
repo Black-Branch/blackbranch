@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import BehaviorListPanel from "./BehaviorListPanel";
+import PictureStoragePanel from "./PictureStoragePanel";
 import MentionColourPreview from "./MentionColourPreview";
 import { pullAccountSettings } from "../lib/accountSettings";
 import { migrateSettingsBlob } from "../lib/settingsMigrate";
@@ -312,7 +313,7 @@ export default function ChatPrefs({
     return (
       <Section key={section.title} title={section.title} hint={section.hint}>
         {section.items.map(renderItem)}
-        {section.panel && <BehaviorListPanel kind={section.panel} />}
+        {section.panel === "storage" ? <PictureStoragePanel /> : section.panel && <BehaviorListPanel kind={section.panel} />}
         {section.preview === "mentionColours" && <MentionColourPreview />}
       </Section>
     );
