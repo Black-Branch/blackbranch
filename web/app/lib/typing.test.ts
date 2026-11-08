@@ -53,10 +53,11 @@ test("both composers announce typing; only the main timeline shows it; ignored t
   assert.match(tl, /useTypingUsers\(\{ client, room, myUserId \}\)/);
   assert.match(tl, /\{typingText && <TypingLine text=\{typingText\} \/>\}/);
   assert.doesNotMatch(tp, /useTypingUsers|TypingLine/, "typing is room-level; the thread panel would show channel typers");
-  const hook = read("app/features/community/useTyping.ts", /\}\s*$/);
+  const hook = read("app/lib/useTyping.ts", /\}\s*$/);
   assert.match(hook, /isIgnoredUser\(room, id\)/);
-  assert.match(hook, /client\.on\(RoomMemberEvent\.Typing, onTyping\)/, "an m.typing event has no room_id — the SDK's re-emitted member event does");
-  assert.match(hook, /member\.roomId !== room\.roomId/, "only this room's typing member");
+  assert.match(hook, /client\.on\(ClientEvent\.Event, onEvent\)/, "every m.typing re-reads this room: the member re-emit misses members of a cloned room state");
+  assert.doesNotMatch(hook, /RoomMemberEvent\.Typing/, "never the member re-emit: a request accepted in this session never showed the other person typing");
+  assert.match(hook, /if \(ev\.getType\(\) !== "m\.typing"\) return;\s*const next = typingUserIds\(room, myUserId\);/, "the flags of THIS room, read after the SDK folded the event in");
   assert.doesNotMatch(hook, /getRoomId\(\)/, "an m.typing event carries no room_id — never filter on it");
   assert.match(hook, /sendTyping\(roomId, true, TYPING_TIMEOUT_MS\)/);
   assert.match(hook, /sendTyping\(roomId, false, 0\)/);

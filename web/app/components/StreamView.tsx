@@ -7,7 +7,7 @@ import type { EmoteMap } from "@/app/lib/emoteMap";
 import { playerPanelClass } from "@/app/lib/playerPanelClass";
 import { useRouter } from "next/navigation";
 import {
-  availableSources, sourceFromState, stateForSource, fallbackSource, youtubeLiveSrc, liveSourcesOn, liveSourceOn,
+  availableSources, sourceFromState, stateForSource, fallbackSource, youtubeLiveSrc, kickLiveSrc, liveSourcesOn, liveSourceOn,
   LIVE_SOURCE_KEY, parseLiveSource, liveSourceFromLegacy, legacyForLiveSource, liveSourceFromState,
   type PlayerSource, type LiveSource, type PlayerState,
 } from "@/app/lib/playerSource";
@@ -29,12 +29,15 @@ import { subscribeButton } from "@/app/features/support";
 import dynamic from "next/dynamic";
 import { type Vod } from "@/app/lib/vods";
 import type { HomePayload } from "@/app/lib/homePayload";
-import { type CommunitySource } from "@/app/lib/streamView";
+import { type CommunitySource, communityTarget } from "@/app/lib/streamView";
 import { useKeyboardOpenDetection } from "@/app/lib/useKeyboardOpenDetection";
 import { useKeyboardLift } from "@/app/lib/useKeyboardLift";
 import { barVisibility, type BarVisibility } from "@/app/lib/barVisibility";
 import { useSubscriptionStatus } from "@/app/lib/useSubscriptionStatus";
 import { useStreamStatusPoll } from "@/app/lib/useStreamStatusPoll";
+import { usePlatformStates } from "@/app/lib/usePlatformStates";
+import { liveSourcesLive, liveCardReason } from "@/app/lib/livePlatforms";
+import type { PublicSnapshot } from "@/app/lib/platformLiveness.generated.mjs";
 import { usePlayerFold } from "@/app/lib/usePlayerFold";
 import { useCoinHeartbeat } from "@/app/lib/useCoinHeartbeat";
 import { useNarrowViewport, narrowViewportNow } from "@/app/lib/useNarrowViewport";
@@ -69,6 +72,7 @@ export default function StreamView({
   streamTitle,
   viewerCount,
   initialYtVideoId,
+  initialLiveness,
   followerCount,
   donateUrl,
   subscribeUrl,
@@ -93,6 +97,9 @@ export default function StreamView({
   ytChannelId: string;
   /** The streamer's live YouTube broadcast id from the server render (v115), or null. */
   initialYtVideoId: string | null;
+  /** Each platform's public live state from the server render (/stream/current `liveness`);
+   *  `{ at: 0, platforms: {} }` when the render had none. usePlatformStates keeps it fresh. */
+  initialLiveness: PublicSnapshot;
   twitchChannel: string;
   spChannel: string;
   streamTitle: string;
@@ -125,8 +132,8 @@ export default function StreamView({
   /** The live sources this install has a channel for (liveSourcesSetUp, server render). Omitted =
    *  all. None = the live player says there is no player for this site's platforms. */
   liveSetUp?: readonly LiveSource[];
-  /** The Kick channel (platform.kick.slug), "" when unset: no Kick player exists yet, so a live
-   *  stream with no other source links to it. */
+  /** The Kick channel (platform.kick.slug), "" when unset: the Kick embed's channel, and the
+   *  card's "Watch on Kick" link while the Stream tab has Kick's embed switched off. */
   kickChannel?: string;
 }) {
   // The registered fallbacks whose module is on — this component's own reads, and the context
@@ -154,10 +161,6 @@ export default function StreamView({
     () => (liveSetUpKey === null ? undefined : liveSetUpKey ? (liveSetUpKey.split(",") as LiveSource[]) : []),
     [liveSetUpKey],
   );
-  const liveOn = useMemo(() => liveSourcesOn(embedsOffKey ? embedsOffKey.split(",") : [], setUpList), [embedsOffKey, setUpList]);
-  // A remembered source that is switched off plays the first one still on; nothing stored changes.
-  const liveSource = liveSourceOn(parseLiveSource(storedLive) ?? liveSourceFromLegacy(legacyEmbed, legacySpThin), liveOn);
-  const { active, spThinPlayer } = legacyForLiveSource(liveSource);
   const [pfpFailed, setPfpFailed] = useState(false);
   // Compact view: hides the video embed bar + MetaBar to reclaim vertical
   // space. The chat tab bar's far-left toggle is what restores them.
@@ -226,6 +229,10 @@ export default function StreamView({
   // switcher). Defaults to the first source; reset when the featured streamer changes.
   // Its writer is Community's dropdown on the rail.
   const [communityPlatform, setCommunityPlatform] = useState<CommunitySource["platform"] | null>(null);
+  // Which community streamer this viewer watches when more than one is live (0134: the viewer
+  // chooses). Its writer is the bottom bar's chooser; null = the featured one. Kept in this page's
+  // state only: a pick that leaves the list falls back to the featured one (communityTarget).
+  const [communityPick, setCommunityPick] = useState<string | null>(null);
   // The VOD the Replay tab plays — defaults to the latest broadcast so the first
   // pick from the dock / the mobile VODs tab has something to land on. Browsing
   // happens outside the player; only a pick changes it. The offline default is
@@ -251,8 +258,25 @@ export default function StreamView({
   const sourceRef = useRef<string>("");
   // ── Live/community status poll (see useStreamStatusPoll) — also owns the
   // live/community-edge tab auto-switch. ──
-  const { live, community, liveViewers, loopVideos, ytVideoId } =
+  const { live, community, communities, liveViewers, loopVideos, ytVideoId, liveness } =
     useStreamStatusPoll(isLive, viewerCount, initialYtVideoId, setTab, sourceRef, offlineTab);
+  // Each platform's live state (the server render's, then the platformStates frame and the poll).
+  const platforms = usePlatformStates(initialLiveness, liveness);
+  // The community entry on screen: the viewer's pick while it is listed, else the featured one.
+  const shownCommunity = communityTarget({ community, communities }, communityPick);
+  // The Live row: the set-up sources the Stream tab leaves on, minus those whose platform is offline
+  // or only scheduled (livePlatforms.ts) — no fail-open there: none left = the player's card.
+  const liveOn = useMemo(
+    () => liveSourcesLive(liveSourcesOn(embedsOffKey ? embedsOffKey.split(",") : [], setUpList), platforms),
+    [embedsOffKey, setUpList, platforms],
+  );
+  // What that card says: live elsewhere, ended, or no player set up.
+  const liveCard = liveCardReason(liveSourcesOn([], setUpList), liveOn, platforms);
+  // Kick's embed is on in the Stream tab: Kick plays in the player, so the card never links out to it.
+  const kickOffered = liveSourcesOn(embedsOffKey ? embedsOffKey.split(",") : [], setUpList).includes("kick");
+  // A remembered source that is not offered plays the first one that is; nothing stored changes.
+  const liveSource = liveSourceOn(parseLiveSource(storedLive) ?? liveSourceFromLegacy(legacyEmbed, legacySpThin), liveOn);
+  const { active, spThinPlayer } = legacyForLiveSource(liveSource);
 
   // Fold: `player_mode` = "none" unmounts the player and the bottom
   // bar and leaves the rail; any other value is a record of the last pick.
@@ -370,7 +394,7 @@ export default function StreamView({
   const tones = Object.fromEntries(railModes(fallbackIds).map((m) => [m, railTone(m, railStatus)])) as Record<RailMode, RailTone>;
   const mode = folded ? "none" : modeForTab(tab);
   const detail = folded ? null : modeDetail(modeForTab(tab), {
-    liveSource, communityName: community?.display_name ?? null, hasPlaylist: loopVideos.length > 0,
+    liveSource, communityName: shownCommunity?.display_name ?? null, hasPlaylist: loopVideos.length > 0,
     replay: tab === "replay",
   });
   const selectMode = useCallback((m: RailMode) => {
@@ -544,10 +568,12 @@ export default function StreamView({
   // logged into twitch.tv. No server-side ad bypass exists (ToS + infra); ads
   // are out of our control.
   const twSrc = `https://player.twitch.tv/?channel=${twitchChannel}&parent=${embedHost}&autoplay=true${startMuted ? "&muted=true" : ""}`;
+  // Kick's player picks its own quality (the caption under it says so); muted like the others on a phone.
+  const kkSrc = kickLiveSrc(kickChannel, startMuted);
 
   // Featured-streamer video sources + the currently selected one (defaults to
   // the first; falls back automatically when the featured streamer changes).
-  const communitySources = community?.sources ?? [];
+  const communitySources = shownCommunity?.sources ?? [];
   const communitySource =
     communitySources.find((s) => s.platform === communityPlatform) ?? communitySources[0] ?? null;
 
@@ -674,28 +700,30 @@ export default function StreamView({
           }}
         >
 
-          <StreamEmbedBar
-            overlay={bars.overlay}
-            hidden={bars.topHidden}
-            occluded={narrow && keyboardOpen && !bars.topHidden}
-            mode={mode}
-            tones={tones}
-            detail={detail}
-            onSelectMode={selectMode}
-            liveSource={liveSource}
-            liveOn={liveOn}
-            onSelectLiveSource={selectLiveSource}
-            communityPlatforms={communitySources}
-            communityPlatform={communitySource?.platform ?? null}
-            onSelectCommunityPlatform={(p) => setCommunityPlatform(p as CommunitySource["platform"])}
-            folded={folded}
-            onFold={toggleFold}
-            isMod={isMod}
-            setShowEmbedMgr={setShowEmbedMgr}
-            narrow={narrow}
-            panelMode={panelMode}
-            applyMode={applyMode}
-          />
+          <ErrorBoundary>
+            <StreamEmbedBar
+              overlay={bars.overlay}
+              hidden={bars.topHidden}
+              occluded={narrow && keyboardOpen && !bars.topHidden}
+              mode={mode}
+              tones={tones}
+              detail={detail}
+              onSelectMode={selectMode}
+              liveSource={liveSource}
+              liveOn={liveOn}
+              onSelectLiveSource={selectLiveSource}
+              communityPlatforms={communitySources}
+              communityPlatform={communitySource?.platform ?? null}
+              onSelectCommunityPlatform={(p) => setCommunityPlatform(p as CommunitySource["platform"])}
+              folded={folded}
+              onFold={toggleFold}
+              isMod={isMod}
+              setShowEmbedMgr={setShowEmbedMgr}
+              narrow={narrow}
+              panelMode={panelMode}
+              applyMode={applyMode}
+            />
+          </ErrorBoundary>
 
           {/* Player — sized by .player-attached / .player-fill (see globals.css).
               In normal view the bars HUG the video (attached, top-aligned, the
@@ -721,57 +749,65 @@ export default function StreamView({
             onTransitionEnd={onRegionTransitionEnd}
           >
             {(!folded || playerMounted) && (
-              <StreamPlayerArea
-                isSignedIn={isSignedIn}
-                fallbackCollapsed={fallbackCollapsed}
-                onToggleFallbackCollapsed={toggleFallbackCollapsed}
-                tab={tab}
-                live={live}
-                active={active}
-                spSrc={spSrc}
-                ytSrc={ytSrc}
-                twSrc={twSrc}
-                twitchChannel={twitchChannel}
-                twStartMuted={startMuted}
-                community={community}
-                communitySource={communitySource}
-                loopVideos={loopVideos}
-                embedHost={embedHost}
-                selectedVod={selectedVod}
-                vodStartMuted={autoMute}
-                spThinPlayer={spThinPlayer}
-                spStartMuted={startMuted}
-                spChannel={spChannel}
-                onToggleSpPlayer={() => setSource("streamplace")}
-                onPlayerLive={setTwitchLiveHint}
-                livePlayable={liveOn.length > 0}
-                kickChannel={kickChannel}
-              />
+              <ErrorBoundary>
+                <StreamPlayerArea
+                  isSignedIn={isSignedIn}
+                  fallbackCollapsed={fallbackCollapsed}
+                  onToggleFallbackCollapsed={toggleFallbackCollapsed}
+                  tab={tab}
+                  live={live}
+                  active={active}
+                  spSrc={spSrc}
+                  ytSrc={ytSrc}
+                  twSrc={twSrc}
+                  kkSrc={kkSrc}
+                  twitchChannel={twitchChannel}
+                  twStartMuted={startMuted}
+                  community={shownCommunity}
+                  communitySource={communitySource}
+                  loopVideos={loopVideos}
+                  embedHost={embedHost}
+                  selectedVod={selectedVod}
+                  vodStartMuted={autoMute}
+                  spThinPlayer={spThinPlayer}
+                  spStartMuted={startMuted}
+                  spChannel={spChannel}
+                  onToggleSpPlayer={() => setSource("streamplace")}
+                  onPlayerLive={setTwitchLiveHint}
+                  livePlayable={liveOn.length > 0}
+                  liveCard={liveCard}
+                  kickChannel={kickOffered ? "" : kickChannel}
+                />
+              </ErrorBoundary>
             )}
           </div>
 
           {!folded && (
-            <StreamMetaBar
-              overlay={bars.overlay}
-              hidden={bars.bottomHidden}
-              live={live}
-              community={community}
-              tab={tab}
-              streamerAvatar={streamerAvatar}
-              streamerName={streamerName}
-              pfpFailed={pfpFailed}
-              setPfpFailed={setPfpFailed}
-              streamTitle={streamTitle}
-              selectedVod={selectedVod}
-              followerCount={followerCount}
-              liveViewers={liveViewers}
-              subscribed={subscribed}
-              openSupport={openSupport}
-              donateUrl={donateUrl}
-              // No subscription for sale (no Stripe price, no PayPal plan) and no outside link
-              // (money.subscribeUrl) = nowhere to subscribe: no button.
-              subscribeUrl={subscribeBtn.shown ? subscribeUrl : null}
-            />
+            <ErrorBoundary>
+              <StreamMetaBar
+                overlay={bars.overlay}
+                hidden={bars.bottomHidden}
+                live={live}
+                community={shownCommunity}
+                communities={communities}
+                onPickCommunity={setCommunityPick}
+                tab={tab}
+                streamerAvatar={streamerAvatar}
+                streamerName={streamerName}
+                pfpFailed={pfpFailed}
+                setPfpFailed={setPfpFailed}
+                streamTitle={streamTitle}
+                selectedVod={selectedVod}
+                followerCount={followerCount}
+                liveViewers={liveViewers}
+                subscribeLabel={subscribeBtn.label}
+                openSupport={openSupport}
+                donateUrl={donateUrl}
+                // No subscription for sale (no Stripe price, no PayPal plan) and no outside link
+                // (money.subscribeUrl) = nowhere to subscribe: no button.
+                subscribeUrl={subscribeBtn.shown ? subscribeUrl : null}
+              />
+            </ErrorBoundary>
           )}
 
         </div>{/* end video panel frame */}
@@ -785,18 +821,20 @@ export default function StreamView({
              Compact keeps the dock with its tab row parked as an overlay;
              theatre alone removes it. ── */}
         {!narrow && panelMode !== "theatre" && (
-          <BottomDock
-            videoColRef={videoColRef}
-            barsOverlay={barsParked}
-            vods={vods}
-            homeInitial={homeInitial}
-            selectedVodId={selectedVod?.id ?? null}
-            onPickVod={pickVod}
-            isSignedIn={isSignedIn}
-            live={live}
-            isAdmin={isAdmin}
-            onWatchCommunity={() => setSource("community")}
-          />
+          <ErrorBoundary>
+            <BottomDock
+              videoColRef={videoColRef}
+              barsOverlay={barsParked}
+              vods={vods}
+              homeInitial={homeInitial}
+              selectedVodId={selectedVod?.id ?? null}
+              onPickVod={pickVod}
+              isSignedIn={isSignedIn}
+              live={live}
+              isAdmin={isAdmin}
+              onWatchCommunity={() => setSource("community")}
+            />
+          </ErrorBoundary>
         )}
       </div>
 
@@ -867,7 +905,8 @@ export default function StreamView({
               homeInitial={homeInitial}
               selectedVodId={selectedVod?.id ?? null}
               onPickVod={pickVod}
-              onWatchCommunity={() => setSource("community")} />
+              onWatchCommunity={() => setSource("community")}
+              communityKey={shownCommunity?.key ?? null} />
           </ErrorBoundary>
         </div>
       </div>

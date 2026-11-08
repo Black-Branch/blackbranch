@@ -4,7 +4,7 @@ import { getStripe, stripeModuleOn } from "@/app/lib/stripe";
 import { tierByPriceId, isActiveStatus, TIERS } from "@/app/lib/tiers";
 import { invalidateTier } from "@/app/lib/entitlements";
 import { syncSubscriberBadge } from "@/app/lib/billingServer";
-import { resolveMatrixId, syncSubscriptionState } from "@/app/lib/subscriptionSync";
+import { paidSubscriptionCard, syncSubscriptionState } from "@/app/lib/subscriptionSync";
 import { recordGift } from "@/app/lib/giftServer";
 import { recordCoinPurchase, moneyCredits } from "@/app/lib/coinsServer";
 import { tipCreditFromSession } from "@/app/lib/tipCredit";
@@ -15,7 +15,7 @@ import { reverseStripeSupport } from "@/app/lib/paymentReversalsLedger";
 // streamApiPost swallow. Every payload below carries a
 // Stripe-derived spendId; /chat/event's outcome store dedups on it.
 import { broadcastChatEvent } from "@/app/lib/chatEventDelivery";
-import { renewalFromInvoice, tenureMonths } from "@/app/lib/subRenewal";
+import { tipCardIdentity } from "@/app/lib/tipCardIdentity";
 import { NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { instanceString } from "@/app/lib/instanceConfigServer";
@@ -50,29 +50,22 @@ export async function POST(req: NextRequest) {
 
   try {
     switch (event.type) {
-      case "customer.subscription.created": {
-        // The ONE event that fires the "X subscribed" card (third argument).
-        const sub = event.data.object as Stripe.Subscription;
-        await syncSubscription(sub, event.created, sub);
-        break;
-      }
+      case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted":
         await syncSubscription(event.data.object as Stripe.Subscription, event.created);
         break;
       case "invoice.paid":
-        // A RENEWAL (subscription_cycle only — renewalFromInvoice guards). The
-        // first invoice is credited by customer.subscription.created above; a
-        // renewal otherwise arrives only as subscription.updated with announce
-        // off, so the site's own recurring income would never reach the bar or
-        // stream.support_events.
-        await recordRenewal(stripe, event.data.object as Stripe.Invoice);
+        // The ONE source of every "subscribed" / "resubscribed" card: month one
+        // (subscription_create) and each renewal (subscription_cycle). The state
+        // events above are delivered in any order and a stale one is dropped, so
+        // a card hung off them could be lost; a paid invoice is paid once.
+        await recordPaidInvoice(event.data.object as Stripe.Invoice);
         break;
       case "checkout.session.completed": {
         const cs = event.data.object as Stripe.Checkout.Session;
         if (cs.mode === "subscription" && cs.subscription) {
-          // Don't announce here — a new sub also fires customer.subscription.created,
-          // so announcing on both would double-card. That event owns the card.
+          // Never announced here: invoice.paid owns the card.
           const id = typeof cs.subscription === "string" ? cs.subscription : cs.subscription.id;
           await syncSubscription({ id }, event.created);
         } else if (cs.mode === "payment") {
@@ -123,9 +116,17 @@ export async function POST(req: NextRequest) {
         await handleDispute(event);
         await reverseStripeSupport(event);
         break;
-      case "invoice.payment_failed":
+      case "invoice.payment_failed": {
         await handleInvoicePaymentFailed(event);
+        // Stripe's last retry leaves no next attempt: re-read the subscription so the transition
+        // function ends it then (stripeRecords.ts settleFinalRetry), whatever the Dashboard's
+        // last-retry action does to Stripe's own status (A1-08).
+        const failed = event.data.object as Stripe.Invoice;
+        const subRef = failed.parent?.subscription_details?.subscription;
+        const subId = typeof subRef === "string" ? subRef : subRef?.id;
+        if (subId) await syncSubscription({ id: subId }, event.created);
         break;
+      }
     }
   } catch (e) {
     // 500 so Stripe retries — never silently drop a billing event.
@@ -198,18 +199,10 @@ async function recordDonation(cs: Stripe.Checkout.Session) {
   // re-highlight the donation in chat.
   if ((ins.rowCount ?? 0) === 0) return;
 
-  // #6: highlight the donation as a chat message from the donor. Resolve the
-  // donor's display name + chat color (unless anonymous) so the highlight matches
-  // how they appear in chat. Best-effort: the donation is already recorded above.
-  let donor = displayName;
-  let usernameColor: string | null = null;
-  let usernameStyle: object | null = null;
-  if (!anonymous && matrixId) {
-    const identity = await getChatIdentity(matrixId);
-    donor = donor || identity.username;
-    usernameColor = identity.usernameColor;
-    usernameStyle = identity.usernameStyle;
-  }
+  // #6: highlight the donation as a chat message from the donor. The card wears the donor's
+  // account (badges, colour, style) only under the account's own name — a typed name is a plain
+  // card (tipCardIdentity.ts, ADR 0145). Best-effort: the donation is already recorded above.
+  const identity = !anonymous && matrixId ? await getChatIdentity(matrixId) : null;
   await broadcastChatEvent({
     kind: "donation",
     // Session-derived idempotency key: this celebration is what credits the
@@ -217,73 +210,46 @@ async function recordDonation(cs: Stripe.Checkout.Session) {
     // protects it from a restart window is only legal because /chat/event
     // dedups on this id (mirroring announceGift).
     spendId: `donation:${cs.id}`,
-    donor: anonymous ? "Anonymous" : donor || "Anonymous",
-    donorMatrixId: anonymous ? null : matrixId,
-    anonymous,
+    ...tipCardIdentity({ anonymous, matrixId, shownName: displayName, identity }),
     amount,
     currency: cs.currency ?? "usd",
     message,
-    usernameColor,
-    usernameStyle,
   });
 }
 
-// Celebrate + credit a subscription renewal. Writes NOTHING to
-// site.subscriptions — syncSubscription (from the subscription.updated that
-// accompanies every cycle) stays the only writer of tier/status. This path
-// only sends the card that makes stream-api credit the bar + support_events,
-// exactly as the first month's card does.
-async function recordRenewal(stripe: Stripe, inv: Stripe.Invoice) {
-  const renewal = renewalFromInvoice(inv);
-  if (!renewal) return;
-  const sub = await stripe.subscriptions.retrieve(renewal.subscriptionId);
-  const customerId = renewal.customerId ?? (typeof sub.customer === "string" ? sub.customer : sub.customer.id);
-  const matrixId = await resolveMatrixId(sub, customerId);
-  if (!matrixId) {
-    console.error("[billing] no matrix_id for renewal", inv.id, sub.id);
-    return;
-  }
-  // Tenure = paid invoices on this subscription. Best-effort: a listing
-  // failure still announces the renewal, floored at two months.
-  const paid = await stripe.invoices
-    .list({ subscription: sub.id, status: "paid", limit: 100 })
-    .then((r) => r.data.length)
-    .catch(() => 0);
-  const identity = await getChatIdentity(matrixId);
-  const tier = tierByPriceId(sub.items.data[0]?.price?.id ?? null);
+// Celebrate + credit a paid subscription month (the first or a renewal). Writes
+// NOTHING to site.subscriptions — syncSubscription stays the only writer of
+// tier/status. This path only sends the card that makes stream-api credit the
+// bar + support_events; its spendId (subscriptionSync.ts paidInvoiceCard) is
+// fixed by the invoice, so every delivery and retry dedups to one credit.
+async function recordPaidInvoice(inv: Stripe.Invoice) {
+  const card = await paidSubscriptionCard(inv);
+  if (!card) return;
+  const identity = await getChatIdentity(card.matrixId);
+  const tier = tierByPriceId(card.priceId);
   await broadcastChatEvent({
     kind: "sub",
-    // The invoice id is constant across every delivery of the same
-    // invoice.paid, so a retry dedups to ONE bar credit — and it is distinct
-    // from the first month's `sub:<subscription id>`.
-    spendId: `renewal:${inv.id}`,
+    spendId: card.spendId,
     subscriber: identity.username,
-    subscriberMatrixId: matrixId,
+    subscriberMatrixId: card.matrixId,
     usernameColor: identity.usernameColor,
     usernameStyle: identity.usernameStyle,
     tier: tier?.name ?? "Supporter",
-    months: tenureMonths(paid, sub.trial_end != null),
-    amount: renewal.amount, // cents
-    currency: renewal.currency,
+    months: card.months,
+    amount: card.amount, // cents
+    currency: card.currency,
   });
 }
 
 // Mirror a subscription into site.subscriptions (subscriptionSync.ts holds the
 // upsert, called from nowhere else), then everything that follows a written
 // state change. Only the subscription's id is read from the event: the state
-// written is Stripe's current one (see subscriptionSync.ts). `announceFrom` is
-// the customer.subscription.created snapshot — the ONE event that fires the
-// "X subscribed" card, so it happens exactly once per new sub (not on
-// renewals/updates or the overlapping checkout); the card is about that event,
-// so it is built from it. `eventAt` is the Stripe Event's `created` (unix seconds).
-async function syncSubscription(
-  ref: Pick<Stripe.Subscription, "id">,
-  eventAt: number,
-  announceFrom: Stripe.Subscription | null = null
-) {
+// written is Stripe's current one (see subscriptionSync.ts). `eventAt` is the
+// Stripe Event's `created` (unix seconds). Announces nothing — invoice.paid does.
+async function syncSubscription(ref: Pick<Stripe.Subscription, "id">, eventAt: number) {
   const wrote = await syncSubscriptionState(ref, eventAt);
   // Nothing written (no viewer for it, or a stale event): do NOT touch the
-  // badge, cache or announcement, or we would undo newer state.
+  // badge or cache, or we would undo newer state.
   if (!wrote) return;
   const { matrixId, effectiveTier } = wrote;
   const state = wrote.sub; // the state that was WRITTEN, which may be newer than the event's
@@ -296,33 +262,4 @@ async function syncSubscription(
 
   // Drop the cached tier so chat perks reflect the change without TTL lag.
   invalidateTier(matrixId);
-
-  // Celebrate a brand-new subscription in chat (mirrors donation/gift cards).
-  // Resolve the subscriber's display name + color so the card matches how they
-  // appear in chat; pass the price so stream-api credits the support bar +
-  // support_events (subs are income). Best-effort — broadcastChatEvent never throws.
-  // A TRIALING sub (a card bought during a gift — checkout's trial_end) has paid nothing yet: its
-  // first charge comes at the trial's end as a subscription_cycle invoice, which recordRenewal
-  // celebrates and credits. Crediting the price here too would count income that never arrived.
-  const sub = announceFrom;
-  if (sub && isActiveStatus(sub.status) && sub.status !== "trialing") {
-    const identity = await getChatIdentity(matrixId);
-    const price = sub.items.data[0]?.price;
-    const tier = tierByPriceId(price?.id ?? null);
-    await broadcastChatEvent({
-      kind: "sub",
-      // The subscription id is constant across every delivery of the same
-      // `customer.subscription.created`, so a redelivered or retried announce
-      // dedups to one bar credit.
-      spendId: `sub:${sub.id}`,
-      subscriber: identity.username,
-      subscriberMatrixId: matrixId,
-      usernameColor: identity.usernameColor,
-      usernameStyle: identity.usernameStyle,
-      tier: tier?.name ?? "Supporter",
-      months: 1,
-      amount: price?.unit_amount ?? 0, // cents
-      currency: price?.currency ?? "usd",
-    });
-  }
 }

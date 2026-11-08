@@ -65,11 +65,11 @@ export function pinnedFirst(posts: readonly ForumPostView[]): ForumPostView[] {
   return [...posts.filter((p) => p.pinned), ...posts.filter((p) => !p.pinned)];
 }
 
-/** The widget's rows: threads with replies first (newest activity first), then the rest, capped. */
+/** The widget's rows: most recent activity first (the newest reply, or the post itself when it has
+ *  none), capped — the Forums tab's "active" order. Replied threads used to go first, which parked a
+ *  new post under weeks-old threads (#237: Home should default to most recent activity). */
 export function topThreads(posts: readonly ForumPostView[], limit: number): HomeThread[] {
-  const byActivity = [...posts].sort((a, b) => b.lastTs - a.lastTs);
-  const ordered = [...byActivity.filter((p) => p.replyCount > 0), ...byActivity.filter((p) => p.replyCount === 0)];
-  return ordered.slice(0, limit).map((p) => ({
+  return sortPostViews(posts, "active").slice(0, limit).map((p) => ({
     roomId: p.roomId, roomName: p.roomName, eventId: p.id, title: p.title, replyCount: p.replyCount, lastTs: p.lastTs,
   }));
 }

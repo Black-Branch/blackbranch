@@ -101,7 +101,7 @@ test("messages rows render the text through renderText with the message's own em
   assert.match(src, /<img src=\{r\.emoteUrl\}[^>]*alt=\{r\.name\}/);
   assert.match(src, /useLocalStorageString\("home_board_face"\)/);
   assert.match(src, /getJson<Rank \| null>\(`\/api\/home\/rank\?face=\$\{face\}&window=\$\{win\}`\)/);
-  assert.match(src, /usernameStyleCSS\(r\.style, r\.color\)/);
+  assert.match(src, /usernameStyleCSS\(r\.style, r\.color, r\.name\)/);
   assert.match(src, /windowsFor\(face\)\.includes\(wanted\) \? wanted : windowsFor\(face\)\[0\]/, "a Stream pick on the Streams face falls to its first offered window (Week)");
   assert.match(src, /rank\.rank <= 10/, "in the ten → highlight, no eleventh row");
   assert.match(src, /rank\.rank > 10/, "beyond the ten → the You row");

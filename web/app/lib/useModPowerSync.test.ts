@@ -93,3 +93,32 @@ test("a grant still writes 50 through the real SDK", async () => {
   await runModPowerPlan(client, [{ roomId: "!a", userIds: ["@rosalind:site.test"] }], async () => {});
   assert.deepEqual(sent, [{ roomId: "!a", users: { "@casey:site.test": 100, "@rosalind:site.test": 50 } }]);
 });
+
+test("does nothing when the install has a reconciler", async () => {
+  // The reconciler owns power levels then (spec 2026-10-23 §4.1): the admin's browser writes none.
+  // Run for real in a React root; the same render with the reconciler off is the control.
+  const { mountHook } = await import("./testDom.ts");
+  const { useModPowerSync } = await import("./useModPowerSync.ts");
+  const saved = process.env.INSTALL_VALUES;
+  const fetched: string[] = [];
+  globalThis.fetch = (async (u: RequestInfo | URL) => {
+    fetched.push(String(u));
+    return new Response(JSON.stringify({ modIds: ["@mod:site.test"], keepIds: [] }), { status: 200 });
+  }) as typeof fetch;
+  const run = async (reconciler: string) => {
+    process.env.INSTALL_VALUES = JSON.stringify({ "community.reconciler": reconciler });
+    const { client } = fakeClient();
+    const rooms = [{ roomId: "!a" }] as never;
+    const h = await mountHook(() => useModPowerSync(client, rooms, "@admin:site.test"));
+    await h.act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    await h.unmount();
+  };
+  try {
+    await run("true");
+    assert.deepEqual(fetched, [], "with a reconciler: the mod list is not even read, so no power is written");
+    await run("false");
+    assert.ok(fetched.length > 0, "control: without a reconciler the sync runs");
+  } finally {
+    if (saved === undefined) delete process.env.INSTALL_VALUES; else process.env.INSTALL_VALUES = saved;
+  }
+});

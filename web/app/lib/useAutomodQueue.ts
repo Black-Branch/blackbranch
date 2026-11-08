@@ -111,7 +111,7 @@ export type AutomodQueue = {
   automod: AutomodState;
   pending: number;
   /** Keyed on the ROW id — a blocklist row has no Twitch message id. */
-  resolve: (id: number, action: "allow" | "deny") => Promise<"ok" | "expired" | "failed">;
+  resolve: (id: number, action: "allow" | "deny") => Promise<ResolveOutcome>;
 };
 
 /**
@@ -135,7 +135,7 @@ export function useAutomodQueue(enabled: boolean): AutomodQueue {
   }, [enabled]);
 
   const resolve = useCallback(
-    async (id: number, action: "allow" | "deny"): Promise<"ok" | "expired" | "failed"> => {
+    async (id: number, action: "allow" | "deny"): Promise<ResolveOutcome> => {
       // Drop it locally first: the mod has decided, and leaving the row on
       // screen for up to a poll invites a second click on a resolved hold.
       store.held = (store.held ?? []).filter((m) => m.id !== id);
@@ -144,6 +144,16 @@ export function useAutomodQueue(enabled: boolean): AutomodQueue {
         const res = await postJson("/api/mod/automod/resolve", { id, action });
         void refresh();
         if (res.status === 410) return "expired";
+        if (res.status === 403) {
+          const t = await res.text().catch(() => "");
+          return { refused: t && t.length < 120 ? t : "That one goes to another moderator." };
+        }
+        if (res.status === 409) {
+          const b = (await res.json().catch(() => ({}))) as { error?: string };
+          if (b.error === "sender_banned") return { refused: "Not posted — the sender is banned." };
+          if (b.error === "sender_gone") return { refused: "Not posted — the sender's chat identity no longer exists here." };
+          if (b.error === "already_resolved") return { refused: "That one was already resolved." };
+        }
         return res.ok ? "ok" : "failed";
       } catch {
         void refresh();   // resync — the optimistic removal may have been wrong
@@ -154,6 +164,19 @@ export function useAutomodQueue(enabled: boolean): AutomodQueue {
   );
 
   return { held: store.held, automod: store.automod, pending: store.held?.length ?? 0, resolve };
+}
+
+/** What resolving a held line came to. `refused` carries the words the mod is shown: the line is
+ *  not theirs to resolve (the moderation ceiling), or it can no longer be posted (its sender was
+ *  banned or deleted since) — in which case it was dropped. */
+export type ResolveOutcome = "ok" | "expired" | "failed" | { refused: string };
+
+/** The note a resolve outcome leaves for the mod, or null when there is nothing to say. */
+export function resolveNote(r: ResolveOutcome): string | null {
+  if (r === "ok") return null;
+  if (r === "expired") return "That hold already expired on Twitch.";
+  if (r === "failed") return "Couldn't resolve that — try again.";
+  return r.refused;
 }
 
 /** A row with nothing waiting to publish — a 'blocked' word hit, or automod's 'flagged' platform

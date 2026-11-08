@@ -28,18 +28,25 @@ test("no video report at all → every counter null", () => {
 test("the message names kind, reason, states, attempt and node, and the stack is the JSON payload", () => {
   const ev = buildPlayerEvent({
     kind: "reconnect", reason: "grace-expired", connectionState: "disconnected", iceConnectionState: "disconnected",
-    attempt: 2, node: "https://prod-sea0.stream.place", mode: "webrtc",
+    attempt: 2, node: "https://prod-sea0.stream.place", mode: "webrtc", phase: "media", elapsedMs: 41234,
     counters: { freezeCount: 1, totalFreezesDuration: 0.5, totalPausesDuration: null, packetsLost: 4, nackCount: 0, pliCount: null, jitter: 0.01, framesDecoded: 10, framesDropped: null },
   });
-  assert.equal(ev.message, "player reconnect: grace-expired — pc=disconnected/disconnected attempt=2 node=https://prod-sea0.stream.place");
+  assert.equal(ev.message, "player reconnect: grace-expired — pc=disconnected/disconnected phase=media attempt=2 node=https://prod-sea0.stream.place");
   const parsed = JSON.parse(ev.stack);
   assert.equal(parsed.kind, "reconnect");
   assert.equal(parsed.counters.packetsLost, 4);
   assert.equal(parsed.counters.pliCount, null);
+  assert.equal(parsed.elapsedMs, 41234, "the attempt's age rides in the payload");
+  assert.doesNotMatch(ev.message, /41234/, "never in the message: it would split one decision into a row per millisecond");
+});
+
+test("the phase names how far the attempt got: a request our site never answered reads phase=signal", () => {
+  const ev = buildPlayerEvent({ kind: "reconnect", reason: "watchdog", connectionState: "new", iceConnectionState: "new", attempt: 1, node: null, mode: "webrtc", phase: "signal", elapsedMs: 12500, counters: null });
+  assert.match(ev.message, /^player reconnect: watchdog — pc=new\/new phase=signal attempt=1 /);
 });
 
 test("an unknown node prints as ? and a null counters block survives", () => {
-  const ev = buildPlayerEvent({ kind: "failed", reason: "not-advancing", connectionState: "failed", iceConnectionState: "failed", attempt: 4, node: null, mode: "webrtc", counters: null });
+  const ev = buildPlayerEvent({ kind: "failed", reason: "not-advancing", connectionState: "failed", iceConnectionState: "failed", attempt: 4, node: null, mode: "webrtc", phase: "connect", elapsedMs: 9000, counters: null });
   assert.match(ev.message, / node=\?$/);
   assert.equal(JSON.parse(ev.stack).counters, null);
 });

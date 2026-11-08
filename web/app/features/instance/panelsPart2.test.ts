@@ -62,7 +62,7 @@ test("a plugin's place nests after the place it names; without a plugin there is
   assert.deepEqual(adminPanels, []);
   const rail = adminRail([{ section: "ai", key: "behavior", label: "Bot behavior", after: "bot" }]);
   const ai = rail.filter((x) => x.section === "ai").map((x) => `${x.sub}:${x.depth}${x.plugin ? "*" : ""}`);
-  assert.deepEqual(ai, ["models:0", "bot:0", "behavior:1*", "scoring:0", "automod:0", "helpdesk:0", "embeddings:0"]);
+  assert.deepEqual(ai, ["models:0", "bot:0", "behavior:1*", "automod:0", "helpdesk:0", "embeddings:0"]);
   // One naming a place that does not exist goes to the section's end, not nested.
   const end = adminRail([{ section: "site", key: "x", label: "X", after: "nope" }]).filter((x) => x.section === "site").at(-1)!;
   assert.deepEqual([end.sub, end.depth, end.plugin], ["x", 0, true]);

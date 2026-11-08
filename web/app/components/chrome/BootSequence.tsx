@@ -6,8 +6,10 @@
 // "Loading Matrix… Preparing encryption…", staged and animated,
 // never a bare spinner. What moves: the ACTIVE mark pulses (opacity + scale,
 // the compositor's), and a mark's fill eases on the house token when its
-// stage completes. A failed stage renders its reason and, when the host
-// can retry, a Try again control — a stage is never silently stuck.
+// stage completes. A slow stage says how long it has run (its note, visual
+// only — the live region names the stage, never a ticking count). A failed
+// stage renders its reason and, when the host can retry, a Try again
+// control — a stage is never silently stuck.
 //
 // Chrome owns this so every loading surface — the community pane, the
 // encryption section, a window's in-body placeholder (Window.tsx `loading`),
@@ -44,6 +46,7 @@ export function BootSequence({ keys, label, onRetry, compact = false }: BootSequ
             <span className="chrome-boot-mark" />
             <span className="chrome-boot-label">{s.label}</span>
             {s.status === "error" && s.error && <span className="chrome-boot-detail">{s.error}</span>}
+            {s.status === "active" && s.note && <span className="chrome-boot-detail">{s.note}</span>}
           </li>
         ))}
       </ol>

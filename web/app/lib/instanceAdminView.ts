@@ -4,8 +4,9 @@
 
 import { installValue, installValues, type InstallKey } from "./installValues.ts";
 import { instanceState, instanceStatusReport } from "./instanceConfigServer.ts";
-import { INSTANCE_KEYS } from "./instanceSchema.generated.mjs";
+import { INSTANCE_KEYS, signinProviderId } from "./instanceSchema.generated.mjs";
 import { isHostRendered, type HostResult } from "./hostRequests.ts";
+import { signinRedirectUrl } from "./signinProviders.ts";
 
 type Pkg = "web" | "stream-api" | "stream-ingest";
 const PACKAGES: Pkg[] = ["web", "stream-api", "stream-ingest"];
@@ -36,6 +37,12 @@ export type InstanceView = {
     module: string; values?: string[]; defaultValue: unknown; testable: boolean; envNames: string[];
     /** Applied by the host re-rendering the homeserver's config, not read by a service. */
     hostApplied: boolean;
+    /** Install tier: `sudo blackbranch set` changes it (a display value). */
+    settable?: boolean;
+    /** Install tier: the install's identity, which never changes. */
+    permanent?: boolean;
+    /** A value to paste at an outside provider, computed for this install (a sign-in provider's redirect URL). */
+    paste?: { label: string; value: string };
     stored: null | { display: unknown; updatedBy: string; updatedAt: string; readable?: boolean; error?: string | null };
     packages: { package: Pkg; known: boolean; source: string | null; envName: string | null; display: unknown; error: string | null; envOverrides: boolean }[];
     tests: { package: string; testedAt: string; ok: boolean; detail: string }[];
@@ -73,13 +80,19 @@ export function buildInstanceView(s: StreamApiSnapshot | null, botSpeakOn: Insta
   ];
   // Install keys: the values web read from its environment at boot (installValuesServer.ts).
   const installed = installValues();
+  const issuer = installed["matrix.oauth.issuer"] ?? null;
   // `surface: 'ai'` keys belong to the AI section; `surface: 'setup'` ones are the setup
   // pages' own progress — neither is a row here.
   const keys = INSTANCE_KEYS.filter((e) => !e.surface).map((e) => {
     const perPkg = (p: Pkg): PkgStatus | null => {
       if (!e.packages.includes(p)) return null;
       if (p === "web") {
-        if (e.tier === "install") return { source: "env", envName: e.env[0] ?? null, display: installed[e.key as InstallKey] ?? null, error: null };
+        if (e.tier === "install") {
+          const raw = installed[e.key as InstallKey];
+          // A switch is carried as its word; the row shows it as the switch it is.
+          const display = e.kind === "bool" ? (raw === "true" ? true : raw === "false" ? false : null) : raw ?? null;
+          return { source: "env", envName: e.env[0] ?? null, display, error: null };
+        }
         return webStatus[e.key] ?? null;
       }
       if (p === "stream-api") return s?.self?.[e.key] ?? null;
@@ -98,10 +111,15 @@ export function buildInstanceView(s: StreamApiSnapshot | null, botSpeakOn: Insta
       ? (sec ? { display: sec.last4 ? `…${sec.last4}` : "(set)", updatedBy: sec.updatedBy, updatedAt: sec.updatedAt, readable: sec.readable, error: sec.error } : null)
       : (plainMeta && s?.values && e.key in s.values ? { display: s.values[e.key], updatedBy: plainMeta.updatedBy, updatedAt: plainMeta.updatedAt } : null);
     const shown = packages.filter((p) => p.display !== null).map((p) => JSON.stringify(p.display));
+    // A sign-in slot's switch: the redirect URL for its provider id (the OpenID slot's follows its saved issuer).
+    const slot = /^signin\.([a-z]+)\.enabled$/.exec(e.key)?.[1];
+    const providerId = slot ? signinProviderId(slot, webStatus[`signin.${slot}.issuer`]?.display) : null;
+    const redirect = providerId ? signinRedirectUrl(issuer, providerId) : null;
     return {
       key: e.key, label: e.label, description: e.description, tier: e.tier, kind: e.kind, secret: e.secret,
       reload: e.reload, module: e.module, values: e.values, defaultValue: e.default, testable: !!e.test, envNames: e.env,
-      hostApplied: isHostRendered(e.key),
+      hostApplied: isHostRendered(e.key), settable: !!e.settable, permanent: !!e.permanent,
+      ...(redirect ? { paste: { label: "Redirect URL to paste at the provider", value: redirect } } : {}),
       stored, packages,
       tests: (s?.tests ?? []).filter((t) => t.key === e.key).map((t) => ({ package: t.package, testedAt: t.testedAt, ok: t.ok, detail: t.detail })),
       disagree: new Set(shown).size > 1,

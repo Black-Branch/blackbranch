@@ -193,6 +193,29 @@ test("the Install values card: closed, every row its value with a lock, nothing 
   await unmount();
 });
 
+test("a sign-in provider's switch shows the redirect URL to paste at the provider, with a Copy button", async () => {
+  const url = "https://matrix.site.test/auth/upstream/callback/01M6W7E48SQRP7WM6CF3PM0QQH";
+  const sw = key({ key: "signin.discord.enabled", label: "Sign in with Discord", kind: "bool", reload: "restart", hostApplied: true,
+    paste: { label: "Redirect URL to paste at the provider", value: url }, packages: [pkg("web", false)] });
+  const el = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(el);
+  const root = createRoot(el);
+  await act(async () => {
+    root.render(React.createElement(KeyCards as never, { view: view({ keys: [sw] }), groups: [{ section: "site", sub: "general", title: "Sign-in providers", keys: [sw.key] }], onChanged: () => {}, note: () => {} }));
+  });
+  const row = rowOf(el, "signin.discord.enabled");
+  const paste = row.querySelector("[data-paste]");
+  assert.ok(paste, "the URL is on the switch's row, shown while the switch is off too");
+  assert.equal(paste.querySelector("code")?.textContent, url);
+  assert.match(paste.textContent ?? "", /Redirect URL to paste at the provider/);
+  assert.ok(paste.querySelector('button[aria-label="Copy Redirect URL to paste at the provider"]'));
+  // A row without one shows none.
+  await act(async () => { root.unmount(); });
+  const { el: plain, unmount } = await mount();
+  assert.equal(plain.querySelector("[data-paste]"), null);
+  await unmount(); el.remove();
+});
+
 test("the time zone is picked from a list of zone names, starting from the saved one", async () => {
   const tz = key({ key: "site.timeZone", label: "Time zone", packages: [pkg("web", "Europe/Berlin")] });
   const { el, unmount } = await mountGroups([{ section: "site", sub: "general", title: "Running", keys: ["site.timeZone"] }], [tz]);
@@ -239,19 +262,25 @@ test("a platform id found from its channel is shown, not typed, with Find again;
   await act(async () => { root.unmount(); el.remove(); });
 });
 
-test("Player: one switch per live source (on = offered); a flip saves the whole off-list; the last one on stays on", async () => {
-  const off = (list: string[]) => key({ key: "player.embedsOff", label: "Player sources switched off", kind: "list", values: ["native", "streamplace", "youtube", "twitch"], packages: [pkg("web", list)] });
+test("Player: one switch per live source (on = offered), each named in words; a flip saves the whole off-list; the last one on stays on", async () => {
+  // The sources are the schema's own list, so a source added there (Kick, ADR 0135) gets a switch with a name.
+  const { INSTANCE_KEYS } = await import("../../lib/instanceSchema.generated.mjs");
+  const sources = (INSTANCE_KEYS as readonly { key: string; values?: string[] }[]).find((e) => e.key === "player.embedsOff")!.values!;
+  assert.deepEqual(sources, ["native", "streamplace", "youtube", "twitch", "kick"]);
+  const off = (list: string[]) => key({ key: "player.embedsOff", label: "Player sources switched off", kind: "list", values: sources, packages: [pkg("web", list)] });
   const g = [{ section: "platforms", sub: "player", title: "Player", keys: ["player.embedsOff"] }];
   const a = await mountGroups(g, [off(["youtube"])]);
   const row = rowOf(a.el, "player.embedsOff");
   assert.equal(row.querySelector("input"), null, "no comma list to type");
   const sw = (item: string) => row.querySelector(`[data-item="${item}"] [role=switch]`) as HTMLButtonElement;
-  assert.deepEqual(["native", "streamplace", "youtube", "twitch"].map((i) => sw(i).getAttribute("aria-checked")), ["true", "true", "false", "true"]);
+  assert.deepEqual(sources.map((i) => sw(i).getAttribute("aria-checked")), ["true", "true", "false", "true", "true"]);
+  assert.deepEqual(sources.map((i) => row.querySelector(`[data-item="${i}"] span:not([class])`)?.textContent),
+    ["The site's own player", "Streamplace", "YouTube", "Twitch", "Kick"], "each switch is named in words, never the stored value");
   sent = [];
   await act(async () => { sw("twitch").click(); });
   assert.deepEqual(sent, [{ url: "/api/admin/instance/player.embedsOff", method: "PUT", body: { value: ["youtube", "twitch"] } }]);
   await a.unmount();
-  const b = await mountGroups(g, [off(["native", "streamplace", "youtube"])]);
+  const b = await mountGroups(g, [off(["native", "streamplace", "youtube", "kick"])]);
   assert.equal((rowOf(b.el, "player.embedsOff").querySelector('[data-item="twitch"] [role=switch]') as HTMLButtonElement).disabled, true, "the last source on cannot be switched off");
   await b.unmount();
 });
@@ -266,4 +295,89 @@ test("a read-only card with its own note (the community rooms): the note, never 
   assert.doesNotMatch(row.textContent ?? "", /on the server, then restart|MATRIX_HUB_ROOM_ID/);
   assert.equal(row.querySelector("input, select, button[type=submit]"), null);
   await unmount();
+});
+
+test("after a save the row keeps focus on its input; each Save/Check names its setting", async () => {
+  // The panel reloads its view after every save (AdminPanel loadInst): the new view carries the new
+  // value and a new saved-at. The row must survive that reload, or focus falls to <body>.
+  const name = (v: string, at: string) => key({ key: "streamer.displayName", label: "Streamer name",
+    stored: { display: v, updatedBy: "@casey:site.test", updatedAt: at }, packages: [pkg("web", v)] });
+  const sw = (on: boolean, at: string) => key({ key: "modules.stripe", label: "Card payments", kind: "bool",
+    stored: { display: on, updatedBy: "@casey:site.test", updatedAt: at }, packages: [pkg("web", on)] });
+  const secret = key({ key: "stripe.secretKey", label: "Stripe secret key", kind: "secret", secret: true, testable: true,
+    stored: { display: "…wxyz", updatedBy: "@casey:site.test", updatedAt: "2026-10-18T09:00:00Z" }, packages: [pkg("web", "…wxyz")] });
+  let keys = [name("Casey", "2026-10-18T09:00:00Z"), sw(true, "2026-10-18T09:00:00Z"), secret];
+  const groups = [{ section: "site", sub: "general", title: "Card", keys: keys.map((k) => k.key) }];
+  const el = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(el);
+  const root = createRoot(el);
+  const render = () => root.render(React.createElement(KeyCards as never, { view: view({ keys }), groups, onChanged: reload, note: () => {} }));
+  function reload() { keys = [name("Casey Two", "2026-10-25T09:00:00Z"), sw(false, "2026-10-25T09:00:01Z"), secret]; render(); }
+  await act(async () => { render(); });
+  const doc = dom.window.document;
+
+  // Enter in the text box saves; the panel reloads; the same input still has focus, with the new value.
+  const input = rowOf(el, "streamer.displayName").querySelector("input") as HTMLInputElement;
+  input.focus();
+  assert.ok(doc.activeElement === input, "focus is on the input before the save");
+  await type(input, "Casey Two");
+  await submit(rowOf(el, "streamer.displayName").querySelector("form")!);
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  assert.equal(rowOf(el, "streamer.displayName").querySelector("input")?.value, "Casey Two", "the reload reached the row");
+  assert.ok(input.isConnected, "the row's input survived the reload");
+  assert.ok(doc.activeElement === input, `focus stayed on the input, not ${doc.activeElement?.tagName}`);
+  // Retry: a second save from the same input keeps focus too (and the draft follows the new value).
+  assert.equal(input.value, "Casey Two");
+
+  // A switch flipped from the keyboard keeps focus through its reload.
+  const toggle = rowOf(el, "modules.stripe").querySelector('[role="switch"]') as HTMLButtonElement;
+  toggle.focus();
+  await act(async () => { toggle.click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  assert.equal(toggle.getAttribute("aria-checked"), "false", "the reload reached the switch");
+  assert.ok(toggle.isConnected && doc.activeElement === toggle, `focus stayed on the switch, not ${doc.activeElement?.tagName}`);
+
+  // Each button names the setting it acts on.
+  const labels = [...el.querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent);
+  for (const want of ["Save Streamer name", "Clear saved Streamer name", "Clear saved Card payments", "Save Stripe secret key", "Clear saved Stripe secret key", "Check Stripe secret key"]) {
+    assert.ok(labels.includes(want), `a button named "${want}" (have: ${labels.join(" | ")})`);
+  }
+  assert.ok(!labels.some((l) => l === "Save" || l === "Check" || l === "Clear saved"), "no bare Save / Check / Clear saved");
+  await act(async () => { root.unmount(); el.remove(); });
+});
+
+test("a permanent install value says it never changes; only SETTABLE_KEYS rows name blackbranch set", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { INSTANCE_KEYS } = await import("../../lib/instanceSchema.generated.mjs");
+  const { KEY_GROUPS } = await import("./adminLayout.ts");
+  const REPO = join(import.meta.dirname, "../../../..");
+  const bb = readFileSync(join(REPO, "install/blackbranch"), "utf8");
+  const settable = bb.match(/\nSETTABLE_KEYS=\(\n?([\s\S]*?)\n?\)/)![1]!.split(/\s+/).filter(Boolean);
+  // The install's identity: the rows `blackbranch help` lists as permanent (install/restart-settings.tsv).
+  const permanent = readFileSync(join(REPO, "install/restart-settings.tsv"), "utf8").split("\n")
+    .map((l) => l.split("\t")).filter((c) => c[1] === "permanent").map((c) => c[0]!);
+  assert.ok(settable.length >= 15 && permanent.length >= 7, `vacuity: ${settable.length} settable, ${permanent.length} permanent`);
+  const installWeb = (INSTANCE_KEYS as readonly { key: string; tier: string; env: string[]; packages: string[]; label: string }[])
+    .filter((e) => e.tier === "install" && e.packages.includes("web"));
+  const rows = installWeb.map((e) => key({ key: e.key, label: e.label, tier: "install", reload: "restart", envNames: e.env,
+    settable: settable.includes(e.env[0]!), permanent: permanent.includes(e.key), packages: [pkg("web", "x", "env")] }));
+  const { el, unmount } = await mountGroups([{ section: "site", sub: "general", title: "Install", keys: rows.map((r) => r.key) }], rows);
+  for (const e of installWeb) {
+    const text = rowOf(el, e.key).textContent ?? "";
+    if (settable.includes(e.env[0]!)) assert.match(text, new RegExp(`sudo blackbranch set ${e.env[0]}`), `${e.key}: a display value names its command`);
+    else assert.doesNotMatch(text, /blackbranch set/, `${e.key}: blackbranch set refuses it, so the row never names it`);
+    if (permanent.includes(e.key)) {
+      assert.match(text, /never changes/, `${e.key}: the identity says it never changes`);
+      assert.doesNotMatch(text, /To change it/, `${e.key}: and gives no way to change it`);
+    }
+  }
+  await unmount();
+  const card = KEY_GROUPS.find((g) => g.title === "Install values")!;
+  assert.match(card.blurb ?? "", /never change/);
+  assert.doesNotMatch(card.blurb ?? "", /To change one/);
+  // The marks the panel reads are the host's lists.
+  const schema = INSTANCE_KEYS as readonly { key: string; env: string[]; settable?: boolean; permanent?: boolean }[];
+  assert.deepEqual(schema.filter((e) => e.settable).map((e) => e.env[0]).sort(), [...settable].sort(), "settable = SETTABLE_KEYS");
+  assert.deepEqual(schema.filter((e) => e.permanent).map((e) => e.key).sort(), [...permanent].sort(), "permanent = the tsv's permanent rows");
 });

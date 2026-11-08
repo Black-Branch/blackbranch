@@ -13,6 +13,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
+const crypto = require('node:crypto');
 const { createIdentity } = require('./identity');
 const { serially } = require('./testlib/db-serial.js');
 
@@ -174,4 +175,132 @@ test('erased_restrictions against real Postgres', async (t) => {
     for (const r of reads) assert.match(r.replace(/\s+/g, ' '), /expires_at IS NULL OR \w*\.?expires_at > NOW\(\)/, `an unfiltered read: ${r}`);
     assert.match(src, /module\.exports/, 'vacuity: identity.js was read to its exports');
   });
+});
+
+// A3-06: a deleted account's restriction ends like a live account's — with the ban's lift, or with
+// its case (the held-message retention, ADR 0104) — and the daily prune deletes ended rows. It used
+// to have no end at all: "Already linked" forever, and a carried mark on every new identity.
+test('an unban ends a deleted account\'s ban restriction; a case restriction ends with its case', async (t) => {
+  if (!URL) {
+    assert.ok(!process.env.CI, 'SQL_PARSE_DATABASE_URL must be set in CI — this gate must not skip itself there');
+    t.skip('SQL_PARSE_DATABASE_URL not set');
+    return;
+  }
+  const pool = new Pool({ connectionString: URL });
+  const GONE = '@g6r-gone:site.test';
+  const MOD = '@g6r-mod:site.test';
+  const clean = () => serially(pool, async () => {
+    const minted = (await pool.query(`SELECT canonical FROM stream.links WHERE platform_id LIKE 'g6r-%'`)).rows.map((r) => r.canonical);
+    await pool.query(`DELETE FROM site.user_marks WHERE platform_user LIKE 'g6r-%' OR canonical_id = ANY($1)`, [minted]);
+    await pool.query(`DELETE FROM stream.erased_restrictions WHERE platform_id LIKE 'g6r-%'`);
+    await pool.query(`DELETE FROM stream.links WHERE platform_id LIKE 'g6r-%'`);
+    await pool.query(`DELETE FROM stream.nameidx WHERE canonical = ANY($1)`, [minted]);
+    await pool.query(`DELETE FROM stream.user_stats WHERE user_id = ANY($1)`, [minted]);
+    await pool.query(`DELETE FROM stream.users WHERE id = ANY($1)`, [minted]);
+    await pool.query(`DELETE FROM site.community_unbans WHERE matrix_id = $1`, [GONE]);
+    await pool.query(`DELETE FROM site.bans WHERE matrix_id = $1`, [GONE]);
+    await pool.query(`DELETE FROM site.users WHERE matrix_id = ANY($1)`, [[GONE, MOD]]);
+  });
+  await clean();
+  t.after(async () => { await clean(); await pool.end(); });
+  const { RESTRICTION_UPSERT_SQL, restrictionEnd } = require('./account-erase');
+  const { createAutomod, AUTOMOD_HELD_RETENTION_DAYS } = require('./automod');
+  const expiresOf = async (pid) => (await pool.query(`SELECT reason, expires_at FROM stream.erased_restrictions WHERE platform_id = $1`, [pid])).rows[0];
+  const marked = async (pid) => {
+    const identity = createIdentity({ pool, requestAggregateRefresh: () => {} });
+    const id = await quiet(() => identity.resolveOrCreate('twitch', pid, `p-${pid}`));
+    return (await pool.query(`SELECT 1 FROM site.user_marks WHERE canonical_id = $1 AND cleared_at IS NULL`, [id])).rowCount > 0;
+  };
+
+  await t.test('the lift of a deleted account\'s ban (web LIFT_BAN_SQL) ends its ban restriction', async () => {
+    for (const m of [GONE, MOD]) await pool.query(`INSERT INTO site.users (matrix_id, display_name) VALUES ($1, 'x')`, [m]);
+    await pool.query(`INSERT INTO site.bans (matrix_id, banned_by, expires_at) VALUES ($1, $2, NULL)`, [GONE, MOD]);
+    await pool.query(RESTRICTION_UPSERT_SQL, [['twitch'], ['g6r-banned'], GONE, 'ban', null]);
+    const { LIFT_BAN_SQL } = await import('../web/app/lib/community/unbans.ts');
+    await pool.query(LIFT_BAN_SQL, [GONE, MOD, crypto.randomUUID()]);
+    const row = await expiresOf('g6r-banned');
+    assert.ok(row.expires_at && new Date(row.expires_at).getTime() <= Date.now(), `the ban restriction outlived the unban: ${JSON.stringify(row)}`);
+    assert.equal(await marked('g6r-banned'), false, 'the platform id\'s next identity was still marked after the unban');
+    // A retry of the lift changes nothing, and never revives it.
+    await pool.query(LIFT_BAN_SQL, [GONE, MOD, crypto.randomUUID()]);
+    assert.ok(new Date((await expiresOf('g6r-banned')).expires_at).getTime() <= Date.now());
+  });
+
+  await t.test('a case restriction ends with the held-message retention; a ban with no end stays permanent', () => {
+    const now = Date.parse('2026-10-25T12:00:00.000Z');
+    const caseEnd = new Date(now + AUTOMOD_HELD_RETENTION_DAYS * 86_400_000).toISOString();
+    assert.equal(restrictionEnd({ keepLinks: false, restrictionExpiresAt: null }, now), caseEnd, 'a case restriction has no end');
+    assert.equal(restrictionEnd({ keepLinks: false, restrictionExpiresAt: '2026-11-01T00:00:00.000Z' }, now), '2026-11-01T00:00:00.000Z', 'web\'s end was not used');
+    assert.equal(restrictionEnd({ keepLinks: true, restrictionExpiresAt: null }, now), null, 'a permanent ban got an end');
+    assert.equal(restrictionEnd({ keepLinks: true, restrictionExpiresAt: '2026-10-26T00:00:00.000Z' }, now), '2026-10-26T00:00:00.000Z');
+  });
+
+  await t.test('the daily prune deletes ended restrictions and keeps running ones (and a second run deletes nothing)', async () => {
+    await pool.query(RESTRICTION_UPSERT_SQL, [['twitch'], ['g6r-case'], GONE, 'case', new Date(Date.now() - 1000).toISOString()]);
+    await pool.query(RESTRICTION_UPSERT_SQL, [['twitch'], ['g6r-open'], GONE, 'case', new Date(Date.now() + 86_400_000).toISOString()]);
+    await pool.query(RESTRICTION_UPSERT_SQL, [['twitch'], ['g6r-perm'], GONE, 'ban', null]);
+    const am = createAutomod({ pool, ai: {}, config: { get: () => null }, log: { log() {}, warn() {} } });
+    const first = await am.dailyPrune();
+    assert.ok(first.restrictions >= 2, `pruned ${first.restrictions} ended restrictions`);
+    assert.equal(await expiresOf('g6r-case'), undefined, 'an ended case restriction was kept');
+    assert.equal(await expiresOf('g6r-banned'), undefined, 'a lifted ban restriction was kept');
+    assert.equal((await expiresOf('g6r-open')).reason, 'case', 'a running case restriction was pruned');
+    assert.deepEqual(await expiresOf('g6r-perm'), { reason: 'ban', expires_at: null }, 'a permanent ban restriction was pruned');
+    const second = await am.dailyPrune();
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM stream.erased_restrictions WHERE platform_id LIKE 'g6r-%'`)).rows[0].n, 2);
+    assert.equal(typeof second.restrictions, 'number');
+  });
+});
+
+// Round 1 (reviewer): rows written before c73b02e4 for a deleted TIMEOUT with an open case read
+// reason 'ban', expires_at NULL — permanent by mistake. migrations/migrate-v170.sql gives them the
+// end the current rule writes, from what the rows hold; a real permanent ban keeps none.
+test('an old NULL row after the migration (v170): a deleted timeout\'s restriction ends; a permanent ban\'s does not', async (t) => {
+  if (!URL) {
+    assert.ok(!process.env.CI, 'SQL_PARSE_DATABASE_URL must be set in CI — this gate must not skip itself there');
+    t.skip('SQL_PARSE_DATABASE_URL not set');
+    return;
+  }
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const MIGRATION = fs.readFileSync(path.join(__dirname, '..', 'migrations', 'migrate-v170.sql'), 'utf8');
+  const pool = new Pool({ connectionString: URL });
+  const [TO, PERM, LIFTED, MOD] = ['@g7r-to:site.test', '@g7r-perm:site.test', '@g7r-lifted:site.test', '@g7r-mod:site.test'];
+  const people = [TO, PERM, LIFTED, MOD];
+  const clean = () => serially(pool, async () => {
+    await pool.query(`DELETE FROM stream.erased_restrictions WHERE platform_id LIKE 'g7r-%'`);
+    await pool.query(`DELETE FROM site.bans WHERE matrix_id = ANY($1)`, [people]);
+    await pool.query(`DELETE FROM site.users WHERE matrix_id = ANY($1)`, [people]);
+  });
+  await clean();
+  t.after(async () => { await clean(); await pool.end(); });
+  for (const m of people) await pool.query(`INSERT INTO site.users (matrix_id, display_name) VALUES ($1, 'x')`, [m]);
+  // Deleted 2 days ago: a 1-hour timeout (long over), a permanent ban, a ban since lifted (no row).
+  await pool.query(`INSERT INTO site.bans (matrix_id, banned_by, expires_at) VALUES ($1, $3, now() - interval '2 days' + interval '1 hour'), ($2, $3, NULL)`, [TO, PERM, MOD]);
+  for (const [pid, who] of [['g7r-to', TO], ['g7r-perm', PERM], ['g7r-lifted', LIFTED]]) {
+    await pool.query(`INSERT INTO stream.erased_restrictions (platform, platform_id, matrix_id, reason, expires_at, created_at)
+                      VALUES ('kick', $1, $2, 'ban', NULL, now() - interval '2 days')`, [pid, who]);
+  }
+  // Round 2: the same old rule wrote every CASE restriction with no end either.
+  await pool.query(`INSERT INTO stream.erased_restrictions (platform, platform_id, matrix_id, reason, expires_at, created_at)
+                    VALUES ('kick', 'g7r-case', $1, 'case', NULL, now() - interval '2 days')`, [LIFTED]);
+  const row = async (pid) => (await pool.query(
+    `SELECT expires_at, created_at FROM stream.erased_restrictions WHERE platform_id = $1`, [pid])).rows[0];
+  const days = (r) => (new Date(r.expires_at).getTime() - new Date(r.created_at).getTime()) / 86_400_000;
+
+  await pool.query(MIGRATION);
+  const to = await row('g7r-to');
+  assert.ok(to.expires_at, 'a deleted timeout\'s restriction is still endless');
+  assert.ok(Math.abs(days(to) - 30) < 0.01, `the timeout's restriction should end with the case window, got ${days(to)} days`);
+  assert.equal((await row('g7r-perm')).expires_at, null, 'a permanent ban\'s restriction was given an end');
+  const lifted = await row('g7r-lifted');
+  assert.ok(lifted.expires_at && Math.abs(days(lifted) - 30) < 0.01, 'a lifted ban\'s endless row was not given the case window');
+  const caseRow = await row('g7r-case');
+  assert.ok(caseRow.expires_at && Math.abs(days(caseRow) - 30) < 0.01, 'an old endless case restriction was not given the case window');
+
+  // A retry of the migration changes nothing.
+  const before = (await pool.query(`SELECT platform_id, expires_at FROM stream.erased_restrictions WHERE platform_id LIKE 'g7r-%' ORDER BY 1`)).rows;
+  await pool.query(MIGRATION);
+  const after = (await pool.query(`SELECT platform_id, expires_at FROM stream.erased_restrictions WHERE platform_id LIKE 'g7r-%' ORDER BY 1`)).rows;
+  assert.deepEqual(after, before, 'a second run of v170 changed a row');
 });

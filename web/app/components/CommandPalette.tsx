@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { Parsed, Suggestion } from "@/app/lib/commands/parse";
 import { hintLine, currentArg } from "@/app/lib/commands/parse";
+import { MatchText } from "./MatchText";
 
 // The `/` command overlay.
 //
@@ -60,9 +61,9 @@ export function CommandPalette({
               <span className={`font-mono font-semibold shrink-0 ${
                 s.kind === "user" ? "text-sky-300" : "text-strong"
               }`}>
-                {s.kind === "user" ? `@${s.label}` : s.label}
+                {s.kind === "user" ? <>@<MatchText text={s.label} query={parsed.token} /></> : s.label}
               </span>
-              {s.desc && <span className="text-muted truncate ml-auto">{s.desc}</span>}
+              {s.desc && <span className="text-muted truncate ml-auto">{s.kind === "user" ? <MatchText text={s.desc} query={parsed.token} /> : s.desc}</span>}
             </button>
           ))}
         </div>

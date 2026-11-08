@@ -18,7 +18,8 @@
 // held (a daily prune, started with the module). The same daily run then deletes every OPEN mark
 // automod itself opened (source 'automod') once none of its evidence rows is left — an automatic
 // mark does not outlive its evidence. Carried and hand-placed marks, and
-// cleared marks, stay. A mark of another source that automod adds evidence to keeps its reason.
+// cleared marks, stay. Last, the restrictions deleted accounts left (stream.erased_restrictions)
+// that have ended are deleted. A mark of another source that automod adds evidence to keeps its reason.
 //
 // The verdict comes only from the model's own structured answer, parsed strictly by the adapter
 // (parseAutomodVerdict): anything partial, injected or out of range is `ok`. Who is exempt is
@@ -62,6 +63,10 @@ const AUTOMOD_HELD_RETENTION_DAYS = 30;
 const PRUNE_FIRST_MS = 60_000;              // a minute after boot: never in the start-up rush
 const PRUNE_EVERY_MS = 24 * 60 * 60 * 1000; // then daily
 const PRUNE_SQL = `DELETE FROM site.automod_held WHERE held_at < now() - make_interval(days => $1::int)`;
+/** A deleted account's restrictions that have ended (stream.erased_restrictions — a timeout's end,
+ *  a lifted ban, a case past its retention; account-erase.js): nothing reads them any more, and the
+ *  platform ids in them go with them. */
+const RESTRICTION_PRUNE_SQL = `DELETE FROM stream.erased_restrictions WHERE expires_at IS NOT NULL AND expires_at <= now()`;
 /** The open automatic marks whose evidence is all gone, deleted with one mod_log row each, in ONE
  *  statement: the removal and its record cannot part, and a second run finds nothing (retry-safe).
  *  The log row is how a moderator reading the person's history sees why the mark_set has no mark
@@ -317,11 +322,18 @@ function createAutomod({
     if (r.rowCount) log.log(`[automod] ${r.rowCount} automatic mark(s) removed: their evidence was deleted`);
     return r.rowCount;
   }
-  /** The daily job: the held rows first, then the marks they supported. */
+  /** Delete the ended restrictions deleted accounts left (RESTRICTION_PRUNE_SQL). Returns the count. */
+  async function pruneRestrictions() {
+    const r = await pool.query(RESTRICTION_PRUNE_SQL);
+    if (r.rowCount) log.log(`[automod] ${r.rowCount} ended restriction(s) of deleted accounts removed`);
+    return r.rowCount;
+  }
+  /** The daily job: the held rows first, then the marks they supported, then ended restrictions. */
   async function dailyPrune() {
     const held = await pruneHeld();
     const marks = await sweepOrphanMarks();
-    return { held, marks };
+    const restrictions = await pruneRestrictions();
+    return { held, marks, restrictions };
   }
   /** The timer's run: a failure is logged, never thrown (it would be an unhandled rejection). */
   const pruneRun = () => dailyPrune().catch((e) => log.warn(`[automod] prune failed: ${e.message}`));

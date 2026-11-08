@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { outcomesOf, propagationLine, failedPlatforms, failedByBatch, awaitPropagation, retryFailed, type ActionRow } from "./modPropagation.ts";
+import { outcomesOf, propagationLine, removalLine, failedPlatforms, failedByBatch, awaitPropagation, retryFailed, type ActionRow } from "./modPropagation.ts";
 import { stripComments } from "./testSource.ts";
 
 const row = (id: number, platform: string, ok: boolean, detail: string | null = null, status: number | null = null, action = "ban"): ActionRow =>
@@ -54,6 +54,43 @@ test("failedByBatch: the ✗ list per batch, read in one query", async () => {
   assert.equal((await failedByBatch(q, [])).size, 0);
 });
 
+// A ban's purge (ticket #228) writes its rows into the ban's batch: the ban's answer per platform
+// stays the ban's, and the removal reads as its own part of the line.
+const BAN_AND_PURGE = [
+  row(1, "twitch", true),
+  row(2, "kick", true),
+  row(3, "youtube", true, null, 200),
+  row(4, "kick", true, "deleted 2/2", null, "purge"),
+  row(5, "youtube", true, "no_api_message_ids (3 innertube-only)", null, "purge"),
+];
+
+test("a ban's purge rows never stand in for the ban's own answer", () => {
+  assert.equal(propagationLine(outcomesOf(BAN_AND_PURGE)), "Twitch ✓ · Kick ✓ · YouTube ✓");
+  const failedPurge = [...BAN_AND_PURGE, row(6, "kick", false, "no_capable_token", null, "purge")];
+  assert.deepEqual(failedPlatforms(failedPurge), [], "a purge that did not reach Kick marked the BAN ✗");
+});
+
+test("what was removed: the site's count, Twitch with the ban, Kick by id, and YouTube said plainly", () => {
+  assert.equal(removalLine(BAN_AND_PURGE, 5),
+    "Messages: 5 removed here · Twitch clears them with the ban · Kick 2 removed · YouTube can't remove their earlier messages from here");
+  assert.equal(removalLine([row(1, "twitch", true, null, null, "timeout"), row(2, "youtube", true, "deleted 1/2", 200, "purge"),
+    row(3, "kick", true, "no_messages", null, "purge")], 2),
+    "Messages: 2 removed here · Twitch clears them with the timeout · YouTube 1 of 2 removed");
+  assert.equal(removalLine([row(1, "twitch", false, "no_capable_token"), row(2, "youtube", false, "not_live", null, "purge")], 0),
+    "Messages: none to remove here · YouTube not removed (not live)", "a ban that did not land on Twitch clears nothing there");
+  assert.equal(removalLine(BAN_AND_PURGE, null), null, "a ban with the switch off says nothing about messages");
+  assert.equal(removalLine([], 3, { clickedSkipped: true }), "Messages: 3 removed here · the clicked message could not be removed");
+  assert.equal(removalLine([], null, { purgeFailed: true }), "Messages: couldn't be removed. Purge them by hand.",
+    "a purge that failed after the ban read as no purge at all");
+});
+
+test("with a purge the status line also waits for Kick's and YouTube's removal rows", async () => {
+  const urls = stubFetch([BAN_AND_PURGE.slice(0, 3), BAN_AND_PURGE.slice(0, 4), BAN_AND_PURGE]);
+  const out = await awaitPropagation({ batchId: "a", platforms: ["twitch", "kick", "youtube"], purged: 5 }, { sleep: async () => {} });
+  assert.equal(urls.length, 3, "the line was read before the removal had answered");
+  assert.equal(propagationLine(out), "Twitch ✓ · Kick ✓ · YouTube ✓");
+});
+
 function stubFetch(answers: ActionRow[][]) {
   const urls: { url: string; body?: unknown }[] = [];
   let i = 0;
@@ -83,10 +120,10 @@ test("the ban route tags its fan-out with a batch and returns it; a retry keeps 
   const read = (rel: string) => stripComments(readFileSync(new URL(rel, import.meta.url), "utf8"));
   const ban = read("../api/mod/ban/route.ts");
   // Every linked account's fan-out carries the one batch (a ban acts on each account).
-  assert.match(ban, /const platforms = fanOutBan\(a\.mod, targetId, a\.durationMinutes, a\.reason, a\.batchId\);\s*return \{ applied: true, previous, platforms \};/);
-  assert.match(ban, /const action: BanAction = \{ mod, durationMinutes, expiresAt, reason, override: body\.override === true, batchId \};/);
-  assert.match(ban, /return Response\.json\(\{ ok: true, applied: true, expiresAt, previous: first\.previous, batchId, platforms, accounts: targets\.length \}\);/);
-  assert.match(ban, /for \(const p of fanOutUnban\(mod, t, batchId\)\) platforms\.add\(p\);\s*\}\s*await pushChatBan\(chatBanBody\(\{ matrixIds: targets, canonicalId, expiresAt: null, lift: true \}\)\);\s*return Response\.json\(\{ ok: true, batchId, platforms: \[\.\.\.platforms\] \}\);\s*\}\s*$/, "vacuity anchor: the unban's end");
+  assert.match(ban, /const platforms = fanOutBan\(a\.mod, targetId, a\.durationMinutes, a\.reason, a\.batchId\);\s*return \{ applied: true, previous, platforms, keptIdentities \};/);
+  assert.match(ban, /const action: BanAction = \{ mod, durationMinutes, expiresAt, reason, override: body\.override === true, batchId, covered: targets \};/);
+  assert.match(ban, /return Response\.json\(\{ ok: true, applied: true, expiresAt, previous: first\.previous, batchId, platforms, accounts: targets\.length, identitiesKeepBan, purged, purgeFailed, clickedSkipped: clicked === "invalid" \}\);/);
+  assert.match(ban, /for \(const p of fanOutUnban\(mod, t, batchId\)\) platforms\.add\(p\);\s*\}\s*await pushChatBan\(chatBanBody\(\{ matrixIds: targets, canonicalId, expiresAt: null, lift: true \}\)\);\s*await requestReconcile\(\);\s*return Response\.json\(\{ ok: true, batchId, platforms: \[\.\.\.platforms\] \}\);\s*\}\s*$/, "vacuity anchor: the unban's end");
   const retry = read("../api/mod/platform-actions/retry/route.ts");
   for (const call of ["banOnTwitch(mod, row.target_id, dur, null, row.batch_id)", "banOnKick(mod, row.target_id, dur, null, row.batch_id)",
     "banOnYouTube(mod, row.target_id, dur, row.batch_id)", "unbanOnTwitch(mod, row.target_id, row.batch_id)",

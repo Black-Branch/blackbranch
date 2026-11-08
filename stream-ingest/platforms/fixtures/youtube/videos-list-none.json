@@ -1,0 +1,1 @@
+{"kind":"youtube#videoListResponse","etag":"etag-none","items":[{"kind":"youtube#video","etag":"etag-item","id":"abcdefghijk","snippet":{"liveBroadcastContent":"none"}}],"pageInfo":{"totalResults":1,"resultsPerPage":1}}

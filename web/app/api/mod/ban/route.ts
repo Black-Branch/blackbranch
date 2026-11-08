@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import pool from "@/lib/db";
-import { requireMod, assertCanModerate } from "@/app/lib/admin";
+import { requireMod, assertCanModerate, assertCanModerateAccount } from "@/app/lib/admin";
 import { appendModLog } from "@/app/lib/modlog";
 import { fanOutBan, fanOutUnban } from "@/app/lib/platformMod";
 import { applyModRole } from "@/app/lib/modRole";
-import { linkedMatrixIds } from "@/app/lib/canonicalIdentity";
+import { siteAccountsOf } from "@/app/lib/canonicalIdentity";
 import { NextRequest } from "next/server";
 import { chatBanBody, pushChatBan } from "@/app/lib/chatBanPush";
+import { LIFT_BAN_SQL } from "@/app/lib/community/unbans";
+import { BAN_ACCOUNT_SQL, CANONICAL_ACTION_SQL } from "@/app/lib/community/accountBans";
+import { requestReconcile } from "@/app/lib/community/reconcileRequest";
+import { purgeWithBan, NO_PURGE } from "@/app/lib/modPurge";
+import { purgeDeps } from "@/app/lib/modPurgeServer";
+import { banPurges, clickedLineOf, PURGE_MAX_MINUTES } from "@/app/lib/modRequests";
+import { banLiftRefusal } from "@/app/lib/modUnban";
 
 // GET ?targetId= — current ban/timeout status of a user (mod only)
 export async function GET(req: NextRequest) {
@@ -32,8 +39,7 @@ export async function GET(req: NextRequest) {
 // A failed read THROWS (the route answers 503): read as "unlinked", it would turn a site ban into a
 // platform-only one.
 async function linkedAccounts(canonicalId: string): Promise<string[]> {
-  const ids = await linkedMatrixIds(canonicalId, (sql, params) => pool.query<{ matrix_id: string }>(sql, params));
-  return [...ids].sort();
+  return siteAccountsOf(canonicalId, (sql, params) => pool.query<{ matrix_id: string }>(sql, params));
 }
 
 const unavailable = () =>
@@ -57,8 +63,16 @@ function canonicalOf(body: { canonicalId?: unknown } | null): string | null {
 type BanAction = {
   mod: string; durationMinutes: number | null; expiresAt: string | null; reason: string | null;
   override: boolean; batchId: string;
+  /** Every account this action covers (a ban by a canonical covers each account linked to it): a
+   *  reduction lifts what any of them placed on a shared canonical. */
+  covered: string[];
 };
-type BanResult = { applied: boolean; previous: { expiresAt: string | null } | null; kept?: string; platforms: string[] };
+type BanResult = {
+  applied: boolean; previous: { expiresAt: string | null } | null; kept?: string; platforms: string[];
+  /** Linked identities (canonical ids, server-side only) that keep a ban or timeout of their own
+   *  through a reduction. */
+  keptIdentities?: string[];
+};
 
 /** The site ban of ONE account: its row, its mod-log line, a mod's role on a permanent ban, the
  *  platform fan-out. */
@@ -75,7 +89,8 @@ async function banAccount(targetId: string, a: BanAction): Promise<BanResult> {
   // Downgrade guard: a permanent ban is never silently replaced, and a timeout
   // only ever extends — so two mods acting on the same troll seconds apart
   // can't accidentally shorten each other's action (the second click would
-  // otherwise overwrite). Deliberate reductions pass override: true (mod panel).
+  // otherwise overwrite). Deliberate reductions pass override: true (mod panel, Undo);
+  // BAN_ACCOUNT_SQL then reduces the linked canonicals too (an unban before the new action).
   if (!a.override && prior) {
     const cur = prior.expires_at;
     const isDowngrade =
@@ -84,13 +99,11 @@ async function banAccount(targetId: string, a: BanAction): Promise<BanResult> {
     if (isDowngrade) return { applied: false, previous, kept: cur === null ? "permanent" : cur.toISOString(), platforms: [] };
   }
 
-  await pool.query(
-    `INSERT INTO site.bans (matrix_id, banned_by, reason, expires_at)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (matrix_id) DO UPDATE
-       SET banned_by = $2, reason = $3, expires_at = $4, created_at = NOW()`,
-    [targetId, a.mod, a.reason, a.expiresAt]
-  );
+  // The account's row and, in the same statement, the same action on every canonical linked to it now.
+  // A reduction never lifts a linked identity's own ban: the count of those comes back.
+  const { rows: written } = await pool.query<{ kept_identities: string[] }>(BAN_ACCOUNT_SQL,
+    [targetId, a.mod, a.reason, a.expiresAt, a.durationMinutes ? "timeout" : "ban", a.durationMinutes, a.batchId, a.covered]);
+  const keptIdentities = written[0]?.kept_identities ?? [];
 
   await appendModLog({
     action: a.durationMinutes ? "timeout" : "ban",
@@ -112,7 +125,7 @@ async function banAccount(targetId: string, a: BanAction): Promise<BanResult> {
   // site ban has persisted — a platform failure never blocks or slows the
   // site action; every attempt is recorded in site.platform_mod_actions.
   const platforms = fanOutBan(a.mod, targetId, a.durationMinutes, a.reason, a.batchId);
-  return { applied: true, previous, platforms };
+  return { applied: true, previous, platforms, keptIdentities };
 }
 
 export async function POST(req: NextRequest) {
@@ -128,12 +141,20 @@ export async function POST(req: NextRequest) {
   const expiresAt = durationMinutes
     ? new Date(Date.now() + durationMinutes * 60 * 1000).toISOString()
     : null;
+  // A ban or timeout also removes the person's lines of the last 24 hours, as the Purge button does
+  // (modPurge.ts purgeWithBan), unless the mod turned the switch off. Run only after every ceiling
+  // check; a purge that fails never fails the ban that already stands.
+  const purge = banPurges(body);
+  // The line the ban was clicked on goes by its id, whatever its age (if it is theirs). One that
+  // cannot be removed never stops the ban: it is skipped, and the mod-log row and the answer say so.
+  const clicked = clickedLineOf(body);
+  const alongside = durationMinutes ? "timeout" : "ban";
 
   // Canonical target (platform-origin message, no matrix id on the frame): if
   // the canonical is linked to site accounts, the normal site ban of each below;
-  // otherwise there is no site.bans row to write (FK → site.users)
-  // and this is a pure platform fan-out via the identity graph — the platforms
-  // themselves are the source of truth for a platform-only chatter's ban state.
+  // otherwise there is no site.bans row to write (FK → site.users): the
+  // canonical's own mod_log row is its standing here (config/canonical-standing.mjs)
+  // and the platforms get the same action through the fan-out.
   const canonicalId = canonicalOf(body);
 
   // Privilege ceiling: a non-admin mod may not ban/timeout the owner or another mod,
@@ -159,27 +180,33 @@ export async function POST(req: NextRequest) {
   if (!targetId && canonicalId) {
     try { targets = await linkedAccounts(canonicalId); } catch { return unavailable(); }
     if (targets.length === 0) {
-      await appendModLog({
-        action: durationMinutes ? "timeout" : "ban",
-        target: canonicalId,
-        by: mod,
-        durationMinutes,
-        expiresAt,
-        reason,
-        batchId,
-      });
+      // This row IS the chatter's standing (config/canonical-standing.mjs): a failed write throws.
+      await pool.query(CANONICAL_ACTION_SQL,
+        [durationMinutes ? "timeout" : "ban", canonicalId, mod, durationMinutes, expiresAt, reason, batchId]);
       const platforms = fanOutBan(mod, canonicalId, durationMinutes, reason, batchId);
       // Their lines leave the site now, not when the platform's own ban echoes back.
       await pushChatBan(chatBanBody({ matrixIds: [], canonicalId, expiresAt, lift: false }));
+      const noAccounts: string[] = [];
+      const { purged, purgeFailed } = purge ? await purgeWithBan(purgeDeps(mod, canonicalId), { targetId: canonicalId, accounts: noAccounts, windowMinutes: PURGE_MAX_MINUTES, batchId, alongside, clicked: clicked === "invalid" ? null : clicked, clickedSkipped: clicked === "invalid" }) : NO_PURGE;
       // No site row to read: what the platforms held before is theirs to know (previous: null).
-      return Response.json({ ok: true, applied: true, expiresAt, platformOnly: true, previous: null, batchId, platforms });
+      return Response.json({ ok: true, applied: true, expiresAt, platformOnly: true, previous: null, batchId, platforms, purged, purgeFailed, clickedSkipped: clicked === "invalid" });
     }
   }
   if (targets.length === 0) {
     return new Response("Bad Request", { status: 400 });
   }
 
-  const action: BanAction = { mod, durationMinutes, expiresAt, reason, override: body.override === true, batchId };
+  // Each account's ban, timeout or unban is also written onto the canonicals linked to it: the
+  // ceiling covers every one of them (a canonical shared with a moderator's account), before any write.
+  for (const account of targets) {
+    const denied = await assertCanModerateAccount(mod, account);
+    if (denied) return denied;
+  }
+  // A permanent ban placed above this mod's rank (modUnban.ts) is not theirs to replace: writing
+  // over it would make it theirs, and then theirs to lift.
+  const above = await banLiftRefusal(mod, { kind: "replace", accounts: targets }, (sql, params) => pool.query(sql, params));
+  if (above) return above;
+  const action: BanAction = { mod, durationMinutes, expiresAt, reason, override: body.override === true, batchId, covered: targets };
   const results: BanResult[] = [];
   for (const t of targets) results.push(await banAccount(t, action));
   // The panel's answer (Undo's previous ban, a kept longer ban) is the FIRST account's; any account
@@ -188,8 +215,16 @@ export async function POST(req: NextRequest) {
   if (!results.some((r) => r.applied)) return Response.json({ ok: true, applied: false, kept: first.kept });
   // The accounts the ban reached, pushed to the chat path at once.
   await pushChatBan(chatBanBody({ matrixIds: targets.filter((_, i) => results[i]!.applied), canonicalId, expiresAt, lift: false }));
+  // The community reconciler turns the row into a room ban or a timeout in every room.
+  await requestReconcile();
+  // The purge reaches every account the ban covers (the same expansion as the Purge button's).
+  const purgeTarget = targetId ?? canonicalId!;
+  const { purged, purgeFailed } = purge ? await purgeWithBan(purgeDeps(mod, purgeTarget), { targetId: purgeTarget, accounts: targets, windowMinutes: PURGE_MAX_MINUTES, batchId, alongside, clicked: clicked === "invalid" ? null : clicked, clickedSkipped: clicked === "invalid" }) : NO_PURGE;
   const platforms = [...new Set(results.flatMap((r) => r.platforms))];
-  return Response.json({ ok: true, applied: true, expiresAt, previous: first.previous, batchId, platforms, accounts: targets.length });
+  // A reduction leaves a linked identity's OWN ban standing (only a full Unban lifts it): say how many.
+  // Counted once per identity: a canonical shared by two of the accounts is one identity.
+  const identitiesKeepBan = new Set(results.flatMap((r) => r.keptIdentities ?? [])).size;
+  return Response.json({ ok: true, applied: true, expiresAt, previous: first.previous, batchId, platforms, accounts: targets.length, identitiesKeepBan, purged, purgeFailed, clickedSkipped: clicked === "invalid" });
 }
 
 export async function DELETE(req: NextRequest) {
@@ -200,7 +235,8 @@ export async function DELETE(req: NextRequest) {
   const targetId = typeof body?.targetId === "string" ? body.targetId : null;
 
   // Canonical target — mirror of the POST branch: linked → the site unban of every linked
-  // account; unlinked → pure platform fan-out (nothing site-side to lift).
+  // account (each lift also unbans the canonicals linked to it); unlinked → an unban row on the
+  // canonical and the platform fan-out.
   const canonicalId = canonicalOf(body);
 
   // Privilege ceiling, as POST: a mod must not lift an admin's ban or timeout of another mod
@@ -216,7 +252,10 @@ export async function DELETE(req: NextRequest) {
   if (!targetId && canonicalId) {
     try { targets = await linkedAccounts(canonicalId); } catch { return unavailable(); }
     if (targets.length === 0) {
-      await appendModLog({ action: "unban", target: canonicalId, by: mod, batchId });
+      // The unlinked chatter's own standing ban, as an account's (modUnban.ts).
+      const above = await banLiftRefusal(mod, { kind: "lift", accounts: [], canonicals: [canonicalId] }, (sql, params) => pool.query(sql, params));
+      if (above) return above;
+      await pool.query(CANONICAL_ACTION_SQL, ["unban", canonicalId, mod, null, null, null, batchId]);
       const platforms = fanOutUnban(mod, canonicalId, batchId);
       await pushChatBan(chatBanBody({ matrixIds: [], canonicalId, expiresAt: null, lift: true }));
       return Response.json({ ok: true, platformOnly: true, batchId, platforms });
@@ -226,9 +265,22 @@ export async function DELETE(req: NextRequest) {
     return new Response("Bad Request", { status: 400 });
   }
 
+  // Each account's ban, timeout or unban is also written onto the canonicals linked to it: the
+  // ceiling covers every one of them (a canonical shared with a moderator's account), before any write.
+  for (const account of targets) {
+    const denied = await assertCanModerateAccount(mod, account);
+    if (denied) return denied;
+  }
+  // A permanent ban placed above this mod's rank (an admin's, Staff's) needs that rank to lift — the
+  // account's and every standing one on its linked canonicals, which the lift unbans too: the ban
+  // took a mod's role away, so the ceiling above (the role NOW) would let any mod undo it.
+  const above = await banLiftRefusal(mod, { kind: "lift", accounts: targets }, (sql, params) => pool.query(sql, params));
+  if (above) return above;
   const platforms = new Set<string>();
   for (const t of targets) {
-    await pool.query(`DELETE FROM site.bans WHERE matrix_id = $1`, [t]);
+    // Lifted and recorded in one statement: the reconciler lifts only the room bans the site lifted,
+    // and every canonical linked to the account now gets its unban.
+    await pool.query(LIFT_BAN_SQL, [t, mod, batchId]);
     await appendModLog({ action: "unban", target: t, by: mod, batchId });
     // Mirror the unban to the platforms so a site unban doesn't leave the
     // person platform-banned. Best-effort, fire-and-forget (see fanOutBan).
@@ -236,5 +288,6 @@ export async function DELETE(req: NextRequest) {
   }
   await pushChatBan(chatBanBody({ matrixIds: targets, canonicalId, expiresAt: null, lift: true }));
 
+  await requestReconcile();
   return Response.json({ ok: true, batchId, platforms: [...platforms] });
 }

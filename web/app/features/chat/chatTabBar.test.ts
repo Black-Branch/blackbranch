@@ -91,11 +91,12 @@ test("the console's button sits in the trailing lane before the fold arrow, unde
   // On by default: an unset setting (null) shows it; only an explicit "0" hides it — and never
   // without a console to toggle.
   assert.match(src, /const termSetting = useSetting\("chatStyle_termButton"\);\s*const termButton = !!CHAT_CONSOLE && termSetting !== "0";/);
-  const btn = /\{termButton && CHAT_CONSOLE && \(\s*<BarButton icon=\{<CHAT_CONSOLE\.button\.Icon size=\{13\} weight="bold" \/>\} label=\{CHAT_CONSOLE\.button\.label\} onClick=\{CHAT_CONSOLE\.toggle\} \/>\s*\)\}/.exec(src);
+  const btn = /\{termButton && CHAT_CONSOLE && \(\s*<BarButton size="touch" icon=\{<CHAT_CONSOLE\.button\.Icon size=\{13\} weight="bold" \/>\} label=\{CHAT_CONSOLE\.button\.label\} onClick=\{CHAT_CONSOLE\.toggle\} \/>\s*\)\}/.exec(src);
   assert.ok(btn, "the button, a BarButton like its neighbours");
   const fold = src.indexOf("{onFoldChat && (");
   assert.ok(fold > 0 && btn!.index < fold, "before the fold arrow, next to the fold button");
-  assert.match(src, /const hasTrailing =\s*\(!split && narrow && unarmedTabs\.length > 0\) \|\| \(!split && splitAvailable\) \|\| !!onToggleFull \|\| !!onFoldChat \|\| termButton;/,
+  // The "+" is no longer in this lane (Task 5b round 1: it scrolls as the strip's last item).
+  assert.match(src, /const hasTrailing = \(!split && splitAvailable\) \|\| !!onToggleFull \|\| !!onFoldChat \|\| termButton;/,
     "the lane exists when the button is the only thing in it");
   const reg = read("app/lib", "settingsRegistry.ts");
   assert.match(reg, /termButton: E\(\{ ls: "chatStyle_termButton", prePaint: false, deviceLocal: true, behavior: true,\s*serialize: ser1, parse: bool1,/);

@@ -91,14 +91,19 @@ test("a room the user left does not count; the same bot in two rooms is written 
 
 test("the client context syncs once, inside the first-PREPARED branch, and the timeline hides ignored senders", () => {
   const ctx = read("app/lib/MatrixClientContext.tsx", /<\/Ctx\.Provider>\s*\);\s*}\s*$/);
-  assert.match(ctx, /if \(!prepared\) \{[^}]*syncIgnoredBots\(mxClient, \(\) => !stale\(\)\)\.catch\(/, "runs exactly where the boot timer is disarmed, so once per client start, guarded against a stale run");
+  assert.match(ctx, /if \(!prepared\) \{[^}]*syncIgnoredBots\(mxClient, \(\) => !stale\(\)\)\.catch\(/, "runs exactly where the boot clock is settled, so once per client start, guarded against a stale run");
   assert.equal((ctx.match(/syncIgnoredBots\(/g) ?? []).length, 1);
   const rows = read("app/lib/timelineRows.ts", /return true;\s*}\s*$/);
   assert.match(rows, /if \(isIgnoredSender\(room, e\)\) return false;/, "the store keeps events that arrived before the list was written");
   const tl = read("app/features/community/Timeline.tsx", /<\/div>\s*\);\s*}\s*$/);
-  assert.match(tl, /all\.filter\(\(e\) => isTimelineRow\(room, e, \{ deleted: showDeleted \}\)\)/, "the timeline and the pinned panel's jump share one renderability rule");
-  assert.doesNotMatch(tl, /isRedacted\(\)/, "the filter lives in one place — timelineRows.ts, not a Timeline copy");
-  assert.doesNotMatch(tl, /rel_type === "m\.thread"/, "the filter lives in one place — timelineRows.ts, not a Timeline copy");
+  // The row filter is the shared room engine's (useRoomTimeline.ts, client polish Task 11).
+  assert.match(tl, /useRoomTimeline\(client, room, \{ showDeleted, myUserId, baseLimit \}\)/, "the timeline runs on the shared room engine (useRoomTimeline.ts, Task 11)");
+  const eng = read("app/lib/useRoomTimeline.ts", /phase,\s*};\s*}\s*$/);
+  assert.match(eng, /all\.filter\(\(e\) => isTimelineRow\(room, e, \{ deleted: showDeleted \}\)\)/, "the timeline and the pinned panel's jump share one renderability rule");
+  for (const src of [tl, eng]) {
+    assert.doesNotMatch(src, /isRedacted\(\)/, "the filter lives in one place — timelineRows.ts, not a Timeline copy");
+    assert.doesNotMatch(src, /rel_type === "m\.thread"/, "the filter lives in one place — timelineRows.ts, not a Timeline copy");
+  }
 });
 
 test("members are loaded for every joined room before the scan, never for a left room", async () => {

@@ -68,7 +68,7 @@ test("wiring: every ban and unban path of the route pushes; a non-member target 
   assert.equal(src.match(/await pushChatBan\(chatBanBody\(/g)?.length, 4, "platform-only ban, site ban, platform-only unban, site unban");
   assert.match(src, /matrixIds: targets\.filter\(\(_, i\) => results\[i\]!\.applied\)/, "only the accounts the ban reached");
   const refuse = src.indexOf("if (!member) return new Response(NOT_A_MEMBER, { status: 404 });");
-  const insert = src.indexOf("INSERT INTO site.bans");
+  const insert = src.indexOf("await pool.query<{ kept_identities: string[] }>(BAN_ACCOUNT_SQL,");
   assert.ok(refuse > 0, "the refusal exists");
   assert.match(src, /if \(member === null\) return unavailable\(\);/, "a failed read is 503, never a false refusal");
   assert.ok(src.indexOf("for (const t of targets) results.push(await banAccount(t, action));") > refuse && insert > 0);

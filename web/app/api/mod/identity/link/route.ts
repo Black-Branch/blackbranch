@@ -3,14 +3,16 @@ import { requireMod, assertCanModerate } from "@/app/lib/admin";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { NextRequest } from "next/server";
 import { ERASED_CANONICAL } from "@/app/lib/erasedPerson";
+import { appendModLog } from "@/app/lib/modlog";
+import { identityMergedEntry } from "@/app/lib/modlogActions";
 
 // Manual identity linkage (mod tools): fold two chat identities (stream
 // canonicals) into one person. The merge engine lives in stream-api
 // (POST /identity/merge → mergeCanonicals): it repoints chat history, stats,
-// links and combines the bot's impressions, then DELETES the losing identity —
+// links and combines the bot's notes on the two, then DELETES the losing identity —
 // there is no unmerge. It is mod-level, so the safety rails are here:
 // the preview names which side survives, and the POST re-checks the typed
-// victim name server-side before proxying.
+// victim name server-side before proxying. The bot's notes are never sent to a mod (ADR 0098).
 //
 // The erased-person row (ERASED_CANONICAL — every deleted person's kept lines and payments point at
 // it) is no one: it is never offered, previewed or merged. Merging it into a live identity would
@@ -20,23 +22,19 @@ type IdentityRow = {
   id: string; name: string | null; nickname: string | null;
   activity: number; first_seen: string | null;
   platforms: string[] | null;
-  impression: string | null; interactions: number | null;
 };
 
 const DETAIL = `
   SELECT u.id, u.name, u.nickname, COALESCE(us.activity, 0)::int AS activity, u.first_seen,
-         (SELECT array_agg(DISTINCT l.platform) FROM stream.links l WHERE l.canonical = u.id) AS platforms,
-         bi.impression, bi.interactions
+         (SELECT array_agg(DISTINCT l.platform) FROM stream.links l WHERE l.canonical = u.id) AS platforms
     FROM stream.users u
-    LEFT JOIN stream.user_stats us ON us.user_id = u.id
-    LEFT JOIN stream.bot_impressions bi ON bi.user_id = u.id`;
+    LEFT JOIN stream.user_stats us ON us.user_id = u.id`;
 
 function shape(r: IdentityRow) {
   return {
     userId: r.id, name: r.name, nickname: r.nickname,
     activity: Number(r.activity) || 0, firstSeen: r.first_seen,
     platforms: r.platforms ?? [],
-    impression: r.impression, interactions: r.interactions ?? 0,
   };
 }
 type Shaped = ReturnType<typeof shape>;
@@ -123,6 +121,8 @@ export async function POST(req: NextRequest) {
     return new Response(t || "Merge failed", { status: 502 });
   }
   const d = (await res.json().catch(() => ({}))) as { survivor?: string; merged?: number };
-  console.log(`[mod/identity] ${mod} merged ${victim.userId} -> ${d.survivor ?? survivor.userId}`);
-  return Response.json({ ok: true, survivor: d.survivor ?? survivor.userId, merged: d.merged ?? 1 });
+  const kept = d.survivor ?? survivor.userId;
+  console.log(`[mod/identity] ${mod} merged ${victim.userId} -> ${kept}`);
+  await appendModLog(identityMergedEntry({ mod, survivor: kept, victim: { userId: victim.userId, name: victim.name ?? victim.nickname } }));
+  return Response.json({ ok: true, survivor: kept, merged: d.merged ?? 1 });
 }

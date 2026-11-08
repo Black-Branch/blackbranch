@@ -122,7 +122,7 @@ export function PostCard({
           className="flex items-center gap-1.5 min-w-0"
           style={{ fontSize: "var(--text-chat-sm)" }}
         >
-          <Avatar mxcUrl={post.senderAvatar} name={name} size={18} />
+          <Avatar mxcUrl={post.senderAvatar} name={name} size="sm" />
           <span
             className="font-medium truncate"
             style={{ color: nameColor, fontFamily: "var(--chat-username-font, inherit)", fontWeight: "var(--chat-username-weight, 600)" as React.CSSProperties["fontWeight"], filter: "saturate(var(--chat-username-sat, 1))" }}

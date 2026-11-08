@@ -65,9 +65,9 @@ export async function POST(req: NextRequest) {
          (session_id, seq, build_id, matrix_id, route, device_class, narrow, user_agent,
           device_memory, hw_concurrency, effective_type, save_data, dpr, open_ms, visible_ms,
           loaf_count, loaf_blocking_ms, loaf_worst, inp_ms, inp, cls, req_count, bytes,
-          socket_reconnects, player, decode, frames, anim, settings, heap_start_mb, heap_peak_mb)
+          socket_reconnects, player, decode, frames, anim, settings, heap_start_mb, heap_peak_mb, socket_opens)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19,$20::jsonb,
-               $21,$22,$23::jsonb,$24,$25::jsonb,$26::jsonb,$27::jsonb,$28::jsonb,$29::jsonb,$30,$31)
+               $21,$22,$23::jsonb,$24,$25::jsonb,$26::jsonb,$27::jsonb,$28::jsonb,$29::jsonb,$30,$31,$32)
        ON CONFLICT (session_id) DO UPDATE SET
          seq = EXCLUDED.seq, last_at = now(), build_id = EXCLUDED.build_id,
          matrix_id = COALESCE(EXCLUDED.matrix_id, site.device_health.matrix_id),
@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
          bytes = EXCLUDED.bytes, socket_reconnects = EXCLUDED.socket_reconnects, player = EXCLUDED.player,
          decode = EXCLUDED.decode, frames = EXCLUDED.frames, anim = EXCLUDED.anim,
          settings = EXCLUDED.settings, heap_start_mb = EXCLUDED.heap_start_mb,
-         heap_peak_mb = EXCLUDED.heap_peak_mb
+         heap_peak_mb = EXCLUDED.heap_peak_mb, socket_opens = EXCLUDED.socket_opens
        -- A late beacon never rolls a row back: only a NEWER snapshot replaces the stored one.
        WHERE site.device_health.seq < EXCLUDED.seq`,
       [
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
         row.deviceMemory, row.hwConcurrency, row.effectiveType, row.saveData, row.dpr, row.openMs, row.visibleMs,
         row.loafCount, row.loafBlockingMs, j(row.loafWorst), row.inpMs, j(row.inp), row.cls, row.reqCount, j(row.bytes),
         row.socketReconnects, j(row.player), j(row.decode), j(row.frames), j(row.anim), j(row.settings),
-        row.heapStartMb, row.heapPeakMb,
+        row.heapStartMb, row.heapPeakMb, row.socketOpens,
       ]
     );
   } catch (e) {

@@ -10,7 +10,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideWatchdog, STALL_MS, STALL_TICKS } from './ytWatchdog.js';
+import { readFileSync } from 'node:fs';
+import { decideWatchdog, stallStrikeLine, STALL_MS, STALL_TICKS } from './ytWatchdog.js';
 
 /** Healthy steady state unless a case overrides it. */
 const base = {
@@ -120,4 +121,24 @@ test('exactly at the threshold is still healthy', () => {
 test('thresholds are overridable so the caller can tune without editing this module', () => {
   const d = decideWatchdog({ ...base, msSinceHealthy: 100, stallMs: 50, stallTicks: 1 });
   assert.equal(d.action, 'rebuild');
+});
+
+// 0133 review: after a rename the strike line read another decision's fields and printed
+// "(undefined, 47s) — strike undefined/3". The line is built from the watchdog's own result, and
+// the reader's call site must hand it that result.
+test('the strike line names the reason and the strike number', () => {
+  const wd = decideWatchdog({ ...base, msSinceHealthy: STALL_MS + 1 });
+  assert.equal(wd.action, 'count');
+  const line = stallStrikeLine('youtube', wd, 47, 3);
+  assert.ok(line.includes('stale-polls'), line);
+  assert.ok(line.includes('strike 1/3'), line);
+  assert.ok(!line.includes('undefined'), line);
+  const noPoller = stallStrikeLine('youtube', decideWatchdog({ ...base, pollerRegistered: false, msSinceHealthy: STALL_MS + 1 }), 47, 3);
+  assert.ok(noPoller.includes('(no-poller, 47s)'), noPoller);
+});
+
+test('the reader logs each strike from the watchdog\'s own result (wd), not the tick\'s decision', () => {
+  const src = readFileSync(new URL('../platforms/youtube.js', import.meta.url), 'utf8');
+  assert.match(src, /const wd = decideWatchdog\(/);
+  assert.match(src, /console\.warn\(stallStrikeLine\(tag, wd, dead, STALL_TICKS\)\);/);
 });

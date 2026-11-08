@@ -13,8 +13,10 @@
 //      panel narrows into mode 2, the tie is broken by which side the user
 //      touched LAST — the least surprising panel to lose is the one they have
 //      not interacted with.
+//   3. Narrowing into mode 1 with a room open closes the side panels, so the room
+//      stays on screen instead of being swapped for the channel list mid-drag.
 //
-// Pure so both rules can be tested; the component keeps the refs and setters.
+// Pure so the rules can be tested; the component keeps the refs and setters.
 
 /** Which side panel the user interacted with most recently. */
 export type LastSide = "dir" | "mem" | null;
@@ -32,6 +34,8 @@ export interface CapacityInput {
   directoryOpen: boolean;
   membersOpen: boolean;
   lastSide: LastSide;
+  /** A room (or a DM draft) is open — the timeline has something to show. */
+  hasSelected?: boolean;
 }
 
 /**
@@ -50,6 +54,7 @@ export function resolveCapacityChange({
   directoryOpen,
   membersOpen,
   lastSide,
+  hasSelected = false,
 }: CapacityInput): CapacityPatch {
   if (mode === 3) {
     // One-shot on ENTRY only. Re-applying every render would make the directory
@@ -62,8 +67,12 @@ export function resolveCapacityChange({
     return lastSide === "mem" ? { directoryOpen: false } : { membersOpen: false };
   }
 
-  // Mode 1 closes nothing here — resolveVisibility already shows exactly one
-  // panel at a time, so the open flags stay as the user left them and are
-  // restored intact when the panel widens again.
+  // Narrowing INTO mode 1 with a room open keeps the room: in mode 1 an open directory or
+  // member list takes the whole pane (resolveVisibility's precedence), so the side panels
+  // that sat beside the room close. Otherwise mode 1 closes nothing — a phone opening on
+  // the channel list, or a list the person opened in mode 1, stays as they left it.
+  if (mode === 1 && hasSelected && prevMode != null && prevMode >= 2 && (directoryOpen || membersOpen)) {
+    return { directoryOpen: false, membersOpen: false };
+  }
   return {};
 }

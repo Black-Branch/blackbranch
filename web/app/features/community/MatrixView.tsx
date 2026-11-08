@@ -2,7 +2,11 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { Room, MatrixEvent } from "matrix-js-sdk";
-import { openOrCreateDm, rememberDm } from "@/app/lib/matrixDm";
+import { acceptInviteAndFile, findDmRoom } from "@/app/lib/matrixDm";
+import { DmDraftPane } from "./DmDraftPane";
+import { localpart } from "@/app/lib/matrixDisplay";
+import { onOpenRoomRequest, requestDm, takeOpenRoom } from "@/app/lib/dm/bus";
+import { declineInvite } from "@/app/lib/matrixInvites";
 import { useMatrixClient, useStartMatrixClient, MATRIX_READINESS_KEY } from "@/app/lib/MatrixClientContext";
 import { useKeyboardLift } from "@/app/lib/useKeyboardLift";
 import { Bar, BarButton, WindowLayerTarget, BootSequence } from "@/app/components/chrome";
@@ -15,9 +19,10 @@ import {
   buildServers,
   serverChannels,
   favouriteRooms,
-  aggregateUnreads,
+  dmPartner,
   isForumRoom,
   findRoomByAlias,
+  moderationSyncRooms,
   CONTENT_SUGGESTIONS_ALIAS,
   type RailServer,
 } from "@/app/lib/matrixRooms";
@@ -39,6 +44,8 @@ import { threadRootId } from "@/app/lib/matrixThreads";
 import { lsGet, lsSet } from "@/app/lib/safeLocalStorage";
 import { MODE2_AT, MODE3_AT, useContainerWidth, usePanelLayout } from "./panelLayout";
 import { useCommunityBootstrap } from "./useCommunityBootstrap";
+import { useDmConversations } from "./useDmConversations";
+import { earlierThan, type DmConversation } from "@/app/lib/dmConversations";
 import {
   resolveVisibility,
   matrixPaneKeys,
@@ -102,10 +109,19 @@ function UnifiedLayout({
   } = usePanelLayout();
 
   const [selected, setSelected] = useState<Room | null>(null);
+  // A DM draft with someone (no room yet) in the centre slot; any room opened replaces it.
+  const [draftDm, setDraftDm] = useState<{ userId: string; name: string } | null>(null);
+  // Opening any room replaces the draft (a render-time adjustment, not an effect).
+  if (selected && draftDm) setDraftDm(null);
   // A feed "Suggest" hand-off waiting to pre-fill the New Post modal (Content forum).
   const [pendingPost, setPendingPost] = useState<{ title: string; body: string } | null>(null);
   const [directoryOpen, setDirectoryOpen] = useState(true);
   const [membersOpen, setMembersOpen] = useState(false);
+  // The list is open because a rail tap (Home, a space) opened it: a pick from it then closes it
+  // again, at every width. A list the person opened with ≡, or the wide view's default, stays
+  // open on a pick. Any close ends it (render-time adjust below).
+  const [listFromRail, setListFromRail] = useState(false);
+  if (listFromRail && !directoryOpen) setListFromRail(false);
   // Right-panel thread view: the root event whose thread is open (in `selected`).
   const [threadRoot, setThreadRoot] = useState<MatrixEvent | null>(null);
   // Right-panel threads activity list (footer "Threads" button). Stays open
@@ -204,8 +220,21 @@ function UnifiedLayout({
     const chans = serverChannels(srv);
     return chans.find((c) => c.roomId === lsGet(`mx-lastch:${srv.id}`)) ?? chans[0];
   };
-  const dmUnreads = useMemo(() => aggregateUnreads(nav.dms), [nav]);
-  const pinned = useMemo(() => favouriteRooms(rooms), [rooms]);
+  // The DM list: one conversation per person (Task 20). `all` includes closed ones (a closed
+  // person's room still knows its earlier rooms); `list` is what the column and the rail show.
+  const { all: allConversations, list: conversations } = useDmConversations(client, myUserId, rooms);
+  const dmUnreads = useMemo(
+    () => conversations.reduce((a, c) => ({ total: a.total + c.unread.total, highlight: a.highlight + c.unread.highlight }), { total: 0, highlight: 0 }),
+    [conversations],
+  );
+  // Home's "Pinned" holds channels; a pinned DM is pinned in the DM list (first), not twice.
+  const pinned = useMemo(() => {
+    const dmRooms = new Set(allConversations.flatMap((c) => c.rooms));
+    return favouriteRooms(rooms).filter((r) => !dmRooms.has(r) && dmPartner(r, myUserId, dmRoomIds) === null);
+  }, [rooms, allConversations, myUserId, dmRoomIds]);
+  // The open room's conversation: its earlier rooms lead back from the timeline's start, and an
+  // earlier room opens read-only (sending always goes to the active one).
+  const selectedConversation = selected ? allConversations.find((c) => c.rooms.includes(selected)) ?? null : null;
   // Pending invites light the Home rail tile (highlight-weight) so they're
   // discoverable even when the user never opens the Home view.
   const homeUnreads = useMemo(
@@ -242,12 +271,18 @@ function UnifiedLayout({
     [resolvedServer, selected]
   );
 
+  // What the moderation writers below may touch: the hub's channels only, never a DM or a room
+  // outside the hub (serverRooms falls back to the open room — in DM Home, the DM).
+  const syncRooms = useMemo(
+    () => moderationSyncRooms(resolvedServer, rooms, myUserId, dmRoomIds),
+    [resolvedServer, rooms, myUserId, dmRoomIds]
+  );
   // Site mods get power 50 in every channel, reconciled from the owner's own
   // browser — see useModPowerSync's header for why this can't run server-side.
-  useModPowerSync(client as unknown as Parameters<typeof useModPowerSync>[0], serverRooms, myUserId);
+  useModPowerSync(client as unknown as Parameters<typeof useModPowerSync>[0], syncRooms, myUserId);
   // Site bans reach these channels, from a site mod's own client (siteBanSync.ts).
   const isSiteMod = useSiteMod();
-  useSiteBanSync(isSiteMod ? client : null, serverRooms, myUserId);
+  useSiteBanSync(isSiteMod ? client : null, syncRooms, myUserId);
 
   // Restore the last-used space on load instead of always landing on General.
   // One-shot, fires the moment `servers` is populated from local sync — which
@@ -290,6 +325,20 @@ function UnifiedLayout({
   // Capacity enforcement on mode changes. Mode 3 (wide) defaults the directory
   // open, but only as a one-shot when *entering* mode 3 — otherwise it would
   // re-force open on every render and the close button could never win.
+  const roomOpen = !!selected || !!draftDm;
+  // Narrowing into mode 1 is applied DURING render (render-time adjust): as an effect, the
+  // first mode-1 render would still show the directory, unmounting the timeline for a frame —
+  // the remount loses the reading position and opens the room at its newest line. The rule
+  // needs no lastSide, so the pure resolver is called with none.
+  const [shapeMode, setShapeMode] = useState(mode);
+  if (shapeMode !== mode) {
+    setShapeMode(mode);
+    if (mode === 1) {
+      const p = resolveCapacityChange({ mode, prevMode: shapeMode, directoryOpen, membersOpen, lastSide: null, hasSelected: roomOpen });
+      if (p.directoryOpen !== undefined) setDirectoryOpen(p.directoryOpen);
+      if (p.membersOpen !== undefined) setMembersOpen(p.membersOpen);
+    }
+  }
   useEffect(() => {
     const prev = prevModeRef.current;
     prevModeRef.current = mode;
@@ -301,10 +350,13 @@ function UnifiedLayout({
       directoryOpen,
       membersOpen,
       lastSide: lastSideRef.current,
+      hasSelected: roomOpen,
     });
     if (patch.directoryOpen !== undefined) setDirectoryOpen(patch.directoryOpen);
     if (patch.membersOpen !== undefined) setMembersOpen(patch.membersOpen);
-  }, [mode, directoryOpen, membersOpen]);
+    // Entering the wide view opens the list as its own default, not the rail's.
+    if (patch.directoryOpen) setListFromRail(false);
+  }, [mode, directoryOpen, membersOpen, roomOpen]);
 
   // Open an existing DM with `userId`, or create one (E2EE by default) — the
   // member-card "Message" action. (The chat user card's Message opens the DM
@@ -319,10 +371,19 @@ function UnifiedLayout({
         setMembersOpen(false);
       };
 
-      // One code path with the terminal's `write`/`talk`: app/lib/matrixDm.ts.
+      // One code path with the terminal's `write`/`talk`: app/lib/matrixDm.ts. Pressing Message
+      // makes nothing: an existing conversation opens here; with none, the DM window opens a draft
+      // whose first line makes the room — or, on a page with no chat column (no DM window), the
+      // draft opens here (DmDraftPane). Nothing reaches the other person until a line is sent.
       try {
-        const room = await openOrCreateDm(client, userId);
-        if (room) showDM(room);
+        const existing = await findDmRoom(client, userId);
+        if (existing) { showDM(existing); return; }
+        const name = localpart(userId);
+        if (requestDm({ kind: "open", to: { matrixId: userId, username: name, displayName: null } })) return;
+        setSelected(null);
+        setDraftDm({ userId, name });
+        setDirectoryOpen(false);
+        setMembersOpen(false);
       } catch (e) {
         console.error("[Matrix] DM create failed", e);
       }
@@ -330,17 +391,15 @@ function UnifiedLayout({
     [client, status]
   );
 
-  // Accept a pending room/DM invite: join, and for DM invites mirror the
-  // inviter→room mapping into our own m.direct account data (the invite's
-  // is_direct flag lives on the member event; without this the accepted DM
-  // wouldn't list under Direct Messages). Join-only — no crypto/session logic.
+  // Accept a pending room/DM invite: join, and for a DM request file the
+  // inviter→room mapping in our own m.direct (the invite's is_direct flag
+  // lives on our INVITE member event, which the join replaces — so it is read
+  // before joining: acceptInviteAndFile). Join-only — no crypto/session logic.
   const acceptInvite = useCallback(
     async (room: Room) => {
       if (!client || status !== "ready") return;
       try {
-        await client.joinRoom(room.roomId);
-        const inviter = room.getDMInviter();
-        if (inviter) await rememberDm(client, inviter, room.roomId);
+        await acceptInviteAndFile(client, room.roomId);
         setSelected(room);
         setDirectoryOpen(false);
         setMembersOpen(false);
@@ -356,7 +415,7 @@ function UnifiedLayout({
     async (room: Room) => {
       if (!client || status !== "ready") return;
       try {
-        await client.leave(room.roomId);
+        await declineInvite(client, room.roomId);
       } catch (e) {
         console.warn("[Matrix] invite decline failed", room.roomId, e);
       }
@@ -364,8 +423,8 @@ function UnifiedLayout({
     [client, status]
   );
 
-  // Open a room into the timeline. `collapse` drops the directory drawer on
-  // mobile (picking a channel) but not when auto-selecting after a server click.
+  // Open a room into the timeline. `collapse` (a pick from the list) drops the directory in mode 1,
+  // and in modes 2/3 when a rail tap opened it; never when auto-selecting after a server click.
   const openRoom = (room: Room, collapse: boolean) => {
     setSelected(room);
     const srv = servers.find((s) => serverChannels(s).some((c) => c.roomId === room.roomId));
@@ -378,20 +437,57 @@ function UnifiedLayout({
     if (collapse && mode === 1) {
       setDirectoryOpen(false);
       setMembersOpen(false);
+    } else if (collapse && listFromRail) {
+      setDirectoryOpen(false);
     }
   };
 
   const handleSelect = (room: Room) => openRoom(room, true);
 
+  // A DM row or a rail chip: Home (the DM list) with the person's conversation open.
+  const openConversation = (c: DmConversation) => {
+    setActiveServerId("home");
+    lsSet("mx-lastspace", "home");
+    openRoom(c.active, true);
+  };
+
+  // The DM window's "Open in Community" (lib/dm/bus.ts): the room it parked, taken on the signal
+  // and on mount (the press that sent it may have mounted this view). A room in no server is a
+  // conversation, so Home (the DM list) is where it sits.
+  const openRequested = useCallback(() => {
+    if (!client || status !== "ready") return;
+    const id = takeOpenRoom();
+    const room = id ? client.getRoom(id) : null;
+    if (!room) return;
+    const inServer = servers.some((s) => serverChannels(s).some((c) => c.roomId === room.roomId));
+    setActiveServerId(inServer ? null : "home");
+    setSelected(room);
+    if (mode === 1) { setDirectoryOpen(false); setMembersOpen(false); }
+  }, [client, status, servers, mode]);
+  useEffect(() => { void Promise.resolve().then(openRequested); }, [openRequested]);
+  useEffect(() => onOpenRoomRequest(() => { void Promise.resolve().then(openRequested); }), [openRequested]);
+
+  // Modes 2/3: a rail tap shows the list it names even when the list is closed — otherwise the
+  // tap changes only the rail's highlight. Mode 1 opens the list over the room instead.
+  const openListFromRail = () => {
+    if (directoryOpen) return;
+    lastSideRef.current = "dir";
+    setDirectoryOpen(true);
+    setListFromRail(true);
+    if (mode === 2) setMembersOpen(false); // mode 2 fits one side panel
+  };
+
   const handleSelectHome = () => {
     setActiveServerId("home");
     lsSet("mx-lastspace", "home");
     if (mode === 1) setDirectoryOpen(true);
+    else openListFromRail();
   };
 
   const handleSelectServer = (id: string) => {
     setActiveServerId(id);
     if (mode === 1) setDirectoryOpen(true);
+    else openListFromRail();
     const srv = servers.find((s) => s.id === id);
     if (!srv) return;
     const target = lastChannelFor(srv);
@@ -480,7 +576,7 @@ function UnifiedLayout({
   // Visibility under the current capacity (pure resolver).
   const vis = resolveVisibility({
     mode,
-    hasSelected: !!selected,
+    hasSelected: roomOpen,
     directoryOpen,
     membersOpen,
     threadsListOpen,
@@ -510,7 +606,7 @@ function UnifiedLayout({
   // (useNarrowViewport.ts), and pointer coarseness does not change mid-session.
   const mxCoarse = useClientValue(() => window.matchMedia?.(Q_POINTER_COARSE)?.matches === true, false);
   const mxPagerOn = matrixPagerEnabled(mode, mxCoarse, vis);
-  const mxPaneKeys = matrixPaneKeys(!!selected);
+  const mxPaneKeys = matrixPaneKeys(!!selected || !!draftDm);
   const mxActivePane = matrixActivePane(vis);
   // Gate for MatrixTimeline's own
   // WindowLayerTarget: this INNER pager (directory | timeline | members)
@@ -563,6 +659,8 @@ function UnifiedLayout({
       // unclaimed case where the button still renders.
       onOpenSettings={openProfileCard}
       hideUserButton={hideUserMenu}
+      conversations={conversations}
+      onOpenConversation={openConversation}
     />
   );
   // The DIRECTORY boots too. On a phone
@@ -580,12 +678,13 @@ function UnifiedLayout({
     <ChannelColumn
       mode={activeId === "home" ? "home" : "space"}
       server={resolvedServer}
-      dms={nav.dms}
+      conversations={conversations}
+      onOpenConversation={openConversation}
+      onNewMessage={status === "ready" ? (id) => void openOrCreateDM(id) : undefined}
       pinned={pinned}
       invites={invites}
       selected={selected}
       myUserId={myUserId}
-      dmRoomIds={dmRoomIds}
       onSelect={handleSelect}
       onAcceptInvite={acceptInvite}
       onRejectInvite={rejectInvite}
@@ -635,9 +734,22 @@ function UnifiedLayout({
           onMessageUser={openOrCreateDM}
           moderationScope={moderationScope}
           serverRooms={serverRooms}
+          earlier={selectedConversation ? earlierThan(selectedConversation, selected) : undefined}
+          onOpenEarlier={(room) => setSelected(room)}
+          onBackToCurrent={selectedConversation && selectedConversation.active !== selected
+            ? () => setSelected(selectedConversation.active) : undefined}
         />
       )}
     </div>
+  ) : draftDm && client ? (
+    <DmDraftPane
+      key={`draft:${draftDm.userId}`}
+      client={client}
+      userId={draftDm.userId}
+      name={draftDm.name}
+      onOpened={(room) => { setSelected(room); }}
+      onBack={mode === 1 ? () => { setDraftDm(null); setDirectoryOpen(true); } : undefined}
+    />
   ) : null;
 
   // ── Right: the member list, MODE-1 flavour (full panel, its own back bar).
@@ -648,12 +760,7 @@ function UnifiedLayout({
     <div className="flex flex-col min-h-0 flex-1">
       <Bar slot="top" name="mx-header" center={
         <>
-          <button
-            onClick={() => setMembersOpen(false)}
-            className="text-secondary hover:text-strong text-sm px-1 shrink-0"
-          >
-            ←
-          </button>
+          <BarButton size="touch" icon={<span className="text-sm">←</span>} label="Back" onClick={() => setMembersOpen(false)} />
           <span className="text-sm font-medium text-body-dim flex-1 truncate">
             Members — {roomLabel(selected, myUserId, dmRoomIds)}
           </span>
@@ -675,7 +782,7 @@ function UnifiedLayout({
   return (
     <div
       ref={containerRef}
-      className={(pageChrome ? "h-full flex" : "flex-1 flex min-h-0") + " matrix-entrance"}
+      className={(pageChrome ? "h-full flex" : "flex-1 flex min-h-0") + " matrix-entrance mx-scope"}
       // The entrance is a PURE derivation of `status` — no one-shot latch, and
       // deliberately so. Clearing `data-entered` from an `onAnimationEnd`
       // handler on this root would be wrong twice over. `animationend` BUBBLES,
@@ -819,7 +926,7 @@ function UnifiedLayout({
       <div
         key="timeline"
         inert={mxPagerOn && mxActivePane !== "timeline"}
-        className={mxPagerOn && selected ? MX_PANE_SLOT : "contents"}
+        className={mxPagerOn && (selected || draftDm) ? MX_PANE_SLOT : "contents"}
       >
         {(mxPagerOn || showTimeline) && mxTimelineEl}
       </div>
@@ -832,7 +939,7 @@ function UnifiedLayout({
           actually looking at, and `!showTimeline` keeps the two branches
           mutually exclusive. Inside the wrapper, so its position among its
           siblings is the one it has always had. */}
-      {showTimeline && !selected && (
+      {showTimeline && !selected && !draftDm && (
         <div className="flex-1 flex items-center justify-center">
           {/* `notoken` is NOT a loading state — a signed-out visitor needs the
               sign-in path, not a boot sequence. Every other non-ready status
@@ -941,6 +1048,7 @@ function UnifiedLayout({
                     Members
                   </span>
                   <BarButton
+                    size="touch"
                     icon={<X size={13} weight="bold" />}
                     label="Close members"
                     onClick={() => setMembersOpen(false)}

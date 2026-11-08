@@ -71,10 +71,11 @@ test("boards is a part like any other: filled when it answers, null alone when i
 test("statusFromStream keeps only what Home shows", () => {
   const s = statusFromStream({
     live: false,
-    community: { display_name: "cleo", youtube_channel_id: "UC1", video_id: null, stream_title: "t", avatar_url: "https://a/p.png", twitch_login: null, sources: [{ platform: "youtube", id: "UC1" }] },
+    community: { key: "UC1", display_name: "cleo", youtube_channel_id: "UC1", video_id: null, stream_title: "t", avatar_url: "https://a/p.png", twitch_login: null, sources: [{ platform: "youtube", id: "UC1" }], scheduled: null },
+    communities: [],
   });
   assert.deepEqual(s, { live: false, viewers: null, community: { name: "cleo", avatarUrl: "https://a/p.png" } });
-  assert.deepEqual(statusFromStream({ live: true, community: null, viewers: 41 }), { live: true, viewers: 41, community: null });
+  assert.deepEqual(statusFromStream({ live: true, community: null, communities: [], viewers: 41 }), { live: true, viewers: 41, community: null });
 });
 
 test("newsFromRss keeps the WHOLE feed item (the widget shows its picture, the reader takes it) and trims to the limit", () => {

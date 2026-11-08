@@ -1,7 +1,8 @@
 "use client";
 
 import { useModIds } from "@/app/lib/modIdentity";
-import { CHAT_FONT, chatFontVar, rowBasisCalc } from "@/app/lib/chatFont";
+import { CHAT_FONT, chatFontVar } from "@/app/lib/chatFont";
+import { avatarSize } from "@/app/lib/avatarSize";
 import { memo, useState, useCallback, useMemo, useRef } from "react";
 import { renderText } from "@/app/lib/renderText";
 import { RedactedText, RedactedQuote, redactedQuoteLabel } from "@/app/components/RedactedText";
@@ -15,6 +16,7 @@ import { keepFocus, keepFocusCoarse } from "@/app/lib/keepFocus";
 import PlatformIcon, { PLATFORM_COLORS } from "@/app/components/PlatformIcon";
 import { platformColorVar } from "@/app/lib/platformColors";
 import { avatarBg } from "@/app/lib/avatarColor";
+import { useImgFallback } from "@/app/lib/useImgFallback";
 import { copyText } from "@/app/lib/clipboard";
 import { VOTE_COOLING_TITLE } from "@/app/lib/votePolicy";
 import { chatNameColor } from "@/app/lib/chatNameColor";
@@ -45,6 +47,9 @@ import { NATIVE_PLATFORM, isNativePlatform } from "@/app/lib/nativePlatform";
 import { useUndelivered } from "@/app/lib/undeliveredLines";
 import { undeliveredLabel } from "@/app/lib/sendDelivery";
 
+// The row's picture: one chat line tall, × the Avatar-size slider (the avatar scale).
+const PFP_SIZE = avatarSize("line", true);
+
 // Memoized: list-level renders (appends, queue growth while paused) skip
 // untouched rows. Vote/delete updates replace the msg object, so they still
 // re-render. Callers must keep callback props referentially stable.
@@ -68,6 +73,7 @@ export default memo(function ChatMessage({
   showMatrixName = false,
   selected = false,
   highlight = false,
+  wordHighlight = false,
   own = false,
   maskSwears = false,
   quoteHidden = false,
@@ -109,7 +115,10 @@ export default memo(function ChatMessage({
   tick?: number;
   showMatrixName?: boolean;
   selected?: boolean;
+  /** The message names the viewer or replies to them (a mention). */
   highlight?: boolean;
+  /** The message holds one of the viewer's Behavior › Words (a highlight) and is not a mention. */
+  wordHighlight?: boolean;
   /** Sent by the viewer (any of their identities) — Behavior › Tint my messages. */
   own?: boolean;
   /** Behavior › Hide swear words: mask them in this row's text (read once per list). */
@@ -134,7 +143,6 @@ export default memo(function ChatMessage({
   // formatChatTime's "now". Nothing here reads its value.
   void tick;
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
-  const [pfpFailed, setPfpFailed] = useState(false);
   const [boostPop, setBoostPop] = useState<{ x: number; y: number } | null>(null);
 
   // Sticker-boost FLIP slide + delayed grow (three interdependent layout effects) —
@@ -223,8 +231,9 @@ export default memo(function ChatMessage({
   const ownOrMember = chatNameColor(msg);
   const usesFallback = ownOrMember == null;
   const usernameColor = usesFallback ? "var(--chat-fallback-name, #c3cddb)" : ownOrMember;
-  // A tip card shows the name the tipper typed: their account id is on the card only for
-  // badges, colour and style, and swapping it in would put back the name they chose not to show.
+  // A tip card shows the name the tipper typed. Its account id is on the card only when that name
+  // IS the account's (tipCardIdentity.ts, ADR 0145); swapping the id in would put back a name they
+  // chose not to show.
   const username = showMatrixName && msg.matrixId && msg.system !== "donation"
     ? normalizeUsername(msg.matrixId)
     : normalizeUsername(msg.username);
@@ -236,6 +245,8 @@ export default memo(function ChatMessage({
   // (same one that powers the settings-button icon).
   const pfpSrc = msg.avatarUrl
     ?? (msg.matrixId ? `/api/avatar/user/${encodeURIComponent(msg.matrixId)}` : null);
+  // Also catches a picture that failed before React listened (useImgFallback.ts).
+  const { ok: pfpOk, ref: pfpRef, onError: onPfpError } = useImgFallback(pfpSrc);
   // Avatar fallback (no pfp, or the image 404s): a deterministic colored initial
   // keyed on the username — same scheme UserCard/StreamView use — so the avatar
   // column never collapses to nothing (broken row continuity).
@@ -368,14 +379,14 @@ export default memo(function ChatMessage({
     // Behavior settings: every tint that applies is added; each is a globals.css
     // class painted only while its switch is on (Mentions of me · Upvoted
     // messages · Tint my messages), and CSS source order decides the winner
-    // (mention > upvote > own) — so with Mentions of me off, the upvote/own tint
-    // shows instead of nothing. They sit after the alternating stripe so it
+    // (mention > highlight > upvote > own) — so with Mentions of me off, the
+    // upvote/own tint shows instead of nothing. They sit after the alternating stripe so it
     // cannot paint over them.
-    : [highlight && "chat-row-mention", !isEventRow && score > 0 && "chat-row-up", own && "chat-row-own"].filter(Boolean).join(" ");
+    : [highlight && "chat-row-mention", wordHighlight && "chat-row-word", !isEventRow && score > 0 && "chat-row-up", own && "chat-row-own"].filter(Boolean).join(" ");
   // `barOpen` joins the higher-priority states here for the same reason they are
   // listed: this is an INLINE style, so it beats rowBg's class and an event row
   // would otherwise show no selection at all when long-pressed.
-  const eventBgColor = isEventRow && !highlightLook && !selected && !barOpen && !replyTargetHighlight && !highlight
+  const eventBgColor = isEventRow && !highlightLook && !selected && !barOpen && !replyTargetHighlight && !highlight && !wordHighlight
     ? `color-mix(in srgb, ${indicatorColor} 8%, transparent)`
     : undefined;
   // Downvote fade is gradual (not a hard opacity-60 cutoff) — each downvote
@@ -392,6 +403,13 @@ export default memo(function ChatMessage({
   // Who a moderator's sender actions reach: the line's author, or a card's own sender (a paid
   // highlight, a sticker, a tip with a message). A poll card names no sender, so it gets none.
   const hasSender = !isPoll && (!msg.system || !!(modIds.matrixId ?? modIds.canonicalId));
+  // A tip that wears no account (typed name, guest, anonymous) opens no user card for a viewer:
+  // there is no one on it to show. A moderator's opens the sender resolved from the card's row.
+  const plainTip = msg.system === "donation" && !msg.matrixId;
+  const openCard = !onUsernameClick ? undefined
+    : !plainTip ? onUsernameClick
+    : onModDelete && modIds.matrixId ? (_m: ChatMsg, el: HTMLElement) => onUsernameClick({ ...msg, matrixId: modIds.matrixId }, el)
+    : undefined;
 
   // The owner's click picks the highlight (chatSpotlight.ts). Not a click on
   // a control inside the row, and not the click that ends a drag-select — the
@@ -540,8 +558,8 @@ export default memo(function ChatMessage({
         onDelete={onModDelete && msg.id != null ? () => onModDelete(msg) : undefined}
         // The sender actions ride with the mod handler (mods only at the call site), and only
         // where there is a sender to act on (hasSender).
-        msg={onModDelete && msg.id != null && hasSender ? { id: msg.id, platform: msg.platform, matrixId: msg.matrixId, canonicalId: modIds.canonicalId } : undefined}
-        onDetails={onModDelete && onUsernameClick && hasSender ? () => { if (menuAnchorRef.current) onUsernameClick(msg, menuAnchorRef.current); } : undefined}
+        msg={onModDelete && msg.id != null && hasSender ? { id: msg.id, platform: msg.platform, matrixId: msg.matrixId ?? modIds.matrixId, canonicalId: modIds.canonicalId } : undefined}
+        onDetails={onModDelete && openCard && hasSender ? () => { if (menuAnchorRef.current) openCard(msg, menuAnchorRef.current); } : undefined}
         onResult={emitChatNotice}
         onReport={canReport ? () => openReportDialog({ platform: msg.platform, messageId: msg.id!, name: msg.username }) : undefined}
         onClose={() => setCtxMenu(null)}
@@ -696,17 +714,16 @@ export default memo(function ChatMessage({
             </span>
           )}
         </span>
-        {/* marginRight adds the ring width: the ring is a box-shadow (zero
-            layout footprint), so without this it paints INTO the gap and the
-            avatar sits visibly closer to the badges/username than the badges
-            sit to the name. Ring off → var is unset → +0px. */}
-        <span className="chat-pfp items-center" style={{ display: "none", verticalAlign: "middle", marginLeft: "3px", marginRight: "calc(var(--chat-pi-gap, 11px) + var(--chat-pfp-ring, 0px))" }}>
-          {pfpSrc && !pfpFailed ? (
+        {/* The ring is drawn inside the picture's own box (globals.css
+            .chat-pfp-ring-el), so it takes no room: both sides of the slot are
+            the row's own gaps whether the ring is on or off. */}
+        <span className="chat-pfp items-center" style={{ display: "none", verticalAlign: "middle", marginLeft: "3px", marginRight: "var(--chat-pi-gap, 11px)" }}>
+          {pfpSrc && pfpOk ? (
             <img
               src={pfpSrc}
               // The ring cycles the cross-post colours in ring mode: same
               // cycle class as the marker, its own keyframes (globals.css).
-              className={`chat-pfp-ring-el rounded-full${cycleClass}`}
+              className={`avatar chat-pfp-ring-el${cycleClass}`}
               // lazy is load-bearing, not a nicety: the pfp toggle is CSS-only
               // (.chat-pfp-on on the root; this span is display:none otherwise),
               // so the <img> stays mounted with avatars OFF — and an eager
@@ -715,12 +732,13 @@ export default memo(function ChatMessage({
               // a box. Pinned by perfRound3.test.ts.
               loading="lazy"
               decoding="async"
-              style={{ width: rowBasisCalc('var(--chat-pfp-scale, 1)'), height: rowBasisCalc('var(--chat-pfp-scale, 1)'), display: "inline-block", verticalAlign: "middle", objectFit: "cover", boxShadow: "0 0 0 var(--chat-pfp-ring, 0px) var(--ring-c)", ["--ring-c" as string]: platformColor, ...cycleVars }}
-              onError={() => setPfpFailed(true)}
+              style={{ ["--avatar-size" as string]: PFP_SIZE, display: "inline-block", verticalAlign: "middle", ["--ring-c" as string]: platformColor, ...cycleVars }}
+              ref={pfpRef}
+              onError={onPfpError}
               alt=""
             />
           ) : (
-            <span className={`chat-pfp-ring-el rounded-full select-none${cycleClass}`} style={{ display: "inline-flex", width: rowBasisCalc('var(--chat-pfp-scale, 1)'), height: rowBasisCalc('var(--chat-pfp-scale, 1)'), alignItems: "center", justifyContent: "center", background: avatarFill, color: "#fff", fontWeight: 600, lineHeight: 1, fontSize: rowBasisCalc('var(--chat-pfp-scale, 1) * 0.6'), boxShadow: "0 0 0 var(--chat-pfp-ring, 0px) var(--ring-c)", ["--ring-c" as string]: platformColor, ...cycleVars }}>
+            <span className={`avatar chat-pfp-ring-el select-none${cycleClass}`} style={{ ["--avatar-size" as string]: PFP_SIZE, display: "inline-flex", alignItems: "center", justifyContent: "center", background: avatarFill, color: "#fff", fontWeight: 600, lineHeight: 1, fontSize: "calc(var(--avatar-box) * 0.6)", ["--ring-c" as string]: platformColor, ...cycleVars }}>
               {avatarInitial}
             </span>
           )}
@@ -742,15 +760,15 @@ export default memo(function ChatMessage({
             own; the card does neither). */}
         <button
           type="button"
-          onClick={(e) => onUsernameClick?.(msg, e.currentTarget)}
+          onClick={(e) => openCard?.(msg, e.currentTarget)}
           // Data-before-visible: start the card's fetch the
           // instant the press LANDS — the press→click gap plus the host's
           // open gate (ChatSidebar) usually hides the whole round-trip, so
           // the card first-paints finished at its true height. Gated on the
           // click handler: a host that opens no card fetches nothing.
-          onPointerDown={onUsernameClick ? () => { void prefetchUserCard(msg); } : undefined}
+          onPointerDown={openCard && !plainTip ? () => { void prefetchUserCard(msg); } : undefined}
           onMouseDown={keepFocus}
-          className={`${usesFallback ? "chat-name-fallback " : ""}hover:underline cursor-pointer align-baseline`}
+          className={`${usesFallback ? "chat-name-fallback " : ""}${openCard ? "hover:underline cursor-pointer " : "cursor-default "}align-baseline`}
           style={{
             color: usernameColor,
             filter: "saturate(var(--chat-username-sat, 1))",
@@ -772,7 +790,7 @@ export default memo(function ChatMessage({
             <span
               ref={nameInkRef}
               className={`chat-un-style ${unAnimClass}`}
-              style={usernameStyleCSS(msg.usernameStyle, msg.usernameColor)}
+              style={usernameStyleCSS(msg.usernameStyle, msg.usernameColor, username)}
             >
               {username}
             </span>

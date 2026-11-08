@@ -23,10 +23,24 @@
 //      after the blip that caused it.
 //   3. Only a SERVER-side failure says anything about the server: a network
 //      error or a 5xx evicts the cache; a 4xx is this one offer being bad.
+//   4. The journal can tell the node from the viewer (2026-10-31). The player's
+//      telemetry says "phase=signal": its offer got no answer from our site.
+//      Two lines here say whose fault that was: "slow answer" (the node took
+//      SLOW_ANSWER_MS or more, but answered) and "viewer gave up" (the player
+//      aborted while the node had still not answered). Neither line for a
+//      phase=signal row means the request never reached this relay at all —
+//      the viewer's own network.
+
+import { BUSY_RETRY_S, WHEP_RELAY_TIMEOUT_MS } from "./whepEscalation.ts";
+
+/** An answer this slow is logged: a third of the player's patience, well
+ *  above a healthy exchange (~0.1 s from the VM, measured 2026-10-31). */
+const SLOW_ANSWER_MS = 3000;
 
 export type WhepExchange =
-  /** The upstream answered (any status — the caller relays it). */
-  | { kind: "answer"; status: number; body: string; server: string }
+  /** The upstream answered (any status — the caller relays it). A 429 also
+   *  says when to come back: the node's Retry-After, else BUSY_RETRY_S. */
+  | { kind: "answer"; status: number; body: string; server: string; retryAfter?: string }
   /** Network failure or our deadline. */
   | { kind: "unreachable"; server: string }
   /** The client went away before the upstream answered. */
@@ -55,7 +69,7 @@ export function createWhepProxy(deps: WhepProxyDeps) {
     fetch, did, now = Date.now,
     node = "https://stream.place",
     allowedSuffix = "stream.place",
-    timeoutMs = 8_000,
+    timeoutMs = WHEP_RELAY_TIMEOUT_MS,
   } = deps;
 
   let serverCache: { server: string; at: number } | null = null;
@@ -114,6 +128,7 @@ export function createWhepProxy(deps: WhepProxyDeps) {
     async exchange(offer: string, rendition: string, clientSignal: AbortSignal): Promise<WhepExchange> {
       const server = await resolveServer();
       const url = `${server}/xrpc/place.stream.playback.whep?streamer=${encodeURIComponent(did)}&rendition=${encodeURIComponent(rendition)}`;
+      const started = now();
       let upstream: Response;
       try {
         upstream = await fetch(url, {
@@ -124,7 +139,10 @@ export function createWhepProxy(deps: WhepProxyDeps) {
           signal: AbortSignal.any([clientSignal, AbortSignal.timeout(timeoutMs)]),
         });
       } catch {
-        if (clientSignal.aborted) return { kind: "aborted" };
+        if (clientSignal.aborted) {
+          console.warn("[whep] viewer gave up after %d ms; %s had not answered", now() - started, server);
+          return { kind: "aborted" };
+        }
         // Network failure or our deadline: a stale cached server may be the
         // cause (the node rotated) — drop it so the next attempt re-discovers.
         serverCache = null;
@@ -140,9 +158,15 @@ export function createWhepProxy(deps: WhepProxyDeps) {
         console.warn("[whep] playback server unreachable: %s", server);
         return { kind: "unreachable", server };
       }
+      const took = now() - started;
+      if (took >= SLOW_ANSWER_MS) console.warn("[whep] slow answer %d ms from %s", took, server);
       // Rule 3: a 5xx is the server's; a 4xx is this offer's.
       if (upstream.status >= 500) serverCache = null;
       if (!upstream.ok) console.warn("[whep] upstream %d from %s (rendition %s)", upstream.status, server, rendition);
+      if (upstream.status === 429) {
+        const retryAfter = upstream.headers.get("retry-after")?.trim() || String(BUSY_RETRY_S);
+        return { kind: "answer", status: 429, body, server, retryAfter };
+      }
       return { kind: "answer", status: upstream.status, body, server };
     },
   };

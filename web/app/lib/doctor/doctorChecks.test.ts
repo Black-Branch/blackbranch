@@ -90,9 +90,15 @@ test("platforms: a channel with nothing to test is 'not checked', never a pass",
 test("alerts: no topic is amber with the plain sentence; one topic is enough", () => {
   const none = row("alerts.channel", (s) => { s.alerts = { topics: 0 }; });
   assert.equal(none.status, "warn");
-  assert.equal(none.detail, "Alerts reach nobody: no alert topic is set. Important problems stay visible here in the Admin Panel; external notifications are optional.");
-  assert.match(none.fix, /^Optional: Admin Panel → Site → Site, the "Alerts to your phone" card: /);
-  assert.equal(row("alerts.channel", (s) => { s.alerts = { topics: 1 }; }).status, "ok");
+  assert.equal(none.detail, "Alerts reach nobody: no alert topic is set. Important problems stay visible here in the Admin Panel; a failed backup or update is seen only here (unless the server's .env names a channel of its own).");
+  assert.match(none.fix, /^Optional: Admin Panel → Site → Site, card Alerts to your phone: /);
+  // The topic carries the server's own alerts too (the host reads it when .env names none): the row says so.
+  assert.match(none.fix, /The server's own alerts \(a failed backup or update, low disk\) go to it too\.$/);
+  const one = row("alerts.channel", (s) => { s.alerts = { topics: 1 }; });
+  assert.equal(one.status, "ok");
+  assert.equal(one.detail, "one topic: urgent and quiet alerts both go to it, the server's own (a failed backup or update, low disk) too");
+  assert.equal(row("alerts.channel", (s) => { s.alerts = { topics: 2 }; }).detail,
+    "urgent and quiet alerts each have a topic; the server's own (a failed backup or update, low disk) go to them too");
   assert.equal(row("alerts.channel", (s) => { s.alerts = null; }).status, "grey");
 });
 

@@ -19,7 +19,22 @@ import { isMissingCustomer } from "./stripeCustomer.ts";
 import type { createConcurrencyGate } from "./concurrencyGate.ts";
 import { webhookConnections } from "./billingConnections.ts";
 import { heldRecordIds, writeTransition } from "./subscriptions/state.ts";
-import { missingStripeObservation, needsPaymentHistory, settleNeverPaid, stripeObservation, stripeRenewalOff } from "./subscriptions/stripeRecords.ts";
+import { latestInvoiceToCheck, missingStripeObservation, needsPaymentHistory, settleFinalRetry, settleNeverPaid, stripeObservation, stripeRenewalOff } from "./subscriptions/stripeRecords.ts";
+import { paidSubscriptionInvoice, tenureMonths } from "./subRenewal.ts";
+
+/** The "subscribed" / "resubscribed" card a paid subscription invoice funds. The route adds the
+ *  viewer's chat identity and sends it; stream-api credits `amount` once per `spendId`. */
+export type SubscriptionCard = {
+  matrixId: string;
+  /** `sub:<subscription id>` for month one, `renewal:<invoice id>` after — the ids the refund
+   *  path recomputes (paymentReversalsLedger.ts). */
+  spendId: string;
+  months: number;
+  /** Gross paid, minor units. */
+  amount: number;
+  currency: string;
+  priceId: string | null;
+};
 
 export type SubscriptionWrite = {
   matrixId: string;
@@ -117,9 +132,16 @@ export function createSubscriptionSync(deps: {
    *  only in that case; a failed lookup throws, so the webhook answers 500 and Stripe redelivers —
    *  never a guess either way. */
   async function settle(sub: Stripe.Subscription): Promise<Stripe.Subscription> {
-    if (!needsPaymentHistory(sub)) return sub;
-    const paid = await deps.stripe().invoices.list({ subscription: sub.id, status: "paid", limit: 100 });
-    return settleNeverPaid(sub, paid.data.map((i) => i.amount_paid));
+    let s = sub;
+    if (needsPaymentHistory(s)) {
+      const paid = await deps.stripe().invoices.list({ subscription: s.id, status: "paid", limit: 100 });
+      s = settleNeverPaid(s, paid.data.map((i) => i.amount_paid));
+    }
+    // Stripe's final retry: a past_due subscription whose latest invoice has no next attempt is
+    // read as cancelled (stripeRecords.ts settleFinalRetry, A1-08).
+    const latest = latestInvoiceToCheck(s);
+    if (latest) s = settleFinalRetry(s, await deps.stripe().invoices.retrieve(latest));
+    return s;
   }
 
   /** Mirror a subscription's viewer into their row. `eventAt` is the Stripe
@@ -276,11 +298,35 @@ export function createSubscriptionSync(deps: {
     return { matrixId, sub, tier, effectiveTier };
   }
 
-  return { resolveMatrixId, syncSubscription };
+  /** The card a paid subscription invoice funds, or null (not a paid month, or no viewer for it).
+   *  Writes nothing to site.subscriptions — the state above stays the only writer of tier/status —
+   *  and does not depend on what the state sync wrote: an invoice is paid once, so whatever order
+   *  Stripe delivers the state events in, month one is credited from here exactly once. */
+  async function paidInvoiceCard(inv: Parameters<typeof paidSubscriptionInvoice>[0]): Promise<SubscriptionCard | null> {
+    const paid = paidSubscriptionInvoice(inv);
+    if (!paid) return null;
+    const sub = await deps.stripe().subscriptions.retrieve(paid.subscriptionId);
+    const matrixId = await resolveMatrixId(sub, paid.customerId ?? customerIdOf(sub));
+    if (!matrixId) {
+      console.error("[billing] no matrix_id for paid invoice", paid.invoiceId, sub.id);
+      return null;
+    }
+    const base = { matrixId, amount: paid.amount, currency: paid.currency, priceId: sub.items.data[0]?.price?.id ?? null };
+    if (paid.kind === "first") return { ...base, spendId: `sub:${sub.id}`, months: 1 };
+    // Tenure = paid invoices on this subscription. Best-effort: a listing failure still
+    // announces the renewal, at tenureMonths' floor.
+    const count = await deps.stripe().invoices
+      .list({ subscription: sub.id, status: "paid", limit: 100 })
+      .then((r) => r.data.length)
+      .catch(() => 0);
+    return { ...base, spendId: `renewal:${paid.invoiceId}`, months: tenureMonths(count, sub.trial_end != null) };
+  }
+
+  return { resolveMatrixId, syncSubscription, paidInvoiceCard };
 }
 
 // `stripe: getStripe` passes the FUNCTION, never calls it — importing this
 // module must never throw on a missing key (same rule as paymentEventHandlers.ts).
 const bound = createSubscriptionSync({ pool, stripe: getStripe });
-export const resolveMatrixId = bound.resolveMatrixId;
+export const paidSubscriptionCard = bound.paidInvoiceCard;
 export const syncSubscriptionState = bound.syncSubscription;

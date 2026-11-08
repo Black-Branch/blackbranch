@@ -49,6 +49,12 @@ export const MUTE_RULE = namespaced("mute");
 /** Account data: the ids the site itself added to the ignore list. */
 export const HIDDEN_PEOPLE = namespaced("hidden_people");
 export const IGNORED_BOTS = namespaced("ignored_bots");
+/** Create content / state of a space the reconciler makes: `"gate"` marks the hidden supporters space. */
+export const SPACE_KIND = namespaced("space_kind");
+/** Account data: the conversations closed from the DM list, `{ [partner]: closedAt }` (ms). */
+export const DM_CLOSED = namespaced("dm_closed");
+/** Room state of a space: `{ url: mxc }`, the banner over its channel list (the reconciler writes it). */
+export const SPACE_BANNER = namespaced("banner");
 
 /** The first value `get` finds under `name.read`, product name first; undefined when neither has one.
  *  `get` returns undefined/null for "not there" — including a value of the wrong shape, so a

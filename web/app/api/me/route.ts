@@ -8,6 +8,7 @@ import { getBannerMxc } from "@/app/lib/bannerServer";
 import { matrixLocalpart } from "@/app/lib/chatIdentity";
 import { readPresenceStatus } from "@/app/lib/presenceServer";
 import { listViewerSubscriptions } from "@/app/lib/subscriptions/entitlement";
+import { queuedGiftStart } from "@/app/lib/subscriptions/giftQueue";
 
 export async function GET() {
   const session = await auth();
@@ -113,6 +114,8 @@ export async function GET() {
     giftExpiresAt: giftExpires,
     // Who it came from; null when anonymous or unknown.
     giftFrom: giftFromDisplay(rows[0]?.gift_from),
+    // A gift queued behind the viewer's own subscription: when it begins (A1-03).
+    giftStartsAt: await queuedGiftStart(pool, session.user.id).catch(() => null),
     subscriptions,
     presenceStatus: presence.status,
     presenceStatusText: presence.statusText,

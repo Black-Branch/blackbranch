@@ -12,7 +12,7 @@ test("desktop compact parks the bars but keeps the dock; only theatre fills the 
   assert.match(view, /const fillMode = panelMode === "theatre" \|\| \(narrow && !bars\.barsInFlow\);/);
   assert.match(view, /const barsParked = !narrow && barsHidden && panelMode !== "theatre";/);
   assert.match(view, /bb-video-col @container flex flex-col min-w-0 flex-none md:flex-1 \$\{barsParked \? "bars-parked" : ""\}/);
-  assert.match(view, /\{!narrow && panelMode !== "theatre" && \(\s*<BottomDock/);
+  assert.match(view, /\{!narrow && panelMode !== "theatre" && \(\s*<ErrorBoundary>\s*<BottomDock/);
   assert.match(view, /barsOverlay=\{barsParked\}/);
   // StreamView's last statement is the guest-donate dynamic import, not a closing brace.
   assert.ok(view.trimEnd().endsWith("{ ssr: false });"), "END anchor");

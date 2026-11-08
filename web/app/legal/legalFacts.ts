@@ -9,6 +9,7 @@
 import type { StreamApiSnapshot } from "../lib/instanceAdminView.ts";
 import type { AiRoutesSnapshot, RouteSummary } from "../lib/aiAdminView.ts";
 import type { PluginPrivacy } from "../lib/plugins/types.ts";
+import type { HomeserverRetention } from "./homeserverRetention.ts";
 
 export type LegalFacts = {
   /** bot.name; null = unset. */
@@ -54,9 +55,9 @@ export type LegalFacts = {
   thirdPartyImages: { vods: boolean; news: boolean };
   /** Requests reach this site through Cloudflare. */
   cloudflare: boolean;
-  /** The bundled homeserver's message retention, in days; null = the homeserver is run elsewhere
+  /** The bundled homeserver's message retention as last rendered (homeserverRetention.ts); null = the homeserver is run elsewhere
    *  and its retention is not this site's to state. */
-  homeserverRetention: { dms: number; general: number } | null;
+  homeserverRetention: HomeserverRetention | null;
   /** Days a browser error report is kept (the pruner's own constant). */
   errorLogDays: number;
   /** What the install's site plugin adds; null = no plugin. */

@@ -23,7 +23,7 @@ const { parseDuration } = require('./timer'); // for /timer/adjust's refusal sen
 const { notify } = require('./notify.js');
 const { NATIVE_PLATFORM } = require('./native-platform');
 const { createReplayGuard } = require('./webhooks.js');
-const { ledgerEventId } = require('./alert.js');
+const { ledgerEventId, donationPayer } = require('./alert.js');
 // The pad rule for POST /speak lives with the queue that sleeps for it, not here.
 const { clampPadMs, PAD_DEFAULTS } = require('./tts.js');
 const { instanceConfig } = require('./instance-config');
@@ -329,9 +329,11 @@ function makeRecordUnpriced({ pool, liveState }) {
 // Same factory reasoning as makeRecordSupport: createAlert/createPoll take it
 // as their persistCard dep.
 function makePersistEventCard(pool) {
-  return async function persistEventCard(card) {
+  // `actorOverride`: the row's matrix_id when it is not on the card — a plain tip's payer
+  // (alert.js donationPayer). The card itself is stored as built, so event_json stays plain.
+  return async function persistEventCard(card, actorOverride) {
     const kind = card.system;
-    const actor =
+    const actor = actorOverride !== undefined ? (actorOverride || null) :
       kind === 'gift'     ? (card.gifterMatrixId     || null) :
       kind === 'sub'      ? (card.subscriberMatrixId  || null) :
       kind === 'donation' ? (card.donorMatrixId       || null) :
@@ -545,7 +547,7 @@ function createMoney({
         // needs. Without it every native donation/gift/sub mints a fresh
         // canonical id for the donor.
         platform: NATIVE_PLATFORM, eventType: 'donation', username: msg.username,
-        userId: msg.donorMatrixId || undefined, // the card's key (buildEventCard), same as the persistence map below
+        userId: donationPayer(msg, body) || undefined, // the payer (alert.js donationPayer), same as the persisted row
         amount: economics.formatUSD(usd), message: msg.message || '', label: 'tipped',
         grossUSD: usd, // gross paid (USD) — what the spoken-length tier keys on
         // body.netUsd: PayPal's own reported net (its webhook reaches
@@ -1248,7 +1250,7 @@ function createMoney({
 
       // Persist so the card is a first-class message (reply/vote/delete/pin) — on
       // success switch it to a real numeric id + the site's own platform id.
-      const numericId = await persistEventCard(msg);
+      const numericId = await persistEventCard(msg, kind === 'donation' ? donationPayer(msg, req.body || {}) : undefined);
       if (numericId != null) { msg.id = numericId; msg.platform = NATIVE_PLATFORM; }
 
       bufferPush(msg);

@@ -10,6 +10,7 @@ import { card, h2, btn, input, timeAgo, shortName } from "../shared";
 import EmptyState from "@/app/components/EmptyState";
 import PlatformIcon from "@/app/components/PlatformIcon";
 import { platformLabel } from "@/app/lib/platforms";
+import { supersededLabel, type Superseded } from "@/app/lib/platformRetry";
 
 type LogEntry = {
   id: number; action: string; targetId: string; targetName: string | null;
@@ -22,9 +23,22 @@ type LogEntry = {
 type PlatformAction = {
   id: number; action: string; platform: string; ok: boolean; status: number | null;
   detail: string | null; actedVia: string | null; durationSeconds: number | null; at: number;
+  /** A failed row a later action (or the timeout's end) has overtaken: no Retry, and why. */
+  supersededBy?: Superseded | null;
 };
 
 // ─── History + propagation ────────────────────────────────────────────────────
+
+// The words a row's action shows as, where the stored action is not already a word.
+const ACTION_LABEL: Readonly<Record<string, string>> = {
+  slowmode_user: "slowmode",
+  identity_merged: "Identities merged",
+  report_resolved: "Report resolved",
+  held_released: "Held message allowed",
+  history_deleted: "History deleted",
+};
+// Closing a case or merging is not a punishment: these read calm, not red.
+const CALM = new Set(["identity_merged", "report_resolved", "held_released"]);
 
 // History shows 8, expands to 16, then pages; a search bar above.
 const FIRST = 8;
@@ -80,6 +94,10 @@ export default function HistorySection({ note }: { note: (m: string) => void }) 
     try {
       const res = await postJson("/api/mod/platform-actions/retry", { id: actionId });
       if (res.status === 422) note("That action can't be retried from here.");
+      else if (res.status === 409) {
+        const b = (await res.json().catch(() => ({}))) as { supersededBy?: Superseded };
+        note(b.supersededBy ? `Not retried — ${supersededLabel(b.supersededBy).toLowerCase()}.` : "Not retried — a later action stands.");
+      }
       else if (!res.ok) note("Retry failed.");
       else note("Retried — refreshing outcome.");
       // Was `toggleExpand(entry); toggleExpand(entry);` — both calls read the SAME
@@ -124,9 +142,9 @@ export default function HistorySection({ note }: { note: (m: string) => void }) 
                   : e.action === "signups_disabled" || e.action === "crosspost_disabled" ? "text-amber-400 font-semibold"
                   : e.action === "signups_enabled" || e.action === "crosspost_enabled" ? "text-emerald-400 font-semibold"
                   : e.action === "slowmode" || e.action === "slowmode_user" ? "text-sky-400"
-                  : e.action === "delete" ? "text-secondary"
+                  : e.action === "delete" || CALM.has(e.action) ? "text-secondary"
                   : "text-red-400"
-                }`}>{e.action === "slowmode_user" ? "slowmode" : e.action}</span>
+                }`} data-action={e.action}>{ACTION_LABEL[e.action] ?? e.action}</span>
                 <span className="text-body-dim truncate">{shortName(e.targetId, e.targetName)}</span>
                 {e.durationMinutes != null && <span className="text-xs text-muted shrink-0">{e.durationMinutes}m</span>}
                 {!!e.failedPlatforms?.length && (
@@ -160,7 +178,9 @@ export default function HistorySection({ note }: { note: (m: string) => void }) 
                           <span className="text-muted truncate max-w-48">{a.detail}</span>
                         )}
                         <span className="text-faint ml-auto shrink-0">{timeAgo(a.at)}</span>
-                        {!a.ok && a.detail !== "unsupported" && ["ban", "timeout", "unban", "slowmode"].includes(a.action) && (
+                        {!a.ok && a.detail !== "unsupported" && ["ban", "timeout", "unban", "slowmode"].includes(a.action) && (a.supersededBy ? (
+                          <span className="text-faint shrink-0">{supersededLabel(a.supersededBy)}</span>
+                        ) : (
                           <button
                             className="text-sky-400/90 hover:text-sky-300 shrink-0 disabled:opacity-40"
                             disabled={retrying === a.id}
@@ -168,7 +188,7 @@ export default function HistorySection({ note }: { note: (m: string) => void }) 
                           >
                             Retry
                           </button>
-                        )}
+                        ))}
                       </div>
                     ))
                   )}

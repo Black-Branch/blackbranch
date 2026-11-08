@@ -1,4 +1,4 @@
-import { getMatrixSession, RevokedSessionError } from "@/app/lib/matrixSession";
+import { getMatrixSession, endedSessionResponse } from "@/app/lib/matrixSession";
 import { readPresenceStatus } from "@/app/lib/presenceServer";
 
 // Returns a fresh Matrix access token for THIS browser session's device.
@@ -16,11 +16,10 @@ export async function GET() {
       presenceStatus: (await readPresenceStatus(mx.matrixId)).status,
     });
   } catch (e) {
-    if (e instanceof RevokedSessionError) {
-      // Session revoked (MAS account page, admin, expiry) — client must wipe
-      // local crypto state and sign out fully.
-      return Response.json({ error: "session_expired", reason: "revoked" }, { status: 401 });
-    }
+    // Ended: "revoked" (confirmed — the browser wipes this device's store) or "signed_out" (the
+    // browser signs out and keeps its store and device id). matrixSessionCore.ts classifies.
+    const ended = endedSessionResponse(e);
+    if (ended) return ended;
     console.error("[matrix/token]", e);
     return Response.json({ error: "server_error" }, { status: 500 });
   }

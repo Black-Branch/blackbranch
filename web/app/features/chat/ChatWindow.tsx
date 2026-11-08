@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { useEmotes, type EmoteMap } from "@/app/lib/useEmotes";
 import { useChatMessages } from "@/app/lib/useChatMessages";
 import { useChatPin } from "@/app/lib/useChatPin";
-import { useSpotlightToggle } from "@/app/lib/useChatSpotlight";
+import { useSpotlightSwitch, useSpotlightToggle } from "@/app/lib/useChatSpotlight";
 import { chatKey } from "@/app/lib/chatSeed";
 import { useChatRowDerivations } from "@/app/lib/useChatRowDerivations";
 import { useOwnPublicIds } from "@/app/lib/ownIdentity";
@@ -36,6 +36,7 @@ import ChatMessage from "./ChatMessage";
 import ReplyPreview from "./ReplyPreview";
 import { useReplyJump } from "@/app/lib/useReplyJump";
 import { ScrollBottomBeforeHydration } from "@/app/components/ScrollBottomBeforeHydration";
+import { StatusPill } from "@/app/components/StatusPill";
 import { OverlaySettingsPanel } from "./OverlaySettingsPanel";
 
 // /chat — the broadcaster's own chat WINDOW. Not an OBS source: that is
@@ -199,6 +200,7 @@ export default function ChatWindow({ scaleFactor = 1.5, initialMessages, initial
   }, []);
   // The broadcaster's highlighted message (chatSpotlight.ts) — the click is the broadcaster's only.
   const handleSpotlight = useSpotlightToggle(spotlightKey);
+  const canSpotlight = useSpotlightSwitch(me.isAdmin);
 
   // PgUp/PgDn/Home/End move the feed. There is no composer here, so the
   // keys are read on the document; the browser would otherwise page the
@@ -282,12 +284,13 @@ export default function ChatWindow({ scaleFactor = 1.5, initialMessages, initial
                 onPin={me.signedIn && me.isMod ? handlePin : undefined}
                 onModDelete={me.isMod ? handleDelete : undefined}
                 highlight={row.highlight}
+                wordHighlight={row.wordHighlight}
                 own={row.isOwn || row.isOwnStream}
                 maskSwears={maskSwears}
                 quoteHidden={!!row.msg.reply_to_username && hiddenNames.has(row.msg.reply_to_username.toLowerCase())}
                 directory={directory}
                 spotlight={spotlightKey !== null && spotlightKey === chatKey(msg)}
-                onSpotlight={me.isAdmin ? handleSpotlight : undefined}
+                onSpotlight={canSpotlight ? handleSpotlight : undefined}
                 onReplyJump={onReplyJump}
                 onReplyPreview={onReplyPreview}
                 replyTargetHighlight={flashKey !== null && flashKey === chatKey(msg)}
@@ -311,14 +314,7 @@ export default function ChatWindow({ scaleFactor = 1.5, initialMessages, initial
       )}
       {/* Only what the viewer will SEE counts as new (hidden people / bots don't). */}
       {!anchored && <PausedPill queued={Math.max(0, shownAll.length - shown.length)} onClick={anchorToBottom} />}
-      {everConnected && !connected && (
-        <div
-          role="status"
-          className="absolute top-2 left-1/2 -translate-x-1/2 z-10 rounded-full border border-edge bg-surface-2 px-3 py-1 text-xs text-body-dim"
-        >
-          Reconnecting to chat…
-        </div>
-      )}
+      {everConnected && !connected && <StatusPill>Reconnecting to chat…</StatusPill>}
       {actionNotice && (
         <div
           role="status"

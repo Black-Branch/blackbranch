@@ -21,7 +21,8 @@ import { vodPlaylist } from "@/app/lib/vodPlaylist";
 import { INSTANCE_KEYS } from "@/app/lib/instanceSchema.generated.mjs";
 import type { AiRoutesSnapshot } from "@/app/lib/aiAdminView";
 import { PRUNE_AFTER_DAYS } from "@/app/api/client-error/route";
-import { HOMESERVER_DEFAULT_RETENTION_DAYS, HOMESERVER_GENERAL_RETENTION_DAYS } from "./homeserverRetention";
+import { homeserverRetentionFrom, type GeneralRow } from "./homeserverRetention";
+import { retentionCapDays } from "@/app/lib/community/communityAdminServer";
 import { legalFactsFrom, type LegalFacts } from "./legalFacts";
 
 const ROUTES_MS = 60_000;
@@ -79,6 +80,25 @@ function liabilityCapUsd(): number {
   return typeof v === "number" && Number.isFinite(v) ? v : Number(INSTANCE_KEYS.find((k) => k.key === "legal.liabilityCapUsd")?.default);
 }
 
+/** #general's Community page row (the room the setup recorded as matrix.rooms.general), or null
+ *  before it has one (or when it cannot be read: the bootstrap's days are then stated). */
+async function generalRow(): Promise<GeneralRow | null> {
+  const general = instanceString("matrix.rooms.general");
+  if (!general) return null;
+  const { rows } = await pool.query<{ retention_days: number | null }>(
+    `SELECT retention_days FROM site.community_rooms WHERE matrix_room_id = $1 AND NOT archived LIMIT 1`, [general],
+  ).catch(() => ({ rows: [] as { retention_days: number | null }[] }));
+  return rows[0] ? { retentionDays: rows[0].retention_days === null ? null : Number(rows[0].retention_days) } : null;
+}
+
+/** The retention the homeserver was last rendered with (the host's results/retention-cap.json), with
+ *  the saved cap beside it and #general's own row; null on an install whose homeserver the bundle
+ *  does not render. */
+async function homeserverRetention(): Promise<LegalFacts["homeserverRetention"]> {
+  if (!hostRequestsAvailable()) return null;
+  return homeserverRetentionFrom(await hostFile("retention-cap.json").catch(() => null), retentionCapDays(), await generalRow());
+}
+
 export async function legalFacts(): Promise<LegalFacts> {
   const [cfg, routes, youtube, cloudflare, news] = await Promise.all([
     servingSnapshot(), aiRoutes(), youtubeUse(), throughCloudflare(), newsFeedOn(),
@@ -97,9 +117,7 @@ export async function legalFacts(): Promise<LegalFacts> {
     liabilityCapUsd: liabilityCapUsd(),
     thirdPartyImages: { vods: !!vodPlaylist(), news },
     cloudflare,
-    homeserverRetention: hostRequestsAvailable()
-      ? { dms: HOMESERVER_DEFAULT_RETENTION_DAYS, general: HOMESERVER_GENERAL_RETENTION_DAYS }
-      : null,
+    homeserverRetention: await homeserverRetention(),
     errorLogDays: PRUNE_AFTER_DAYS,
     plugin: pluginPrivacy(),
   });

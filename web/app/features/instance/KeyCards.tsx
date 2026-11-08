@@ -20,8 +20,10 @@ import {
 } from "./keyRowText";
 import { serviceName, shownKeys, type KeyGroup } from "./adminLayout";
 import { keyInstalled } from "@/app/lib/plugins/installed";
+import { paymentSwitchWarning } from "@/app/lib/paymentSwitch";
 import { DERIVED_IDS } from "@/app/lib/derivedIds";
 import { FACES } from "@/app/lib/boardFaces";
+import { PasteLine } from "@/app/components/SetupStepGuide";
 
 type FoundId = { key: string; ok: boolean; id?: string; why?: string };
 /** What a save found of the platform ids behind it, in words for the note. */
@@ -96,7 +98,7 @@ function choicesFor(key: string): string[] | null {
 
 /** A list of things switched OFF, shown as one switch per thing (on = offered): the words for each. */
 const OFF_LISTS: Record<string, Record<string, string>> = {
-  "player.embedsOff": { native: "The site's own player", streamplace: "Streamplace", youtube: "YouTube", twitch: "Twitch" },
+  "player.embedsOff": { native: "The site's own player", streamplace: "Streamplace", youtube: "YouTube", twitch: "Twitch", kick: "Kick" },
   // Each board by the name Home shows it under.
   "leaderboard.hidden": Object.fromEntries(FACES.map((f) => [f.id, f.label])),
 };
@@ -114,7 +116,12 @@ function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnly
   readOnlyNote?: string;
 }) {
   // A plain setting starts from its value; a credential and a list's "add" box start empty.
-  const [draft, setDraft] = useState(() => (k.secret || k.kind === "list" ? "" : draftOf(k)));
+  const start = k.secret || k.kind === "list" ? "" : draftOf(k);
+  const [draft, setDraft] = useState(start);
+  // A new value (a save, a reload) resets the draft here, in place: the row is keyed on its key
+  // alone, so it is not remounted and a keyboard user keeps focus on what they just used.
+  const [startSeen, setStartSeen] = useState(start);
+  if (start !== startSeen) { setStartSeen(start); setDraft(start); }
   const [busy, setBusy] = useState(false);
   // A setting the host applies, on a homeserver the bundle does not run: nothing here reaches it.
   const managedOutside = k.hostApplied && !bundle;
@@ -125,7 +132,6 @@ function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnly
   const choices = k.kind === "string" ? choicesFor(k.key) : null;
   const envOver = k.packages.filter((p) => p.envOverrides).map((p) => serviceName(p.package));
   const list = k.kind === "list" ? currentList(k) : [];
-  const start = k.secret || k.kind === "list" ? "" : draftOf(k);
 
   // A switch (bool kind) saves the moment it is flipped — the one-control standard's Toggle, not
   // a text box asking for "true". Its state is what the service that ACTS on it resolves: the
@@ -136,18 +142,28 @@ function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnly
   // RUNS, so its report alone would show the old state right after a flip.
   const switchOn = k.kind === "bool" ? desiredSwitch(k) : switchView?.display === true;
 
-  async function put(value: unknown, done: string): Promise<boolean> {
+  // A saved or cleared key, told to the rest of this page: a live setting something on screen
+  // already read (the streamer-highlight switch, useSpotlightSwitch) re-reads it without a reload.
+  const announce = () => { window.dispatchEvent(new CustomEvent("bb:instance-changed", { detail: k.key })); };
+  async function put(value: unknown, done: string, confirm?: number): Promise<boolean> {
     setBusy(true);
     try {
-      const res = await postJson(`/api/admin/instance/${encodeURIComponent(k.key)}`, { value }, "PUT");
-      const j = (await res.json().catch(() => ({}))) as { error?: string; found?: FoundId[] };
-      if (res.ok) { note(`${k.label}: ${done}${foundWords(j.found)}`); onChanged(); return true; }
+      const res = await postJson(`/api/admin/instance/${encodeURIComponent(k.key)}`, { value, ...(confirm === undefined ? {} : { confirm }) }, "PUT");
+      const j = (await res.json().catch(() => ({}))) as { error?: string; found?: FoundId[]; needConfirm?: boolean; provider?: "stripe" | "paypal"; count?: number };
+      if (res.ok) { note(`${k.label}: ${done}${foundWords(j.found)}`); onChanged(); announce(); return true; }
+      // Switching a payment provider off while it has subscribers: ask with the count, then send
+      // the count that was shown (the server asks again if it moved).
+      if (res.status === 409 && j.needConfirm && j.provider && typeof j.count === "number") {
+        setBusy(false);
+        if (!window.confirm(paymentSwitchWarning(j.provider, j.count))) { note(`${k.label}: left on.`); return false; }
+        return put(value, done, j.count);
+      }
       note(`${k.label}: ${j.error ?? "not saved"}`);
     } catch { note(`${k.label}: not saved (network)`); }
     finally { setBusy(false); }
     return false;
   }
-  const flip = () => void put(!switchOn, `${!switchOn ? "on" : "off"}.`);
+  const flip = () => { if (!busy) void put(!switchOn, `${!switchOn ? "on" : "off"}.`); };
 
   async function save() {
     const raw = draft.trim();
@@ -163,13 +179,19 @@ function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnly
     const on = !list.includes(item);
     void put(on ? [...list, item] : list.filter((x) => x !== item), `${offWords?.[item] ?? item} ${on ? "off" : "on"}.`);
   };
-  async function clear() {
+  async function clear(confirm?: number): Promise<void> {
     setBusy(true);
     try {
-      const res = await postJson(`/api/admin/instance/${encodeURIComponent(k.key)}`, undefined, "DELETE");
-      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      const res = await postJson(`/api/admin/instance/${encodeURIComponent(k.key)}${confirm === undefined ? "" : `?confirm=${confirm}`}`, undefined, "DELETE");
+      const j = (await res.json().catch(() => ({}))) as { error?: string; needConfirm?: boolean; provider?: "stripe" | "paypal"; count?: number };
+      // Clearing a payment switch that is on can switch the provider off: the same confirm as the switch.
+      if (res.status === 409 && j.needConfirm && j.provider && typeof j.count === "number") {
+        setBusy(false);
+        if (!window.confirm(paymentSwitchWarning(j.provider, j.count))) { note(`${k.label}: left as it is.`); return; }
+        return clear(j.count);
+      }
       note(res.ok ? `${k.label}: saved value removed.` : `${k.label}: ${j.error ?? "not removed"}`);
-      if (res.ok) onChanged();
+      if (res.ok) { onChanged(); announce(); }
     } catch { note(`${k.label}: not removed (network)`); }
     finally { setBusy(false); }
   }
@@ -209,9 +231,10 @@ function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnly
         {/* A switch sits right beside what it switches. */}
         {editable && k.kind === "bool" && (
           <>
-            <Toggle on={switchOn} onToggle={flip} disabled={busy || !switchView?.known} label={k.label} />
+            {/* Not disabled while saving: a control that is disabled under focus drops it. */}
+            <Toggle on={switchOn} onToggle={flip} disabled={!switchView?.known} label={k.label} />
             <span className="text-xs text-secondary">{switchOn ? "On" : "Off"}</span>
-            {k.stored && <button type="button" className={btn} disabled={busy} onClick={clear}>Clear saved</button>}
+            {k.stored && <button type="button" className={btn} disabled={busy} onClick={() => void clear()} aria-label={`Clear saved ${k.label}`}>Clear saved</button>}
           </>
         )}
         {managedOutside && (
@@ -227,6 +250,7 @@ function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnly
         )}
       </div>
       {hint && <p className="mt-0.5 text-xs text-secondary">{hint}</p>}
+      {k.paste && <div className="mt-1.5" data-paste><PasteLine label={k.paste.label} value={k.paste.value} copy /></div>}
       {derived && <p className="mt-0.5 text-xs text-muted" data-derived-from>Found from the channel when it is saved.</p>}
       {managedOutside && (
         <p className="mt-0.5 text-xs text-muted">
@@ -284,9 +308,9 @@ function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnly
               aria-label={k.kind === "list" ? `Add to ${k.label}` : k.secret ? `New value for ${k.label}` : k.label}
             />
           )}
-          <button type="submit" className={btn} disabled={busy || !changed}>{k.kind === "list" ? "Add" : "Save"}</button>
-          {k.stored && <button type="button" className={btn} disabled={busy} onClick={clear}>Clear saved</button>}
-          {k.testable && <button type="button" className={btn} disabled={busy} onClick={test}>Check</button>}
+          <button type="submit" className={btn} disabled={busy || !changed} aria-label={`${k.kind === "list" ? "Add to" : "Save"} ${k.label}`}>{k.kind === "list" ? "Add" : "Save"}</button>
+          {k.stored && <button type="button" className={btn} disabled={busy} onClick={() => void clear()} aria-label={`Clear saved ${k.label}`}>Clear saved</button>}
+          {k.testable && <button type="button" className={btn} disabled={busy} onClick={test} aria-label={`Check ${k.label}`}>Check</button>}
         </form>
       )}
 
@@ -352,8 +376,10 @@ function KeyRow({ k, onChanged, note, bundle, render, readOnly = false, readOnly
         {k.tier === "install" && (
           // An install key: by design not editable here.
           <div className="space-y-0.5 text-xs text-muted" data-install-row>
-            {k.packages.some((p) => p.package === "web") ? (
-              <p>🔒 Set in the website&apos;s environment, so it can&apos;t be changed here. To change it: set <span className="font-mono">{k.envNames[0]}</span> there (on a bundled install: <span className="font-mono">sudo blackbranch set {k.envNames[0]} …</span>, for the display values), then restart the website.</p>
+            {k.permanent ? (
+              <p>🔒 Part of this install&apos;s identity, set when it was installed: it never changes.</p>
+            ) : k.packages.some((p) => p.package === "web") ? (
+              <p>🔒 Set in the website&apos;s environment, so it can&apos;t be changed here. To change it: set <span className="font-mono">{k.envNames[0]}</span> there{k.settable && <> (on a bundled install: <span className="font-mono">sudo blackbranch set {k.envNames[0]} …</span>)</>}, then restart the website.</p>
             ) : (
               // A server-only install key (an address a credential is sent to): never edited here.
               <p>🔒 Set on the server only, so it can&apos;t be changed here. To change it: set <span className="font-mono">{k.envNames[0]}</span> in the {k.packages.map((p) => serviceName(p.package)).join(" and ")}&apos;s environment, then restart it.</p>
@@ -395,9 +421,6 @@ function PendingRestart({ pending, canRestart, note }: { pending: ReturnType<typ
   );
 }
 
-/** A row's identity: a saved change remounts it, so its editor starts from the new value. */
-const rowKey = (k: KeyView) => `${k.key}:${k.stored?.updatedAt ?? ""}:${JSON.stringify(k.packages.map((p) => p.display))}`;
-
 /** The given groups of keys, one card each, from an already-loaded view. */
 export default function KeyCards({ view, groups, onChanged, note, placeLabel }: {
   view: InstanceView; groups: readonly KeyGroup[]; onChanged: () => void; note: (m: string) => void;
@@ -417,7 +440,7 @@ export default function KeyCards({ view, groups, onChanged, note, placeLabel }: 
             {g.blurb && <p className="mt-0.5 text-xs text-muted">{g.blurb}</p>}
             {!g.readOnly && (() => { const pend = pendingRestarts(keys); return pend.length ? <PendingRestart pending={pend} canRestart={view.canRestart === true} note={note} /> : null; })()}
             <ul className="mt-3 space-y-3">
-              {keys.map((k) => <KeyRow key={rowKey(k)} k={k} onChanged={onChanged} note={note} bundle={bundle} render={view.render ?? null} readOnly={g.readOnly} readOnlyNote={g.readOnlyNote} />)}
+              {keys.map((k) => <KeyRow key={k.key} k={k} onChanged={onChanged} note={note} bundle={bundle} render={view.render ?? null} readOnly={g.readOnly} readOnlyNote={g.readOnlyNote} />)}
             </ul>
           </>
         );

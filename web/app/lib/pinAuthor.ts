@@ -16,6 +16,7 @@
 import type { EquippedStyle } from "./usernameStyles";
 import { isNativePlatform } from "./nativePlatform.ts";
 import { noOptOutSql } from "./linkConsent.ts";
+import { persistedTipWearsAccount } from "./tipCardIdentity.ts";
 
 type PinAuthor = {
   /** The badge lookup key (BadgesContext); null for an unlinked chatter. */
@@ -28,7 +29,19 @@ type PinAuthor = {
 
 export type PinAuthorQuery = (
   sql: string, params: unknown[]
-) => Promise<{ rows: { matrix_id: string | null; username_color: string | null; username_style: unknown; platform_color?: string | null }[] }>;
+) => Promise<{ rows: {
+  matrix_id: string | null; username_color: string | null; username_style: unknown; platform_color?: string | null;
+  event_kind?: string | null; event_json?: unknown; display_name?: string | null;
+}[] }>;
+
+function cardOf(raw: unknown): Record<string, unknown> {
+  try {
+    const v = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
 
 const NOBODY: PinAuthor = { matrixId: null, usernameColor: null, usernameStyle: null };
 
@@ -45,7 +58,9 @@ export async function pinAuthor(platform: string, messageId: number, query: PinA
       ? query(
           // LEFT JOIN: the badge key is m.matrix_id, which exists whether or
           // not the author still has a site.users row.
-          `SELECT m.matrix_id, u.username_color, u.username_style, NULL AS platform_color
+          // The card's kind and payload decide whether a tip wears its account (ADR 0145).
+          `SELECT m.matrix_id, u.username_color, u.username_style, NULL AS platform_color,
+                  m.event_kind, m.event_json, u.display_name
              FROM site.chat_messages m
              LEFT JOIN site.users u ON u.matrix_id = m.matrix_id
             WHERE m.id = $1`,
@@ -73,6 +88,10 @@ export async function pinAuthor(platform: string, messageId: number, query: PinA
   }
   const r = rows[0];
   if (!r) return NOBODY;
+  // A tip under a typed name is a plain banner; its row's account is the money record's, not the banner's.
+  if (r.event_kind === "donation" && !persistedTipWearsAccount(cardOf(r.event_json), { matrixId: r.matrix_id, accountName: r.display_name || r.matrix_id })) {
+    return NOBODY;
+  }
   return {
     matrixId: r.matrix_id ?? null,
     usernameColor: r.username_color ?? r.platform_color ?? null,

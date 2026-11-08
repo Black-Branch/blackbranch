@@ -1,0 +1,246 @@
+{
+  "serverName": "example.test",
+  "hubRoomId": "!hub:example.test",
+  "serviceUserId": "@community:example.test",
+  "hiddenUserIds": [
+    "@community:example.test",
+    "@reader:example.test"
+  ],
+  "spaces": [
+    {
+      "id": 1,
+      "parentId": null,
+      "kind": "hub",
+      "name": "Example Community",
+      "topic": null,
+      "avatarMxc": null,
+      "orderKey": "a0",
+      "matrixRoomId": "!hub:example.test",
+      "gateTier": null
+    },
+    {
+      "id": 2,
+      "parentId": 1,
+      "kind": "category",
+      "name": "Talk",
+      "topic": null,
+      "avatarMxc": null,
+      "orderKey": "a1",
+      "matrixRoomId": "!talk:example.test",
+      "gateTier": null
+    },
+    {
+      "id": 3,
+      "parentId": null,
+      "kind": "gate",
+      "name": "Supporters",
+      "topic": null,
+      "avatarMxc": null,
+      "orderKey": "a2",
+      "matrixRoomId": "!gate:example.test",
+      "gateTier": "supporter"
+    }
+  ],
+  "rooms": [
+    {
+      "id": 1,
+      "spaceId": 2,
+      "kind": "text",
+      "name": "general",
+      "topic": "Say hello",
+      "avatarMxc": null,
+      "orderKey": "a0",
+      "see": "everyone",
+      "post": "everyone",
+      "retentionDays": 30,
+      "encrypted": false,
+      "published": true,
+      "archived": false,
+      "matrixRoomId": "!general:example.test",
+      "discordChannelId": null
+    },
+    {
+      "id": 2,
+      "spaceId": 2,
+      "kind": "announcement",
+      "name": "news",
+      "topic": null,
+      "avatarMxc": null,
+      "orderKey": "a1",
+      "see": "everyone",
+      "post": "mods",
+      "retentionDays": null,
+      "encrypted": false,
+      "published": true,
+      "archived": false,
+      "matrixRoomId": "!news:example.test",
+      "discordChannelId": null
+    },
+    {
+      "id": 3,
+      "spaceId": 2,
+      "kind": "text",
+      "name": "lounge",
+      "topic": null,
+      "avatarMxc": null,
+      "orderKey": "a2",
+      "see": "supporters",
+      "post": "supporters",
+      "retentionDays": null,
+      "encrypted": false,
+      "published": false,
+      "archived": false,
+      "matrixRoomId": "!lounge:example.test",
+      "discordChannelId": null
+    },
+    {
+      "id": 4,
+      "spaceId": 2,
+      "kind": "text",
+      "name": "mods",
+      "topic": null,
+      "avatarMxc": null,
+      "orderKey": "a3",
+      "see": "mods",
+      "post": "everyone",
+      "retentionDays": null,
+      "encrypted": false,
+      "published": false,
+      "archived": false,
+      "matrixRoomId": "!mods:example.test",
+      "discordChannelId": null
+    },
+    {
+      "id": 5,
+      "spaceId": 2,
+      "kind": "text",
+      "name": "vip",
+      "topic": null,
+      "avatarMxc": null,
+      "orderKey": "a4",
+      "see": "invited",
+      "post": "everyone",
+      "retentionDays": null,
+      "encrypted": false,
+      "published": false,
+      "archived": false,
+      "matrixRoomId": "!vip:example.test",
+      "discordChannelId": null
+    },
+    {
+      "id": 6,
+      "spaceId": 2,
+      "kind": "text",
+      "name": "staff",
+      "topic": null,
+      "avatarMxc": null,
+      "orderKey": "a5",
+      "see": "staff",
+      "post": "staff",
+      "retentionDays": null,
+      "encrypted": true,
+      "published": false,
+      "archived": false,
+      "matrixRoomId": "!staff:example.test",
+      "discordChannelId": null
+    }
+  ],
+  "roles": [
+    {
+      "key": "admin",
+      "label": "Admin",
+      "level": 100,
+      "colour": null,
+      "hoist": true,
+      "orderKey": "a0",
+      "builtin": true
+    },
+    {
+      "key": "staff",
+      "label": "Staff",
+      "level": 75,
+      "colour": null,
+      "hoist": true,
+      "orderKey": "a1",
+      "builtin": true
+    },
+    {
+      "key": "mod",
+      "label": "Mod",
+      "level": 50,
+      "colour": null,
+      "hoist": true,
+      "orderKey": "a2",
+      "builtin": true
+    },
+    {
+      "key": "bot",
+      "label": "Bot",
+      "level": 50,
+      "colour": null,
+      "hoist": true,
+      "orderKey": "a3",
+      "builtin": true
+    },
+    {
+      "key": "supporter",
+      "label": "Supporter",
+      "level": 10,
+      "colour": null,
+      "hoist": true,
+      "orderKey": "a4",
+      "builtin": true
+    },
+    {
+      "key": "member",
+      "label": "Member",
+      "level": 0,
+      "colour": null,
+      "hoist": false,
+      "orderKey": "a5",
+      "builtin": true
+    },
+    {
+      "key": "timeout",
+      "label": "Timed out",
+      "level": -1,
+      "colour": null,
+      "hoist": false,
+      "orderKey": "a6",
+      "builtin": true
+    }
+  ],
+  "people": [
+    {
+      "userId": "@streamer:example.test",
+      "level": 100
+    },
+    {
+      "userId": "@staffer:example.test",
+      "level": 75
+    },
+    {
+      "userId": "@moddy:example.test",
+      "level": 50
+    },
+    {
+      "userId": "@botty:example.test",
+      "level": 50
+    }
+  ],
+  "supporters": [
+    "@alice:example.test"
+  ],
+  "banned": [
+    "@mallory:example.test"
+  ],
+  "timedOut": [
+    {
+      "userId": "@tim:example.test",
+      "until": "2026-10-24T00:00:00.000Z"
+    }
+  ],
+  "siteBanReason": "Banned by the example site",
+  "putBack": true,
+  "retentionCapDays": 365
+}

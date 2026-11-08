@@ -70,7 +70,7 @@ test("every receipt sender goes through the switch", () => {
   assert.match(src("app/lib/readReceipts.ts"), /sendReadMarker\(client, room\.roomId, newestEvent, \{ single: thread \}\)/);
   assert.match(src("app/lib/matrixDm.ts"), /sendReadMarker\(client, room\.roomId, last, \{ single: true \}\)/);
   assert.match(src("app/features/community/NotificationMenu.tsx"), /setRoomReadMarkers!\(r\.roomId, id, sendsReadReceipts\(\) \? ev : undefined, ev\)/);
-  assert.match(src("app/features/community/useTyping.ts"), /const typing = enabled && sendsTyping\(\) && text\.trim\(\) !== "";/);
+  assert.match(src("app/lib/useTyping.ts"), /const typing = enabled && sendsTyping\(\) && text\.trim\(\) !== "";/);
   // No other file sends a receipt or typing on its own.
   const all = ["app/lib/readReceipts.ts", "app/lib/matrixDm.ts"].map(src).join("\n");
   assert.doesNotMatch(all, /\.sendReadReceipt\(|\.sendTyping\(/);

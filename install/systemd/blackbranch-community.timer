@@ -1,0 +1,13 @@
+# Every 10 minutes (and a few minutes after boot): the community's rooms are put back the way the
+# Admin Panel sets them. Enabled and started by `blackbranch install-files` and `blackbranch community on`
+# only while the install keeps the rooms (COMMUNITY_RECONCILER=true in .env); `community off` stops it.
+[Unit]
+Description=Black Branch: keep the community's rooms as the Admin Panel sets them
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Unit=blackbranch-community@apply.service
+
+[Install]
+WantedBy=timers.target

@@ -3,8 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  availableSources, stateForSource, sourceFromState, fallbackSource, edgeTab, youtubeLiveSrc, SOURCE_META,
-  type PlayerState,
+  availableSources, stateForSource, sourceFromState, fallbackSource, edgeTab, youtubeLiveSrc, kickLiveSrc, SOURCE_META,
+  KICK_EMBED_CAPTION, type PlayerState,
 } from "./playerSource.ts";
 
 // A registered fallback, as this install's plugin registers the radio (app/(owner)/player.ts).
@@ -16,7 +16,7 @@ const st = (o: Partial<PlayerState> = {}): PlayerState =>
 test("the live and offline source sets, in order", () => {
   assert.deepEqual(
     availableSources({ live: true, hasCommunity: true, fallbacks: FB }),
-    ["native", "streamplace", "youtube", "twitch", "community", "radio"]
+    ["native", "streamplace", "youtube", "twitch", "kick", "community", "radio"]
   );
   assert.deepEqual(availableSources({ live: false, hasCommunity: true, fallbacks: FB }), ["community", "radio"]);
 });
@@ -161,8 +161,9 @@ import {
   type LiveSource,
 } from "./playerSource.ts";
 
-test("parseLiveSource accepts exactly the four live sources and nothing else", () => {
-  for (const v of ["native", "streamplace", "youtube", "twitch"]) assert.equal(parseLiveSource(v), v);
+test("parseLiveSource accepts exactly the five live sources and nothing else", () => {
+  for (const v of ["native", "streamplace", "youtube", "twitch", "kick"]) assert.equal(parseLiveSource(v), v);
+  assert.equal(parseLiveSource("kick"), "kick");
   for (const v of [null, "", "sp", "yt", "community", "radio", "1", "NATIVE"]) assert.equal(parseLiveSource(v), null, String(v));
   assert.equal(LIVE_SOURCE_KEY, "player_live_source");
 });
@@ -176,17 +177,21 @@ test("the legacy pair maps without resetting anyone: opt-in survives, platforms 
   assert.equal(liveSourceFromLegacy("garbage", "1"), "native", "unknown platform meant sp, exactly as before");
 });
 
-test("legacyForLiveSource and liveSourceFromState are inverses over all four values", () => {
-  const all: LiveSource[] = ["native", "streamplace", "youtube", "twitch"];
+test("legacyForLiveSource and liveSourceFromState are inverses over all five values", () => {
+  const all: LiveSource[] = ["native", "streamplace", "youtube", "twitch", "kick"];
   for (const src of all) assert.equal(liveSourceFromState(legacyForLiveSource(src)), src);
   assert.deepEqual(legacyForLiveSource("native"), { active: "sp", spThinPlayer: true });
   assert.deepEqual(legacyForLiveSource("youtube"), { active: "yt", spThinPlayer: false });
+  assert.equal(legacyForLiveSource("kick").active, "kk");
+  assert.deepEqual(legacyForLiveSource("kick"), { active: "kk", spThinPlayer: false });
 });
 
 test("a pick through stateForSource lands on the value the store would hold", () => {
   const prev = st({ active: "yt", spThinPlayer: false });
   assert.equal(liveSourceFromState(stateForSource("native", prev)), "native");
   assert.equal(liveSourceFromState(stateForSource("twitch", prev)), "twitch");
+  assert.equal(liveSourceFromState(stateForSource("kick", prev)), "kick");
+  assert.equal(sourceFromState(stateForSource("kick", prev)), "kick");
   // Community / radio picks leave the live choice alone — nothing to write.
   assert.equal(liveSourceFromState(stateForSource("radio", prev)), "youtube");
   assert.equal(liveSourceFromState(stateForSource("community", prev)), "youtube");
@@ -196,11 +201,29 @@ test("public build: no registered fallback — the row, the fallback and the off
   const none: readonly string[] = [];
   assert.deepEqual(availableSources({ live: false, hasCommunity: false, fallbacks: none }), []);
   assert.deepEqual(availableSources({ live: false, hasCommunity: true, fallbacks: none }), ["community"]);
-  assert.deepEqual(availableSources({ live: true, hasCommunity: false, fallbacks: none }), ["native", "streamplace", "youtube", "twitch"]);
+  assert.deepEqual(availableSources({ live: true, hasCommunity: false, fallbacks: none }), ["native", "streamplace", "youtube", "twitch", "kick"]);
   // Offline with nothing: the viewer's own live source (the Live tab shows the offline card).
   assert.equal(fallbackSource({ live: false, hasCommunity: false, fallbacks: none }, st({ active: "yt", spThinPlayer: false })), "youtube");
   assert.equal(edgeTab({ live: true, primaryOn: true }, { live: false, primaryOn: false }, "live"), "live");
   // A fallback's id is its tab, both ways.
   assert.equal(stateForSource("radio", st()).tab, "radio");
   assert.equal(sourceFromState(st({ tab: "radio" })), "radio");
+});
+
+// ─── the Kick embed (decision 0135: every embed is a streamer toggle) ───────────────────────────
+
+test("kickLiveSrc: Kick's player by channel slug, the device's mute setting carried; no slug → no source", () => {
+  assert.equal(kickLiveSrc("casey", true), "https://player.kick.com/casey?autoplay=true&muted=true");
+  assert.equal(kickLiveSrc("casey", false), "https://player.kick.com/casey?autoplay=true&muted=false");
+  assert.equal(kickLiveSrc("", true), null);
+  assert.equal(kickLiveSrc("  ", true), null, "a blank slug is no channel");
+  assert.equal(kickLiveSrc("a/b?c", true), "https://player.kick.com/a%2Fb%3Fc?autoplay=true&muted=true", "the slug cannot leave its path segment");
+});
+
+test("Kick has icon metadata keyed to its glyph", () => {
+  assert.deepEqual(SOURCE_META.kick, { label: "Kick", platform: "kick" });
+});
+
+test("the caption under the Kick player is exactly this plain text", () => {
+  assert.equal(KICK_EMBED_CAPTION, "Kick decides the quality this embed plays; open it on kick.com for the full source.");
 });

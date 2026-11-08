@@ -4,7 +4,8 @@
 // Run: node --test app/features/stream/ingestReaders.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readersView } from "./ingestReaders.ts";
+import { readersView, livenessChip, YOUTUBE_LIVE_NOTE } from "./ingestReaders.ts";
+import { PLATFORM_LIVENESS } from "../../lib/platformLiveness.generated.mjs";
 
 const since = "2026-10-20T08:00:00.000Z";
 const health = {
@@ -54,4 +55,48 @@ test("a shape the page does not know is unknown; an unknown state or a bad date 
   assert.equal(v.rows[0]!.since, null);
   assert.equal(v.bot, null);
   assert.equal(v.ok, true);
+});
+
+// ── Per-platform liveness (Task 10): the ingest's `liveness`, as chips on each row ─────────────────
+// `{ <platform>: { state, since, lastAnswerAt, scheduledStart, evidence, misses, stale } | null }`.
+// Words come from the vocabulary (EVIDENCE); a code it does not know reads "Can't tell", never a guess.
+const live = (state: string, o: Record<string, unknown> = {}) => ({ state, since, lastAnswerAt: since, scheduledStart: null, evidence: "", misses: 0, stale: false, ...o });
+const fmt = (iso: string) => `at ${iso}`;
+
+test("chip words: Live, Offline, Scheduled for <local time>, and Can't tell with the vocabulary's words — one code of each platform", () => {
+  assert.equal(livenessChip(live("live", { evidence: "helix-live" }), fmt).words, "Live");
+  assert.equal(livenessChip(live("offline", { evidence: "kick-not-live" }), fmt).words, "Offline");
+  assert.equal(livenessChip(live("upcoming", { evidence: "upcoming", scheduledStart: "2026-10-25T18:00:00.000Z" }), fmt).words, "Scheduled for at 2026-10-25T18:00:00.000Z");
+  assert.equal(livenessChip(live("upcoming", { evidence: "upcoming" }), fmt).words, "Scheduled", "no start known");
+  for (const code of ["helix-error", "kick-error", "unrecognized-page", "socket-quiet"]) {
+    const chip = livenessChip(live("unknown", { evidence: code }), fmt);
+    assert.equal(chip.words, `Can't tell — ${PLATFORM_LIVENESS.EVIDENCE[code as keyof typeof PLATFORM_LIVENESS.EVIDENCE]}`, code);
+    assert.equal(chip.state, "unknown");
+  }
+  assert.equal(livenessChip(live("unknown", { evidence: "helix-error" }), fmt).words, "Can't tell — Twitch could not be asked, or its answer could not be read", "vacuity: real words");
+  assert.equal(livenessChip(live("unknown", { evidence: "a-code-from-a-newer-ingest" }), fmt).words, "Can't tell");
+  assert.equal(livenessChip(live("unknown", { evidence: "__proto__" }), fmt).words, "Can't tell", "a prototype name is not a code");
+  assert.equal(livenessChip(live("dancing"), fmt).state, "unknown", "a state the page does not know reads can't tell");
+  const stale = livenessChip(live("unknown", { evidence: "helix-error", stale: true }), fmt);
+  assert.equal(stale.stale, true);
+  assert.match(stale.note ?? "", /^No answer for over 15 min/);
+  assert.equal(livenessChip(live("live"), fmt).note, null);
+});
+
+test("readersView carries each configured platform's chip on its row; not configured is none; an older ingest has none", () => {
+  const v = readersView({ reachable: true, health: { ...health, liveness: { twitch: live("live", { evidence: "helix-live" }), youtube: live("unknown", { evidence: "unrecognized-page" }), kick: null, streamplace: "bad" } } });
+  if (v.kind !== "ok") throw new Error("vacuity: not read");
+  const by = Object.fromEntries(v.rows.map((r) => [r.platform, r.live?.words ?? null]));
+  assert.deepEqual(by, { twitch: "Live", youtube: "Can't tell — YouTube showed a consent or bot-check page", kick: null, streamplace: null });
+  const older = readersView({ reachable: true, health });
+  if (older.kind !== "ok") throw new Error("vacuity");
+  assert.ok(older.rows.every((r) => r.live === null));
+  // A platform with live detection but no reader row still shows.
+  const only = readersView({ reachable: true, health: { ok: true, readers: {}, liveness: { kick: live("offline") } } });
+  if (only.kind !== "ok") throw new Error("vacuity");
+  assert.deepEqual(only.rows.map((r) => [r.platform, r.state, r.live?.words]), [["kick", null, "Offline"]]);
+});
+
+test("the YouTube row note says when YouTube ends a broadcast by itself", () => {
+  assert.equal(YOUTUBE_LIVE_NOTE, "YouTube ends the broadcast about a minute after you stop only when auto-stop is on in YouTube Studio; otherwise it stays live until you end it there.");
 });

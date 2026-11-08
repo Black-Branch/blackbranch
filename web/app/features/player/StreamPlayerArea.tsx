@@ -9,21 +9,27 @@ import { PlayerFailurePanel } from "./PlayerFailurePanel";
 import { createYouTubeAdapter } from "./adapters/youtube";
 import { createScriptLoader, browserScriptEnv } from "@/app/lib/playerScripts";
 import type { AdapterSource } from "@/app/lib/playerAdapter";
-import { communitySrc, type Platform, type CommunityStatus, type CommunitySource, type LoopVideo } from "@/app/lib/streamView";
+import { communitySrc, type CommunityStatus, type CommunitySource, type LoopVideo } from "@/app/lib/streamView";
 import { loopPlaylistSrc } from "@/app/lib/loopPlaylist";
-import { YT_EMBED_PARAMS, type PlayerState } from "@/app/lib/playerSource";
+import { YT_EMBED_PARAMS, KICK_EMBED_CAPTION, type PlayerState } from "@/app/lib/playerSource";
 import { type Vod } from "@/app/lib/vods";
 import { usePlayerSeen } from "@/app/lib/usePlayerSeen";
 import { setPlayerSeen, setPlayerSrc } from "@/app/lib/playerHealth";
 import { usePlayerDebug } from "./usePlayerDebug";
+import { platformLabel } from "@/app/lib/platforms";
+import type { LiveCardReason } from "@/app/lib/livePlatforms";
+
+const NO_CARD: LiveCardReason = { kind: "none" };
 
 type StreamPlayerAreaProps = {
   tab: PlayerState["tab"];
   live: boolean;
-  active: Platform;
+  active: PlayerState["active"];
   spSrc: string;
   ytSrc: string | null;
   twSrc: string;
+  /** The Kick player (playerSource.ts kickLiveSrc); null = no Kick channel, nothing mounts. */
+  kkSrc: string | null;
   /** The live tab's Twitch channel — TwitchPlayer needs it apart from twSrc
    *  because the adapter path builds its own player rather than an iframe src. */
   twitchChannel: string;
@@ -63,8 +69,11 @@ type StreamPlayerAreaProps = {
   /** False = this install has no live source set up: the Live tab says so instead of
    *  mounting an embed with an empty channel. Default true. */
   livePlayable?: boolean;
-  /** The Kick channel, "" when unset. There is no Kick player yet: with no other source, a live
-   *  stream links to Kick instead. */
+  /** What the card says while nothing is playable (livePlatforms.ts liveCardReason): live on a
+   *  platform no shown source plays, the stream has ended, or no player is set up. Default none. */
+  liveCard?: LiveCardReason;
+  /** The Kick channel for the card's "Watch on Kick" link — "" when unset OR when the Live row
+   *  offers Kick's embed (then Kick plays in the player and the card never links out). */
   kickChannel?: string;
 };
 
@@ -186,7 +195,7 @@ function YouTubeFrame({ src, title, className, allow, referrerPolicy, playerKey,
 }
 
 /** The telemetry name of what this area is showing — mirrors the mount conditions below. */
-function playerSrcFor(isFallback: boolean, tab: StreamPlayerAreaProps["tab"], live: boolean, active: Platform, spThin: boolean,
+function playerSrcFor(isFallback: boolean, tab: StreamPlayerAreaProps["tab"], live: boolean, active: PlayerState["active"], spThin: boolean,
   hasVod: boolean, hasCommunity: boolean, hasLoop: boolean): string {
   if (isFallback) return tab;
   if (tab === "replay") return hasVod ? "replay" : "none";
@@ -195,6 +204,7 @@ function playerSrcFor(isFallback: boolean, tab: StreamPlayerAreaProps["tab"], li
   if (active === "sp") return spThin ? "native" : "streamplace";
   if (active === "yt") return "youtube";
   if (active === "tw") return "twitch";
+  if (active === "kk") return "kick";
   return "none";
 }
 
@@ -204,10 +214,10 @@ function playerSrcFor(isFallback: boolean, tab: StreamPlayerAreaProps["tab"], li
 // bars, and the video is never cropped. On mobile it's a natural full-width
 // 16:9 block and the page scrolls.
 export function StreamPlayerArea({
-  tab, live, active, spSrc, ytSrc, twSrc, twitchChannel, twStartMuted, community, communitySource,
+  tab, live, active, spSrc, ytSrc, twSrc, kkSrc, twitchChannel, twStartMuted, community, communitySource,
   loopVideos, embedHost, selectedVod, vodStartMuted, spThinPlayer, spStartMuted, spChannel,
   onToggleSpPlayer, isSignedIn, fallbackCollapsed, onToggleFallbackCollapsed, onPlayerLive,
-  livePlayable = true, kickChannel = "",
+  livePlayable = true, liveCard = NO_CARD, kickChannel = "",
 }: StreamPlayerAreaProps) {
   const { ids: fallbackIds, fallbackFor } = usePlayerFallbacks();
   const fallback = fallbackFor(tab);
@@ -215,8 +225,12 @@ export function StreamPlayerArea({
 
   // Stable across renders (the singleton never changes), so it is safe inside
   // any child's own useCallback dependency array.
+  // Called from mount-time initialisers, which run in the SERVER render too: there is no window
+  // there, so nothing is ready — the same answer the client's hydrating render gives, since the
+  // scripts load only after mount. Reading the loader there threw and 500'd the home page whenever
+  // Twitch or YouTube was the first source (playerSsr.render.test.ts).
   const ready = useCallback(
-    (source: AdapterSource) => playerScriptLoader().ready(source),
+    (source: AdapterSource) => typeof window !== "undefined" && playerScriptLoader().ready(source),
     [],
   );
 
@@ -240,8 +254,13 @@ export function StreamPlayerArea({
   // Live with no source this site can play: never an embed with an empty channel.
   const playLive = live && livePlayable;
   useEffect(() => { setPlayerSeen(seen); }, [seen]);
-  // The per-device debug log (?playerdebug=1) — inert unless switched on.
-  usePlayerDebug(boxRef, src);
+  // The per-device debug log (?playerdebug=1) — inert unless switched on. The inputs are what
+  // this box is keyed on; a remount's row names the ones that changed.
+  const debugInputs = {
+    src, tab, active, live: String(playLive), thin: String(spThinPlayer),
+    vod: selectedVod?.id ?? "", community: communitySource?.id ?? "",
+  };
+  usePlayerDebug(boxRef, src, debugInputs);
   useEffect(() => {
     setPlayerSrc(src);
     return () => setPlayerSrc("none");
@@ -290,20 +309,23 @@ export function StreamPlayerArea({
           {/* Live tab — the streamer's stream on the chosen platform. */}
           {tab === "live" && live && !livePlayable && (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted">
-              {kickChannel ? (
-                <>
-                  <p>Live on Kick — this site has no Kick player yet.</p>
-                  <a
-                    href={`https://kick.com/${encodeURIComponent(kickChannel)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="rounded-md bg-surface-2 px-3 py-1.5 text-body hover:bg-surface-3"
-                  >
-                    Watch on Kick
-                  </a>
-                </>
+              {liveCard.kind === "elsewhere" ? (
+                <p>Live on {platformLabel(liveCard.platform)}.</p>
+              ) : liveCard.kind === "ended" ? (
+                <p>The stream has ended.</p>
               ) : (
                 <p>Live — but no player is set up on this site yet.</p>
+              )}
+              {/* Kick's embed switched off: the link stays wherever the stream may be on Kick. */}
+              {kickChannel && liveCard.kind !== "ended" && (liveCard.kind === "none" || liveCard.platform === "kick") && (
+                <a
+                  href={`https://kick.com/${encodeURIComponent(kickChannel)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="tap-hit-tall rounded-md bg-surface-2 px-3 py-1.5 text-body hover:bg-surface-3"
+                >
+                  Watch on Kick
+                </a>
               )}
             </div>
           )}
@@ -356,6 +378,23 @@ export function StreamPlayerArea({
               scope="live"
               onPlayerLive={onPlayerLive}
             />
+          )}
+          {/* Kick's own player, the caption under it: Kick picks the quality its embed plays. The
+              frame gives up the caption's line rather than the box growing — every layout mode
+              sizes the box from tokens. */}
+          {tab === "live" && playLive && active === "kk" && kkSrc && (
+            <div className="flex h-full w-full flex-col">
+              <iframe
+                key={kkSrc}
+                src={kkSrc}
+                title="Live stream — Kick"
+                className="min-h-0 w-full flex-1 border-0"
+                allow={IFRAME_ALLOW}
+                referrerPolicy={IFRAME_REFERRER}
+                allowFullScreen
+              />
+              <p className="shrink-0 px-2 py-1 text-center text-2xs text-muted">{KICK_EMBED_CAPTION}</p>
+            </div>
           )}
           {/* Community is its own source, not the offline fallback of the Live
               tab. The status endpoint drops the featured streamer on the streamer's

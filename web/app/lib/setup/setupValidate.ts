@@ -4,6 +4,7 @@
 // hold what .env cannot: $, ", \ or a line break.
 
 import { INSTANCE_KEYS, parseInstanceValue } from "../instanceSchema.generated.mjs";
+import { checkSetupChannels, DEFAULT_SETUP_CHANNELS, type SetupChannel } from "../community/setupChannels.ts";
 
 export type FormField = { name: string; label: string; description: string; required?: boolean; max: number; placeholder?: string };
 
@@ -153,13 +154,16 @@ export function joinChoice(v: unknown): JoinChoice | null {
   return v === "open" || v === "closed" ? v : null;
 }
 
-/** The Community step's POST: the federation switch and the answer to "who can join?" — both needed. */
+/** The Community step's POST: the federation switch and the answer to "who can join?" — both needed —
+ *  and the channels listed beyond #general and #forum (none sent = setup's default list). */
 export function validateCommunityStep(body: Record<string, unknown>):
-  { ok: true; federation: boolean; registration: JoinChoice } | { ok: false; error: string } {
+  { ok: true; federation: boolean; registration: JoinChoice; channels: SetupChannel[] } | { ok: false; error: string } {
   if (typeof body.federation !== "boolean") return { ok: false, error: "federation: on or off" };
   const registration = joinChoice(body.registration);
   if (!registration) return { ok: false, error: "who can join: choose open sign-up or closed" };
-  return { ok: true, federation: body.federation, registration };
+  const listed = checkSetupChannels(body.channels === undefined ? [...DEFAULT_SETUP_CHANNELS] : body.channels);
+  if (!listed.ok) return listed;
+  return { ok: true, federation: body.federation, registration, channels: listed.channels };
 }
 
 /** What the community step made, in words ("the space and #general exist" says nothing). The
@@ -192,7 +196,7 @@ export function joinWords(stored: unknown): { state: JoinChoice; words: string }
 
 const ALERT_KEYS = { wake: "ntfy.wakeUrl", quiet: "ntfy.quietUrl" } as const;
 type AlertKey = (typeof ALERT_KEYS)[keyof typeof ALERT_KEYS];
-const ALERTS_PLACE = "Admin Panel → Site → Alerts to your phone";
+const ALERTS_PLACE = "Admin Panel → Site → Site, card Alerts to your phone";
 
 function topicUrl(v: string): boolean {
   if (v.length > 300 || /\s/.test(v)) return false;
@@ -239,8 +243,9 @@ export function alertsSet(self: Record<string, { display: unknown }> | null | un
 /** The Finish page's line about alerts. */
 export function alertWords(saved: { wake: boolean; quiet: boolean } | null): string {
   if (!saved) return `Whether phone alerts are set up could not be checked just now (${ALERTS_PLACE} shows it).`;
-  if (saved.wake !== saved.quiet) return "Phone alerts are on: every alert goes to the one topic you set. Add a second topic to keep urgent ones apart.";
+  const server = " The server's own alerts (a failed backup or update, low disk) go there too.";
+  if (saved.wake !== saved.quiet) return `Phone alerts are on: every alert goes to the one topic you set. Add a second topic to keep urgent ones apart.${server}`;
   return saved.wake && saved.quiet
-    ? "Phone alerts are on: urgent problems go to the urgent topic, the rest to the quiet one."
+    ? `Phone alerts are on: urgent problems go to the urgent topic, the rest to the quiet one.${server}`
     : `No phone alerts are set up. That is fine. Important problems always show in the Admin Panel (Doctor); alerts pushed to your phone are optional, and can be added any time in ${ALERTS_PLACE}.`;
 }

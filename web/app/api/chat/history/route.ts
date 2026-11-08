@@ -9,7 +9,7 @@ import { ipKey } from "@/app/lib/rateLimit";
 import { chatHistoryLimited } from "@/app/lib/chatHistoryLimit";
 import { historyIds } from "@/app/lib/chatHistoryIds";
 import { publicIdFor } from "@/app/lib/publicIdServer";
-import { liveCardActor } from "@/app/lib/eventCardName";
+import { historyCardFields } from "@/app/lib/eventCardName";
 
 // GET /api/chat/history?before=<epoch ms>&limit=<n>[&beforePlatform=<p>&beforeId=<id>]
 // Combined-chat scroll-back: platform messages from stream.chat_log plus native
@@ -198,14 +198,10 @@ export async function loadChatHistory({ before, limit, cursor = null, viewer }: 
       // live too, except a tip's: a tip keeps the name it was given, typed or
       // not (lib/eventCardName.ts). External alerts (no matrix_id) keep
       // whatever event_json carried.
-      const liveActor = liveCardActor(r.event_kind, card, r);
-      // A card's stored payload is shown as written, minus any canonical id a
-      // producer put in it — the row is public (historyIds).
-      const { canonicalId: storedCanonical, ...shown } = card as Record<string, unknown>;
+      // A tip under a typed name reads back plain (ADR 0145). A stored canonical
+      // id reaches moderators only: the row is public.
       return {
-        ...shown,
-        ...(isMod && typeof storedCanonical === "string" ? { canonicalId: storedCanonical } : {}),
-        ...liveActor,
+        ...historyCardFields(r.event_kind, card, r, isMod),
         id: Number(r.id),
         platform: NATIVE_PLATFORM,
         system: r.event_kind,

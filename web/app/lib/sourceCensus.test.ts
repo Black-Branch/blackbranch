@@ -19,7 +19,7 @@ const fresh = (): CensusMap => new Map();
 test("a source with no viewers reports 0, never a missing key", () => {
   // A reader must never have to tell "nobody" from "we did not measure".
   const c = countSources(fresh(), 1000);
-  for (const k of ["native", "streamplace", "youtube", "twitch", "community", "radio", "none"]) {
+  for (const k of ["native", "streamplace", "youtube", "twitch", "kick", "community", "radio", "none"]) {
     assert.equal(c[k as keyof typeof c], 0, `${k} must be present and zero`);
   }
 });
@@ -39,6 +39,23 @@ test("a tab that switches source moves, it does not double-count", () => {
   const c = countSources(m, 1300);
   assert.equal(c.youtube, 0);
   assert.equal(c.twitch, 1);
+});
+
+// Liveness Task 8 left a gap: the Kick embed (decision 0135) was not in the vocabulary, so a viewer
+// watching it cast no vote at all, and one who switched to it stayed counted on the source they left
+// until that sample expired (up to SAMPLE_TTL_MS).
+test("a viewer watching the Kick embed is counted under kick; switching to it moves them at once", () => {
+  const m = fresh();
+  recordSample(m, "aaa", "twitch", 1000);
+  const src = parseCensusSource("kick");
+  assert.equal(src, "kick");
+  recordSample(m, "aaa", src!, 1200);
+  const c = countSources(m, 1300);
+  assert.equal(c.twitch, 0, "not left counted on Twitch");
+  assert.equal(c.kick, 1);
+  // Retry: the same tab polling again is still one viewer.
+  recordSample(m, "aaa", "kick", 1400);
+  assert.equal(countSources(m, 1500).kick, 1);
 });
 
 test("a sample expires at exactly the TTL, not before", () => {
@@ -61,10 +78,10 @@ test("a folded player is counted, under its own key", () => {
 });
 
 test("only the closed vocabulary parses", () => {
-  for (const ok of ["native", "streamplace", "youtube", "twitch", "community", "radio", "none"]) {
+  for (const ok of ["native", "streamplace", "youtube", "twitch", "kick", "community", "radio", "none"]) {
     assert.equal(parseCensusSource(ok), ok);
   }
-  for (const junk of [null, "", "kick", "NONE", "radio ", "__proto__", "constructor"]) {
+  for (const junk of [null, "", "KICK", "NONE", "radio ", "__proto__", "constructor"]) {
     assert.equal(parseCensusSource(junk), null, `"${junk}" must not parse as a source`);
   }
 });

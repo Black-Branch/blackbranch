@@ -23,6 +23,8 @@ export type StageView = {
   readonly label: string;
   readonly status: StageStatus;
   readonly error: string | null;
+  /** What a RUNNING stage says about itself (how long it has run); null on every other status. */
+  readonly note: string | null;
 };
 export type Reporter = {
   /** Move one stage. `error` is the reason shown on a failed stage; a failed
@@ -32,6 +34,9 @@ export type Reporter = {
   advance: (id: string, status: StageStatus, error?: string) => void;
   /** Every stage back to pending — the retry's first act. */
   reset: () => void;
+  /** A line under a stage that is still ACTIVE ("Still connecting… 12 s"); null removes it. Ignored
+   *  on any other status, and cleared by every advance — a note never outlives the run it describes. */
+  note: (id: string, text: string | null) => void;
 };
 export type ReadinessSummary = {
   phase: "idle" | "loading" | "ready" | "error";
@@ -41,7 +46,7 @@ export type ReadinessSummary = {
   failed: StageView | null;
 };
 
-type StageState = { status: StageStatus; error: string | null };
+type StageState = { status: StageStatus; error: string | null; note: string | null };
 type Entry = { stages: readonly StageDef[]; state: Map<string, StageState> };
 
 const registry = new Map<string, Entry>();
@@ -63,7 +68,7 @@ export function registerReadiness(key: string, stages: readonly StageDef[]): Rep
   const prev = registry.get(key);
   const sameShape = !!prev && prev.stages.length === stages.length && prev.stages.every((s, i) => s.id === stages[i]!.id);
   if (!sameShape) {
-    registry.set(key, { stages, state: new Map(stages.map((s) => [s.id, { status: "pending", error: null }])) });
+    registry.set(key, { stages, state: new Map(stages.map((s) => [s.id, { status: "pending", error: null, note: null }])) });
     notify();
   }
   return {
@@ -76,9 +81,10 @@ export function registerReadiness(key: string, stages: readonly StageDef[]): Rep
         return;
       }
       const nextError = status === "error" ? (error ?? "Something went wrong") : null;
-      if (st.status === status && st.error === nextError) return;
+      if (st.status === status && st.error === nextError && st.note === null) return;
       st.status = status;
       st.error = nextError;
+      st.note = null;
       notify();
     },
     reset() {
@@ -86,9 +92,15 @@ export function registerReadiness(key: string, stages: readonly StageDef[]): Rep
       if (!e) return;
       let changed = false;
       for (const st of e.state.values()) {
-        if (st.status !== "pending" || st.error !== null) { st.status = "pending"; st.error = null; changed = true; }
+        if (st.status !== "pending" || st.error !== null || st.note !== null) { st.status = "pending"; st.error = null; st.note = null; changed = true; }
       }
       if (changed) notify();
+    },
+    note(id, text) {
+      const st = registry.get(key)?.state.get(id);
+      if (!st || st.status !== "active" || st.note === text) return;
+      st.note = text;
+      notify();
     },
   };
 }
@@ -109,7 +121,7 @@ export function readReadiness(keys: readonly string[]): readonly StageView[] {
     if (!e) continue;
     for (const s of e.stages) {
       const st = e.state.get(s.id)!;
-      out.push({ key, id: s.id, label: s.label, status: st.status, error: st.error });
+      out.push({ key, id: s.id, label: s.label, status: st.status, error: st.error, note: st.note });
     }
   }
   const frozen = Object.freeze(out);

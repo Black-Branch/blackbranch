@@ -26,7 +26,8 @@ export type InstallKey =
   | "matrix.serverName" | "matrix.baseUrl" | "matrix.federationServer" | "matrix.legacyNamespace"
   | "matrix.oauth.issuer" | "matrix.oauth.clientId"
   | "discordBridge.usernameTemplate" | "discordBridge.displaynameTemplate"
-  | "currency.name" | "currency.namePlural" | "currency.symbol" | "currency.icon" | "community.scoreName";
+  | "currency.name" | "currency.namePlural" | "currency.symbol" | "currency.icon" | "community.scoreName"
+  | "community.serviceLocalpart" | "community.reconciler";
 
 export type InstallValues = Partial<Record<InstallKey, string>>;
 

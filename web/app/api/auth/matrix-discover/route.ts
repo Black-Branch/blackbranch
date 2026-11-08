@@ -3,7 +3,7 @@ import { safeFetch } from "@/app/lib/ssrf";
 import { readJsonCapped, MATRIX_JSON_MAX_BYTES } from "@/app/lib/boundedBody";
 import { createSlidingWindowLimiter, ipKey } from "@/app/lib/rateLimit";
 import { discoverIssuer } from "@/app/lib/federatedSignIn";
-import { federatedServerAllowed, normalizeServerName, FEDERATED_SIGNIN_REFUSED } from "@/app/lib/federatedSignInSwitch";
+import { federatedSignInRefusal, normalizeServerName, OWN_SERVER_SIGN_IN } from "@/app/lib/federatedSignInSwitch";
 
 // Unauthenticated server-side fetcher of an arbitrary homeserver's well-known +
 // OIDC discovery. Its distinguishable error codes make it a mild SSRF/reachability
@@ -24,7 +24,9 @@ export async function GET(req: NextRequest) {
   const serverName = normalizeServerName(match[1]);
   if (!serverName) return Response.json({ error: "invalid_mxid" }, { status: 400 });
   // The sign-in policy, on the server the visitor asked for — before anything is fetched from it.
-  if (!federatedServerAllowed(serverName)) return Response.json({ error: FEDERATED_SIGNIN_REFUSED }, { status: 403 });
+  // This install's own server is refused too: its accounts use the main Sign in button.
+  const refusal = federatedSignInRefusal(serverName);
+  if (refusal) return Response.json({ error: refusal }, { status: refusal === OWN_SERVER_SIGN_IN ? 400 : 403 });
 
   // Step 1: fetch .well-known/matrix/client from the server name
   let wellKnown: Record<string, unknown>;

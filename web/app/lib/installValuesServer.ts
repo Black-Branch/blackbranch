@@ -26,6 +26,8 @@ export function resolveInstallValues(env: Record<string, string | undefined>): {
     const r = resolveInstanceValue(e, env, null);
     if (r.error) problems.push(`${e.key}: ${r.error}`);
     else if (typeof r.value === "string" && r.value) values[e.key] = r.value;
+    // A switch travels as its word ("true"/"false"), off included: the values are strings throughout.
+    else if (typeof r.value === "boolean") values[e.key] = String(r.value);
     else if (e.required) problems.push(`${e.key} is required — set ${e.env[0]} in this site's environment`);
   }
   return { values: values as InstallValues, problems };

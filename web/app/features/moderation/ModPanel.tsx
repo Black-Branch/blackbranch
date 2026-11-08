@@ -14,6 +14,7 @@ import {
   ChatsCircle, ClockCounterClockwise, Prohibit, SlidersHorizontal, LockKey, LinkSimple, Flag,
 } from "@phosphor-icons/react/dist/ssr";
 import { Rail, RailLayout } from "@/app/components/chrome";
+import { getJson } from "@/app/lib/http";
 import type { PanelPlace } from "@/app/lib/panelSearch";
 import IdentitySection from "./IdentitySection";
 import DisplaySection from "./sections/DisplaySection";
@@ -65,11 +66,22 @@ export default function ModPanel({ initialTarget, initialPlace, searchAdmin, onO
   }, []);
   useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
 
+  // The Reports place's pending count, from the list ReportsSection reads (the reports this mod
+  // may act on); ReportsSection reports its length after each load, so a resolve updates it.
+  const [pending, setPending] = useState(0);
+  useEffect(() => {
+    let live = true;
+    getJson<{ reports: unknown[] }>("/api/mod/support").then((d) => { if (live) setPending(d.reports.length); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+
   const matches = modSearch(search);
   // A search that hides the open place shows its first match instead.
   const shown: ModPlace = matches.includes(place) ? place : (matches[0] ?? place);
-  const items = MOD_PLACES.filter((p) => matches.includes(p.key)).map((p) => ({ key: p.key, label: p.label, icon: ICON[p.key] }));
+  const items = MOD_PLACES.filter((p) => matches.includes(p.key)).map((p) => ({ key: p.key, label: p.label, icon: ICON[p.key], count: p.key === "reports" ? pending : 0 }));
   const label = MOD_PLACES.find((p) => p.key === shown)?.label;
+  // On a narrow window the rail folds behind the picker: its button says reports wait.
+  const pickerLabel = pending > 0 && shown !== "reports" ? `${label} · ${pending} ${pending === 1 ? "report" : "reports"}` : label;
   const elsewhere = searchAdmin && onOpenAdmin ? searchAdmin(search) : [];
 
   return (
@@ -93,7 +105,7 @@ export default function ModPanel({ initialTarget, initialPlace, searchAdmin, onO
       <RailLayout
         fill
         compact="picker"
-        pickerLabel={label}
+        pickerLabel={pickerLabel}
         current={shown}
         rail={
           items.length
@@ -105,7 +117,7 @@ export default function ModPanel({ initialTarget, initialPlace, searchAdmin, onO
           {shown === "chat" && <ChatHistorySection onPopout={popOutChatHistory} />}
           {shown === "history" && <HistorySection note={note} />}
           {shown === "bans" && <BanSection key={banTarget ?? ""} note={note} initialTarget={banTarget} />}
-          {shown === "reports" && <ReportsSection note={note} onBan={(id) => { setBanTarget(id); setPlace("bans"); }} />}
+          {shown === "reports" && <ReportsSection note={note} onCount={setPending} onBan={(id) => { setBanTarget(id); setPlace("bans"); }} />}
           {shown === "controls" && (
             <>
               <DisplaySection />

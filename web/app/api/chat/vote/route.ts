@@ -3,14 +3,16 @@ import { messageVisibleSql } from "@/app/lib/instanceSchema.generated.mjs";
 import { requireUser } from "@/app/lib/authGuard";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { resolveIdentities } from "@/lib/socialCredit";
-import { AUTO_PIN_TTL_MS, expireAutoPinIfDue, withAuthor } from "@/app/api/chat/pin/route";
+import { expireAutoPinIfDue, withAuthor } from "@/app/api/chat/pin/route";
 import { createSlidingWindowLimiter } from "@/app/lib/rateLimit";
 import { earn } from "@/app/lib/coinsServer";
 import {
   VOTE_TARGET_WINDOW_MS, VOTE_TARGET_MAX,
   VOTE_GLOBAL_WINDOW_MS, VOTE_GLOBAL_MAX,
-  AUTO_PIN_BASE, autoPinScore,
+  autoPinScore,
 } from "@/app/lib/votePolicy";
+import { autoPinRules } from "@/app/lib/autoPinServer";
+import { scheduleAutoPinExpiry } from "@/app/lib/autoPinExpiry";
 import { activeChatters } from "@/app/lib/activeChatters";
 import { matrixIdForCanonical } from "@/app/lib/canonicalIdentity";
 import { NextRequest } from "next/server";
@@ -213,9 +215,11 @@ export async function POST(req: NextRequest) {
   // The threshold scales with how many people are actually chatting. Read
   // only when the score could possibly clear the LOWEST it can be: on a quiet
   // stream almost every vote would otherwise pay for a COUNT(DISTINCT) that
-  // cannot change the outcome. The count itself is cached for a minute.
-  if (vote > 0 && score >= AUTO_PIN_BASE) {
-    const threshold = autoPinScore(await activeChatters());
+  // cannot change the outcome. The count itself is cached for a minute. Every
+  // number is the streamer's setting (Admin Panel › Site › Auto-pin).
+  const rules = autoPinRules();
+  if (!rules.off && vote > 0 && score >= rules.base) {
+    const threshold = autoPinScore(await activeChatters(), rules);
     if (score >= threshold) await tryAutoPin(platform, id).catch(() => {});
   }
 
@@ -283,10 +287,10 @@ async function tryAutoPin(platform: string, id: number) {
   }
 
   const createdAtMs = new Date(r.created_at).getTime();
-  setTimeout(() => {
-    expireAutoPinIfDue(Number(r.id), createdAtMs)
-      .catch((e) => console.error("[chat/vote] auto-pin expiry failed:", (e as Error).message));
-  }, AUTO_PIN_TTL_MS);
+  scheduleAutoPinExpiry(Number(r.id), createdAtMs, {
+    nowMs: Date.now, rules: autoPinRules, setTimer: (fn, ms) => { setTimeout(fn, ms); },
+    expire: (pinId) => expireAutoPinIfDue(pinId, createdAtMs),
+  });
 
   try {
     await streamApiFetch("/chat/pin", {

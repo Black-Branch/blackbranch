@@ -38,6 +38,25 @@ test("the bot has no picture (the route answers 404): the site icon takes its pl
   await done();
 });
 
+test("the bot picture's 404 landed before React listened (a server-rendered panel): the site icon all the same", async () => {
+  // jsdom loads no images: an image that has finished with no pixels, stubbed before the ref attaches.
+  const proto = dom.window.HTMLImageElement.prototype;
+  const was = { complete: Object.getOwnPropertyDescriptor(proto, "complete")!, naturalWidth: Object.getOwnPropertyDescriptor(proto, "naturalWidth")! };
+  Object.defineProperty(proto, "complete", { configurable: true, get: () => true });
+  Object.defineProperty(proto, "naturalWidth", { configurable: true, get(this: HTMLImageElement) {
+    return this.getAttribute("src") === "/api/avatar/public/bot" ? 0 : 192;
+  } });
+  try {
+    const { el, done } = await mount("@helper:site.test");
+    assert.equal(el.querySelector("[data-helpdesk-picture]")!.getAttribute("data-helpdesk-picture"), "site-icon");
+    assert.equal(el.querySelector("img")?.getAttribute("src"), "/brand/icon-192.png");
+    await done();
+  } finally {
+    Object.defineProperty(proto, "complete", was.complete);
+    Object.defineProperty(proto, "naturalWidth", was.naturalWidth);
+  }
+});
+
 test("no bot account: the site icon from the first frame, never a request for a picture nobody has", async () => {
   const { el, done } = await mount(null);
   assert.equal(el.querySelector("img")?.getAttribute("src"), "/brand/icon-192.png");

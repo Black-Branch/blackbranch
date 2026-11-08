@@ -23,8 +23,16 @@ export function payloadShape(data) {
   if (d === null) return 'null';
   if (Array.isArray(d)) return `array of ${d.length}`;
   if (typeof d !== 'object') return typeof d;
-  // An id is printed only when it is id-shaped: a scalar of word characters, at most 64 long.
-  const raw = d.id;
-  const id = (typeof raw === 'number' && Number.isFinite(raw)) || (typeof raw === 'string' && ID_SHAPE.test(raw)) ? raw : '?';
-  return `id=${id} keys=[${Object.keys(d).join(',')}]`;
+  return `id=${shapedId(d.id)} keys=[${Object.keys(d).join(',')}]`;
+}
+
+/**
+ * An id for a journal line: printed only when it is id-shaped — a finite number, or a string of
+ * word characters, dots, colons and dashes at most 64 long — else `?`. A field that drifted to
+ * hold text (a message, a name with a space) never reaches the journal through it.
+ * @param {unknown} raw
+ * @returns {string|number}
+ */
+export function shapedId(raw) {
+  return (typeof raw === 'number' && Number.isFinite(raw)) || (typeof raw === 'string' && ID_SHAPE.test(raw)) ? raw : '?';
 }

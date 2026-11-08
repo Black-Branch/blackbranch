@@ -30,11 +30,11 @@ const viewer = { isMod: false, isAdmin: false };
 const mod = { isMod: true, isAdmin: false };
 const person = (u: string) => ({ matrixId: `@${u}:site.test`, username: u, displayName: null });
 
-test("/dm <name> <text>: one match opens the DM window with the text; /message is the same command", async () => {
+test("/dm <name> <text>: one exact match opens the DM window with the text; /message is the same command", async () => {
   const got: DmRequest[] = [];
   const off = onDmRequest((r) => got.push(r));
   const unmount = registerDmHost();
-  const calls = stubFetch(() => ({ status: 200, json: { people: [person("casey")] } }));
+  const calls = stubFetch(() => ({ status: 200, json: { people: [person("casey")], exact: true } }));
   const { runCommand, out } = runner();
   assert.deepEqual(await runCommand("/dm casey hello there", viewer), { kind: "handled" });
   assert.deepEqual(await runCommand("/message casey", viewer), { kind: "handled" });
@@ -57,7 +57,19 @@ test("/dm <name>: several matches open the picker; none says so and opens nothin
   await runCommand("/dm nobody", viewer);
   assert.equal(got.length, 1);
   assert.deepEqual(got[0], { kind: "pick", query: "cas", people: [person("casey"), person("cassidy")], text: "hi" });
-  assert.deepEqual(out.errors.filter(Boolean), ["No one else here goes by nobody."]);
+  assert.deepEqual(out.errors.filter(Boolean), ["No one else goes by nobody."]);
+  unmount(); off();
+});
+
+test("/dm <near match> <text>: ONE near match still asks (the picker) and sends nothing — the line waits for the pick (#193)", async () => {
+  const got: DmRequest[] = [];
+  const off = onDmRequest((r) => got.push(r));
+  const unmount = registerDmHost();
+  stubFetch(() => ({ status: 200, json: { people: [person("jonfreeholder")], exact: false } }));
+  const { runCommand, out } = runner();
+  await runCommand("/dm free see you at 8", viewer);
+  assert.deepEqual(got, [{ kind: "pick", query: "free", people: [person("jonfreeholder")], text: "see you at 8" }]);
+  assert.deepEqual(out.errors.filter(Boolean), []);
   unmount(); off();
 });
 
@@ -66,7 +78,7 @@ test("/dm when signed out, or with no chat column to open in, says why", async (
   const a = runner();
   await a.runCommand("/dm casey", viewer);
   assert.deepEqual(a.out.errors.filter(Boolean), ["Sign in to send direct messages."]);
-  stubFetch(() => ({ status: 200, json: { people: [person("casey")] } }));
+  stubFetch(() => ({ status: 200, json: { people: [person("casey")], exact: true } }));
   const b = runner();
   await b.runCommand("/dm casey", viewer); // no DmHost registered
   assert.deepEqual(b.out.errors.filter(Boolean), ["Direct messages open in the chat panel — send it from there."]);

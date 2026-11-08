@@ -191,8 +191,12 @@ test("the release skips ONLY the age gate, never the blocklist", () => {
   // being guarded against.
   assert.match(chat, /^\s*const verdict = classify\(message\);\s*$/m,
     "the blocklist verdict must be computed unconditionally — releaseHold must never skip it");
+  // The BYPASS (a gate answered 'allow' for a release) — not the release's sender lookup, which
+  // names who the line is by and skips nothing.
+  const bypass = chat.search(/releaseHold === true\s*\?\s*\{ action: 'allow' \}/);
+  assert.ok(bypass > 0, "the release bypass was not found");
   assert.ok(
-    chat.indexOf("const verdict = classify(message);") < chat.indexOf("releaseHold === true"),
+    chat.indexOf("const verdict = classify(message);") < bypass,
     "the blocklist must still run ahead of the release bypass"
   );
 });

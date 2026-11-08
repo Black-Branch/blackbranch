@@ -107,6 +107,33 @@ export function twitchSendOutcome(body: unknown): SendOutcome {
   return { sent: true, ...(row?.message_id ? { id: row.message_id } : {}) };
 }
 
+/**
+ * The drop codes Twitch documents — the only ones the operator's log names. Helix "Send Chat
+ * Message" (https://dev.twitch.tv/docs/api/reference/#send-chat-message) documents
+ * `drop_reason.code` as a string without listing values; the values are the chat NOTICE msg-ids
+ * listed at https://dev.twitch.tv/docs/chat/irc/#notice-reference (read 2026-10-24). An
+ * allowlist, not a pattern: a one-word value outside it could be a name.
+ */
+const TWITCH_DROP_CODES: ReadonlySet<string> = new Set([
+  "msg_bad_characters", "msg_banned", "msg_channel_blocked", "msg_channel_suspended", "msg_duplicate",
+  "msg_emoteonly", "msg_followersonly", "msg_followersonly_followed", "msg_followersonly_zero", "msg_r9k",
+  "msg_ratelimit", "msg_rejected", "msg_rejected_mandatory", "msg_requires_verified_phone_number",
+  "msg_slowmode", "msg_subsonly", "msg_suspended", "msg_timedout", "msg_verified_email",
+  "automod_held", // not in Twitch's list: the site's own viewer mapping (TWITCH_DROP in this file) already names it
+]);
+
+/** Twitch's drop code (`drop_reason.code`) on a dropped message, for the operator's log
+ *  (copyFailureLog.ts) — never the message text beside it, which can name people. A documented
+ *  code as Twitch sent it; any other value is "unknown". Undefined when nothing was dropped or no
+ *  code came. */
+export function twitchDropCode(body: unknown): string | undefined {
+  const row = (body as { data?: { is_sent?: boolean; drop_reason?: { code?: unknown } | null }[] } | null)?.data?.[0];
+  if (row?.is_sent !== false) return undefined;
+  const code = row.drop_reason?.code;
+  if (code == null) return undefined;
+  return typeof code === "string" && TWITCH_DROP_CODES.has(code) ? code : "unknown";
+}
+
 /** The platform's own words in an answer body, made safe to show, or null when it
  *  carries none: `message` (Kick, Twitch), a string `data` (Kick's
  *  `{"data":"MAX_SPECIAL_CHARS_ERROR"}`), a string `error`, or `error.message`

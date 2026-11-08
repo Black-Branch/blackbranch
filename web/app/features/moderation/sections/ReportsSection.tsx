@@ -18,13 +18,17 @@ type Report = {
   message_platform: string | null; message_id: string | null; message_text: string | null;
 };
 
-export default function ReportsSection({ note, onBan }: { note: (m: string) => void; onBan?: (matrixId: string) => void }) {
+export default function ReportsSection({ note, onBan, onCount }: {
+  note: (m: string) => void; onBan?: (matrixId: string) => void;
+  /** How many are pending after each load (the Mod Panel's count on Reports). */
+  onCount?: (n: number) => void;
+}) {
   const [reports, setReports] = useState<Report[] | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    getJson<{ reports: Report[] }>("/api/mod/support").then((d) => setReports(d.reports)).catch(() => setReports([]));
-  }, []);
+    getJson<{ reports: Report[] }>("/api/mod/support").then((d) => { setReports(d.reports); onCount?.(d.reports.length); }).catch(() => setReports([]));
+  }, [onCount]);
   useEffect(load, [load]);
 
   async function resolve(id: number) {

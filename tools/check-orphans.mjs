@@ -60,6 +60,7 @@ const REPO = resolve(fileURLToPath(import.meta.url), "../..");
 // every export look referenced by its own compiled self.
 const SKIP = new Set([
   "node_modules", ".git", ".next", "config", "vendor", "sounds", "docs", "mirror",
+  ".claude", // editor and agent scratch folders (nested checkouts once OOM-killed this walk)
 ]);
 
 // `@test-only` / `@parked` followed by at least 8 characters of actual reason.

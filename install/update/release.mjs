@@ -19,9 +19,11 @@ export const PAYLOAD_TYPE = "application/vnd.blackbranch.release+json; version=1
 export const CHANNELS = ["stable", "beta"];
 /** The images a release pins by digest: the third-party ones, `dockerfile` (BuildKit's Dockerfile
  *  frontend, which runs during the build), and `web` — the site, ONE prebuilt image for every
- *  install (stream-api and stream-ingest are built on the box from the source). A later release may pin more names: an older box accepts them (each must still be a
- *  digest) and pulls them all. */
-export const IMAGE_NAMES = ["postgres", "synapse", "mas", "caddy", "cloudflared", "mautrix-discord", "restic", "node", "dockerfile", "web"];
+ *  install (stream-api, stream-ingest and the Discord bridge are built on the box from the source).
+ *  A later release may pin more names: an older box accepts them (each must still be a digest, and
+ *  used by compose.yaml or install/Dockerfile) and pulls them all. A name this list drops is one an
+ *  older box still requires: tools/release.mjs keeps writing it (LEGACY_IMAGE_NAMES). */
+export const IMAGE_NAMES = ["postgres", "synapse", "mas", "caddy", "cloudflared", "restic", "node", "dockerfile", "web"];
 const MAX_FEED_BYTES = 262_144;
 const MAX_SOURCE_BYTES = 1_073_741_824;
 

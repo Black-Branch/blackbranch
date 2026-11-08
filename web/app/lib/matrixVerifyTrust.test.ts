@@ -164,5 +164,5 @@ test("E: the incoming-request branch no longer claims a recovery key is required
   anchorVerifySection(s);
   assert.doesNotMatch(s, /Enter your recovery key first/, "a verified peer vouches for this device; the SDK gossips the secrets");
   assert.doesNotMatch(s, /crossSigningOk/, "nothing in the section reads crossSigningOk once that line is gone");
-  assert.match(s, /wants to verify this session\./, "the incoming prompt itself stays");
+  assert.match(s, /Your other session \{p\.verifyPeer\} wants to verify this one\./, "the incoming prompt itself stays");
 });

@@ -11,10 +11,13 @@
 
 import { useEffect, useRef } from "react";
 import { attemptWithRetry } from "./matrixModerate.ts";
+import { reconcilerOn } from "./community/reconcilerOn.ts";
 
-/** The reason written on a room ban made for a site ban — how the sync knows which bans are its own.
- *  @test-only used in this file; the test builds room bans carrying it. */
-export const SITE_BAN_REASON = "Banned on the site";
+import { SITE_BAN_REASON } from "./siteBanReason.ts";
+/** The reason written on a room ban made for a site ban — how the sync knows which bans are its own
+ *  (one source: siteBanReason.ts, which the reconciler's feed sends too).
+ *  @test-only re-exported for the tests, which build room bans carrying it. */
+export { SITE_BAN_REASON };
 
 /** Fired after a ban or unban from this tab, so an open community reconciles at once. */
 export const SITE_BANS_CHANGED = "bb:site-bans-changed";
@@ -98,7 +101,8 @@ export async function activeSiteBans(): Promise<{ ids: string[]; complete: boole
 export function useSiteBanSync(client: BanSyncClient | null | undefined, rooms: BanSyncRoom[], myUserId: string): void {
   const running = useRef(false);
   useEffect(() => {
-    if (!client || rooms.length === 0 || !myUserId) return;
+    // With the community reconciler the server places and lifts these bans itself.
+    if (!client || rooms.length === 0 || !myUserId || reconcilerOn()) return;
     const run = async () => {
       if (running.current) return;
       running.current = true;

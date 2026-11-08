@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { Pool } from "pg";
-import { unlinkPlatformAccount, type UnlinkDeps } from "./platformUnlink.ts";
+import { unlinkPlatformAccount, UNLINK_WHILE_BANNED, type UnlinkDeps } from "./platformUnlink.ts";
 import { claimPlatformAccount } from "./platformAccountLink.ts";
 import { stripComments } from "./testSource.ts";
 
@@ -24,6 +24,46 @@ if (unsafe && process.env.CI) throw new Error("SQL_PARSE_DATABASE_URL must be se
 const skip = unsafe ? "SQL_PARSE_DATABASE_URL unset or unsafe" : false;
 const RUN = `pul${process.pid}x${Date.now().toString(36)}`;
 const hex = (n: number) => (process.pid.toString(16) + Date.now().toString(16) + n.toString(16)).slice(-12).padStart(12, "0");
+
+// A3-01: unlinking while a site ban runs would move the platform account onto a fresh identity
+// the ban does not name, so its next lines would reach site chat again. Refused (409) before
+// anything is touched; the person can unlink when the ban ends.
+test("unlink is refused while a site ban runs, before anything is changed", async () => {
+  const calls: string[] = [];
+  const deps = (banned: boolean | "throws"): UnlinkDeps => ({
+    query: async (sql: string) => {
+      if (/FROM site\.bans/.test(sql)) {
+        calls.push("ban?");
+        if (banned === "throws") throw new Error("db down");
+        return { rows: banned ? [{ one: 1 }] : [] };
+      }
+      calls.push(sql.trim().split(/\s+/).slice(0, 2).join(" "));
+      if (/SELECT id FROM/.test(sql)) return { rows: [{ id: "tw-1" }] };
+      return { rows: [] };
+    },
+    streamUnlink: async () => { calls.push("streamUnlink"); return 200; },
+    revoke: async () => { calls.push("revoke"); },
+    decrypt: (v) => v,
+  });
+  const refused = await unlinkPlatformAccount("@casey:site.test", "twitch", deps(true));
+  assert.deepEqual(refused, { ok: false, status: 409, error: UNLINK_WHILE_BANNED });
+  assert.deepEqual(calls, ["ban?"], "a banned person's unlink changed something");
+  calls.length = 0;
+  const unsure = await unlinkPlatformAccount("@casey:site.test", "twitch", deps("throws"));
+  assert.equal(unsure.ok, false);
+  assert.equal(!unsure.ok && unsure.status, 503, "an unreadable ban let the unlink through");
+  assert.deepEqual(calls, ["ban?"]);
+  calls.length = 0;
+  // Not banned (or the ban has ended): the unlink goes on — and a retry the same way.
+  for (let i = 0; i < 2; i++) {
+    assert.deepEqual(await unlinkPlatformAccount("@casey:site.test", "twitch", deps(false)), { ok: true });
+    assert.ok(calls.includes("streamUnlink") && calls.at(-1) === "DELETE FROM", "the unlink did not run");
+    calls.length = 0;
+  }
+  // The person reads why.
+  const panel = stripComments(readFileSync(join(WEB, "app/components/AccountLinkPanel.tsx"), "utf8"));
+  assert.match(panel, /res\.status === 409/, "the Linked accounts panel does not say why an unlink was refused");
+});
 
 type Res = { statusCode: number; body: { canonicalId?: string } | null };
 type Identity = {

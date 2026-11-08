@@ -6,8 +6,6 @@ Reads the chat of your YouTube live streams into site chat. Off: nothing is read
 
 This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel, at the top of its own page (Platforms → YouTube). It is off on a new install. Its setup steps are below.
 
-The addresses below are for a site at `example.com`; your setup page shows your own.
-
 ## 1. Your YouTube channel
 
 Reading chat needs no Google sign-in: the site reads your live chat the way a viewer's browser does. Paste your channel id (it starts with UC; YouTube Studio → Settings → Channel → Advanced settings shows it). An API key is optional: it finds your live stream sooner and checks the id. Make one in a Google Cloud project with the YouTube Data API v3 switched on, and restrict it to that API.

@@ -89,15 +89,19 @@ test("overflow: data-more marks exactly the sides with more tabs, and a chevron 
   });
 
   const wrap = container.querySelector<HTMLElement>(".chrome-sections-wrap")!;
-  const list = container.querySelector<HTMLElement>('[role="tablist"]')!;
-  assert.ok(wrap && list && list.parentElement === wrap, "the tablist sits in the wrapper the chevrons hang from");
+  // The scroller sits in the wrapper the chevrons hang from; the tablist is a row inside it
+  // (it owns only tabs — a trailing control such as the chat bar's "+" follows it in the scroller).
+  const list = container.querySelector<HTMLElement>(".chrome-sections")!;
+  const tablist = container.querySelector<HTMLElement>('[role="tablist"]')!;
+  assert.ok(wrap && list && list.parentElement === wrap, "the scroller sits in the wrapper the chevrons hang from");
+  assert.ok(tablist && tablist.parentElement === list, "the tablist is inside the scroller");
 
   // A strip 358 wide holding 525 of tabs (the Admin Panel at 390 px).
   const geo = { scrollLeft: 0, clientWidth: 358, scrollWidth: 525 };
   for (const k of ["clientWidth", "scrollWidth"] as const) Object.defineProperty(list, k, { get: () => geo[k], configurable: true });
   Object.defineProperty(list, "scrollLeft", { get: () => geo.scrollLeft, set: (v: number) => { geo.scrollLeft = v; }, configurable: true });
   const steps: number[] = [];
-  Object.defineProperty(list, "scrollBy", { value: (o: { left: number }) => { steps.push(o.left); }, configurable: true });
+  Object.defineProperty(list, "scrollTo", { value: (o: { left: number }) => { steps.push(o.left); }, configurable: true });
   layout(container);
 
   await act(async () => { ro.fire(); });
@@ -118,7 +122,9 @@ test("overflow: data-more marks exactly the sides with more tabs, and a chevron 
     assert.equal(b.getAttribute("aria-hidden"), "true");
   }
   await act(async () => { back!.click(); fwd!.click(); });
-  assert.deepEqual(steps, [-(358 - 80), 358 - 80], "a press pages most of the strip's width, in its own direction");
+  // At the end, ‹ pages back to a tab start (here the start) and › has nowhere to go.
+  // Where a page lands is pinned in stripOverflow.test.ts and stripWhole.render.test.ts.
+  assert.deepEqual(steps, [0, 167], "a press scrolls the list, in its own direction");
 
   // Everything fits (a desktop width): no attribute, so no fade and no chevron.
   geo.clientWidth = 768; geo.scrollWidth = 768; geo.scrollLeft = 0;

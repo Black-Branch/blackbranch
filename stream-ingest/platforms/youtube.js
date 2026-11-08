@@ -21,10 +21,11 @@ import { launchBrowser } from '../lib/browser.js';
 import { processMessage } from '../lib/pipeline.js';
 import { normalizeYouTubeEvent } from '../lib/alerts.js';
 import { postAlert, postPlatformDelete } from '../lib/api.js';
-import { decideWatchdog, STALL_MS, STALL_TICKS } from '../lib/ytWatchdog.js';
-import { decideEnd } from '../lib/ytEndDecision.js';
+import { decideWatchdog, stallStrikeLine, STALL_MS, STALL_TICKS } from '../lib/ytWatchdog.js';
+import { decideWatch, watcherVote, chatPollDelay } from '../lib/ytEndDecision.js';
 import { createCadenceReporter } from '../lib/ytCadence.js';
 import { instanceConfig } from '../lib/instanceConfig.js';
+import { YOUTUBE_LIVE } from '../lib/youtubeLive.generated.js';
 
 // Instance key platform.youtube.channelId, read at call time.
 const channelIdCfg = () => instanceConfig.get('platform.youtube.channelId') || '';
@@ -302,122 +303,228 @@ function createIdentityResolver() {
 
 const PAGE_HEADERS = { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9', Cookie: 'CONSENT=YES+1' };
 
-// Extract + parse ytInitialPlayerResponse from a watch-page HTML blob.
-//
-// Scans for the matching close brace, tracking string state and escapes so
-// braces inside strings never affect depth. A lazy regex to the first `};var`
-// or `};</script>` truncates the JSON when a title or description contains that
-// sequence, and the parse failure then reads as "no player response", i.e. as
-// the stream having ended.
-export function parsePlayerResponse(html) {
-  const key = 'ytInitialPlayerResponse';
-  const at = html.indexOf(key);
-  if (at === -1) return null;
-  const start = html.indexOf('{', at);
-  if (start === -1) return null;
+// Reading a YouTube page is the shared classifier's job (config/youtube-live.mjs →
+// lib/youtubeLive.generated.js, the same text web's community slot reads): owner first, then
+// isLive / scheduled / isLiveNow, and a missing liveBroadcastDetails block says nothing. This file
+// fetches the pages and logs; the copy is pure.
 
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < html.length; i++) {
-    const c = html[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === '\\') esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') { inStr = true; continue; }
-    if (c === '{') depth++;
-    else if (c === '}') {
-      depth--;
-      if (depth === 0) {
-        try {
-          return JSON.parse(html.slice(start, i + 1));
-        } catch (e) {
-          // A real parse failure is worth seeing — it is NOT the same as "offline",
-          // and callers treat null as "no data" rather than "not live".
-          console.warn('[yt-dom] ytInitialPlayerResponse parse failed:', e.message);
-          return null;
-        }
-      }
-    }
-  }
-  console.warn('[yt-dom] ytInitialPlayerResponse never closed — truncated page?');
-  return null;
-}
-
-// Authoritative per-video check via the watch page's player microformat: who
-// owns the video and whether it is live RIGHT NOW. Zero quota, one fetch.
-async function watchLiveState(videoId) {
+// Authoritative per-video check via the watch page's player response. Zero quota, one fetch.
+// The copy's reading of it for this channel, or null when the page did not answer or carries no
+// player response.
+async function watchLiveState(videoId, channelId) {
   const res = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`,
     { headers: PAGE_HEADERS, signal: AbortSignal.timeout(10000) });
   if (!res.ok) return null;
-  const pr = parsePlayerResponse(await res.text());
-  const mf = pr?.microformat?.playerMicroformatRenderer;
-  if (!pr?.videoDetails && !mf) return null;
-  return {
-    channelId: pr?.videoDetails?.channelId || mf?.externalChannelId || '',
-    isLiveNow: !!mf?.liveBroadcastDetails?.isLiveNow,
-  };
+  const html = await res.text();
+  const pr = YOUTUBE_LIVE.parsePlayerResponse(html);
+  if (!pr) {
+    // A response that is there and will not parse is worth seeing: it is NOT "offline", and the
+    // callers read null as "no data" rather than "not live".
+    if (/ytInitialPlayerResponse\s*=/.test(html)) console.warn(`[yt-dom] ytInitialPlayerResponse on ${videoId}'s watch page did not parse (truncated page?)`);
+    return null;
+  }
+  return YOUTUBE_LIVE.classifyPlayerResponse(pr, channelId);
 }
 
 // Zero-quota live detection: scrape the channel's /live page (the approach
-// the website uses) instead of the YouTube Data API search, which costs 100 quota
-// units per call and exhausts the daily quota on a multi-hour stream. No API key.
+// the website uses) instead of the Data API's search.list, which since 2026-06-01
+// costs 1 unit from its own bucket of 100 calls a day — too few for a 30 s lookup
+// over a multi-hour stream. No API key.
 // Exported: lib/poller.js reuses this for viewer polling (same quota reasoning).
 //
 // The /live page is served in inconsistent variants: some have no canonical
 // link, and the first "videoId" in the HTML is then a recommendation — another
-// channel's live stream. So every candidate — and, via knownId, the video
-// already being watched — is verified against its own watch page: the owner
-// channel must match AND the video must be live right now.
-export async function findLiveVideoId(channelId = channelIdCfg(), { allowEnvOverride = true, knownId = '' } = {}) {
-  return (await youtubeLiveState(channelId, { allowEnvOverride, knownId })).videoId || null;
-}
-
+// channel's live stream. So a candidate the page itself does not show live as
+// ours — and, via knownId, the video already being watched — is verified against
+// its own watch page: the owner channel must match AND the video must be live
+// right now. A scheduled video is never live: it is `upcoming`.
+//
+// The difference between "YouTube said not live" and "could not ask" is kept: the
+// reader's vote and the viewer poller both read it, and a failed lookup must vote
+// `unknown`, never `offline` (ADR 0133 — an answered offline now counts at once).
+//   live      — a video owned by this channel is live now (videoId set)
+//   upcoming  — a video of this channel is scheduled (videoId set, scheduledStart when the page
+//               names it): never live, and it votes offline in the night's decision
+//   offline   — YouTube answered: the known video's own page says it is no longer live (the one
+//               CERTAIN answer the pages give, ADR 0134 E7), or the /live page names no live video
+//               of this channel (a recommended video of another channel included — what an offline
+//               /live page shows; uncertain, so it needs a second reading)
+//   unknown   — the page or the video check failed
+// `evidence` is a code of config/platform-liveness.mjs EVIDENCE: why the answer is what it is.
 /**
- * The same lookup, with the difference between "YouTube said not live" and "could not ask" kept:
- * the viewer poller votes from it when no chat reader is running, and a failed lookup must
- * vote `unknown`, never `offline`.
- *   live     — a video owned by this channel is live now (videoId set)
- *   offline  — the /live page answered and names no live video of this channel
- *            (a recommended video of another channel included — what an offline /live page shows)
- *   unknown  — the page or the video check failed
- * @returns {Promise<{ state: 'live'|'offline'|'unknown', videoId: string }>}
+ * @returns {Promise<{ state: 'live'|'offline'|'unknown'|'upcoming', videoId: string, certain: boolean,
+ *   evidence: string, scheduledStart: number|null }>}
  */
 export async function youtubeLiveState(channelId = channelIdCfg(), { allowEnvOverride = true, knownId = '' } = {}) {
-  if (allowEnvOverride && process.env.YOUTUBE_VIDEO_ID) return { state: 'live', videoId: process.env.YOUTUBE_VIDEO_ID.trim() }; // manual override/testing
-  const none = (state) => ({ state, videoId: '' });
-  // Sticky path: once live on a video, re-verify THAT video directly and skip
-  // the flaky /live scrape entirely while it stays live.
+  if (allowEnvOverride && process.env.YOUTUBE_VIDEO_ID) { // manual override/testing
+    return { state: 'live', videoId: process.env.YOUTUBE_VIDEO_ID.trim(), certain: false, evidence: 'is-live', scheduledStart: null };
+  }
+  const none = (state, evidence, certain = false) => ({ state, videoId: '', certain, evidence, scheduledStart: null });
+  const on = (state, videoId, c) => ({ state, videoId, certain: false, evidence: c.evidence, scheduledStart: c.scheduledStart ?? null });
+  // Sticky path: once on a video, re-verify THAT video directly and skip the flaky
+  // /live scrape entirely. Its page answering, ours and not live now, is the end
+  // itself — certain, no /live scrape. Ours and scheduled is the countdown (the
+  // waiting room re-verifies its broadcast here too). A page that could not be read
+  // (threw, or no player response), another owner, or a page with no
+  // liveBroadcastDetails says nothing, and /live is asked instead.
   if (knownId) {
-    const st = await watchLiveState(knownId).catch(() => null);
-    if (st && st.channelId === channelId && st.isLiveNow) return { state: 'live', videoId: knownId };
+    const known = await watchLiveState(knownId, channelId).catch(() => null);
+    if (known?.state === 'live') return on('live', knownId, known);
+    if (known?.state === 'upcoming') {
+      // A countdown is not a broadcast to stick to: the channel can go live on ANOTHER video (an
+      // early start on a new broadcast, or a schedule left overdue) and /live is where that shows.
+      // So /live is still read every tick (a free page fetch, 0 units); only a verified live video
+      // of ours replaces the countdown — anything else /live says leaves it standing.
+      const elsewhere = await youtubeLiveState(channelId, { allowEnvOverride: false, knownId: '' });
+      return elsewhere.state === 'live' ? elsewhere : on('upcoming', knownId, known);
+    }
+    if (known?.evidence === 'not-live') return none('offline', 'not-live', true);
   }
   try {
     const res = await fetch(`https://www.youtube.com/channel/${channelId}/live?hl=en`,
       { headers: PAGE_HEADERS, signal: AbortSignal.timeout(10000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
-    const m = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})">/)
-           || html.match(/"videoId":"([\w-]{11})"/);
-    const candidate = m ? m[1] : null;
-    if (!candidate) return none('offline');
-    if (candidate === knownId) return none('offline'); // knownId already failed verification above
-    const st = await watchLiveState(candidate);
-    if (!st) { console.warn(`[youtube] live lookup: cannot verify ${candidate} (no player response)`); return none('unknown'); }
-    if (st.channelId !== channelId) {
-      console.warn(`[youtube] live lookup: /live resolved to foreign video ${candidate} (owner ${st.channelId || '?'}) — ignored`);
-      // An offline channel's /live page shows a recommendation: answered, and not this channel live.
-      return none('offline');
+    const page = YOUTUBE_LIVE.classifyLivePage(await res.text(), channelId);
+    // The channel's own page as /live's canonical is YouTube's "no live video" page
+    // (fetched 2026-10-24 off-stream: channel canonical, plus a recommended videoId).
+    if (page.evidence === 'channel-canonical') return none('offline', 'channel-canonical');
+    // Past a FAILED check on the known video (unreadable, bot-check, foreign owner),
+    // /live can still find a NEW live video of ours, but nothing else it says is
+    // about the known one — only YouTube's own no-live page is an answer. On
+    // 2026-10-24 03:36–04:18, mid-stream, a failed check was followed by /live
+    // pages naming foreign recommendations a dozen times; reading those as offline
+    // would end a YouTube-only night on a blip once offline counts (ADR 0133).
+    // A schedule /live shows is not an answer about the known video either: read
+    // as `upcoming` it would vote offline, and a live night would end on a blip.
+    const unsure = knownId ? 'unknown' : 'offline';
+    const candidate = page.videoId;
+    if (!candidate) return none(unsure, page.evidence);
+    // The /live page of a live channel is that broadcast's own watch page: its player
+    // response, ours and live, about the video it names, answers live.
+    if (page.state === 'live') return on('live', candidate, page);
+    if (page.state === 'upcoming' && (!knownId || candidate === knownId)) return on('upcoming', candidate, page);
+    if (page.evidence === 'foreign-video') {
+      console.warn(`[youtube] live lookup: /live resolved to foreign video ${candidate} (owner ${page.ownerChannelId || '?'}; /live: ${page.evidence}) — ignored`);
+      return none(unsure, 'foreign-video');
     }
-    return st.isLiveNow ? { state: 'live', videoId: candidate } : none('offline');
+    // /live names the video whose own check just failed: while live, the canonical
+    // points at exactly that id, so a failed page fetch must not end the night.
+    // (An answered not-live returned above.)
+    if (candidate === knownId) {
+      console.warn(`[youtube] live lookup: cannot verify ${candidate} (its watch page did not answer; /live: ${page.evidence})`);
+      return none('unknown', 'sticky-check-failed');
+    }
+    const c = await watchLiveState(candidate, channelId);
+    if (!c || c.evidence === 'no-owner') { console.warn(`[youtube] live lookup: cannot verify ${candidate} (no player response)`); return none('unknown', c ? 'no-owner' : 'no-player-response'); }
+    if (c.evidence === 'foreign-video') {
+      console.warn(`[youtube] live lookup: /live resolved to foreign video ${candidate} (owner ${c.ownerChannelId || '?'}; /live: ${page.evidence}) — ignored`);
+      // An offline channel's /live page shows a recommendation: answered, and not this channel live.
+      return none(unsure, 'foreign-video');
+    }
+    if (c.state === 'live') return on('live', candidate, c);
+    if (c.state === 'upcoming' && !knownId) return on('upcoming', candidate, c);
+    return none(unsure, c.evidence);
   } catch (err) {
     console.warn('[youtube] live lookup failed:', err.message);
-    return none('unknown');
+    return none('unknown', knownId ? 'sticky-check-failed' : 'no-player-response');
   }
 }
+
+// ── E12: with a Data API key, a state change is double-checked (ADR 0134) ────
+//
+// The pages above are undocumented; videos.list is YouTube's documented, exact classifier
+// (snippet.liveBroadcastContent live / upcoming / none, liveStreamingDetails.actualEndTime — research
+// §A2), 1 unit per call. So when the page's answer differs from the last accepted state and a video
+// id is known, one call asks, and its answer wins. The key's daily quota is shared with everything
+// else it pays for (cross-posting once burned a whole day of it), so the
+// confirm is capped per UTC day, and pauses after YouTube says the quota is gone.
+export const YT_CONFIRM_MAX_PER_DAY = 20;
+export const YT_CONFIRM_PAUSE_MS = 60 * 60_000;
+
+/**
+ * One videos.list item → the observation it states, or null when it says nothing (no item: the id
+ * names nothing — deleted, private — or a label this code does not know). Pure.
+ *   actualEndTime set, or liveBroadcastContent none → offline, CERTAIN (ADR 0134 E7)
+ *   live                                            → live
+ *   upcoming                                        → upcoming, with scheduledStartTime
+ * @param {any} item
+ * @returns {{ raw: 'live'|'offline'|'upcoming', certain: boolean, key: string, evidence: string, scheduledStart: number|null } | null}
+ */
+export function classifyVideosList(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = typeof item.id === 'string' ? item.id : '';
+  const lsd = item.liveStreamingDetails || {};
+  const label = item.snippet?.liveBroadcastContent;
+  const obs = (raw, certain, key, scheduledStart = null) => ({ raw, certain, key, evidence: 'api-confirmed', scheduledStart });
+  if (lsd.actualEndTime || label === 'none') return obs('offline', true, '');
+  if (label === 'live') return obs('live', false, id);
+  if (label === 'upcoming') {
+    const t = Date.parse(lsd.scheduledStartTime || '');
+    return obs('upcoming', false, id, Number.isFinite(t) ? t : null);
+  }
+  return null;
+}
+
+/**
+ * The E12 confirm, with its own day count and pause. A factory so a test runs it with its own key
+ * and clock; the reader uses the one below.
+ * @param {{ apiKey?: () => string, now?: () => number, maxPerDay?: number }} [o]
+ */
+export function createYtConfirm({ apiKey = () => instanceConfig.get('youtube.apiKey') || '', now = Date.now, maxPerDay = YT_CONFIRM_MAX_PER_DAY } = {}) {
+  let day = '';
+  let used = 0;
+  let pausedUntil = 0;
+  let capLogged = false;
+  /**
+   * videos.list for one id (1 unit), or null — no key, no id, over the day's cap, paused, or the
+   * call failed. Never logs its URL: the key rides in it. Only `HTTP <status>` is logged.
+   * @param {string} videoId
+   */
+  async function confirmViaApi(videoId) {
+    const key = apiKey();
+    if (!key || !videoId) return null;
+    const t = now();
+    if (t < pausedUntil) return null;
+    const today = new Date(t).toISOString().slice(0, 10);
+    if (today !== day) { day = today; used = 0; capLogged = false; }
+    if (used >= maxPerDay) {
+      if (!capLogged) { capLogged = true; console.warn(`[youtube] state confirm: today's cap of ${maxPerDay} Data API calls reached — the pages alone answer until 00:00 UTC`); }
+      return null;
+    }
+    used += 1;
+    const params = new URLSearchParams({ part: 'snippet,liveStreamingDetails', id: videoId, key });
+    let res;
+    try {
+      res = await fetch(`https://www.googleapis.com/youtube/v3/videos?${params}`, { signal: AbortSignal.timeout(8000) });
+    } catch {
+      // The error's own text can carry the URL (and with it the key): none of it is logged.
+      console.warn('[youtube] state confirm: no answer (the request failed or timed out)');
+      return null;
+    }
+    if (!res.ok) {
+      let reason = '';
+      try { reason = (await res.json())?.error?.errors?.[0]?.reason || ''; } catch { /* the status alone */ }
+      if (res.status === 403 && reason === 'quotaExceeded') {
+        pausedUntil = t + YT_CONFIRM_PAUSE_MS;
+        console.warn(`[youtube] state confirm: HTTP ${res.status} — the key's daily quota is spent; confirms paused for 1 h`);
+      } else {
+        console.warn(`[youtube] state confirm: HTTP ${res.status}`);
+      }
+      return null;
+    }
+    try {
+      const body = await res.json();
+      return classifyVideosList(body?.items?.[0]);
+    } catch {
+      console.warn(`[youtube] state confirm: HTTP ${res.status}, unreadable body`);
+      return null;
+    }
+  }
+  return { confirmViaApi };
+}
+
+// The reader's confirm: one day count for the process (the home reader is the only caller).
+const { confirmViaApi } = createYtConfirm();
 
 // Zero-quota concurrent viewers: the InnerTube `updated_metadata` endpoint —
 // the same call the watch page itself polls to refresh its "N watching now"
@@ -670,6 +777,121 @@ async function selectLiveChatMode(page) {
   }
 }
 
+// E12: a disagreement between the page and the Data API is asked again at most this often for the
+// same video and the same page answer; in between the API's last answer stands. Without it a page
+// that keeps saying one thing while the API says another would spend a unit every 30 s tick.
+const YT_CONFIRM_REASK_MS = 2 * 60_000;
+
+/**
+ * The reader's watcher: each tick's lookup → which chat page to have (the waiting room included)
+ * and the liveness observation the poller reads. Pulled out of startYouTube so it runs without a
+ * browser (lib/ytWaitingRoom.test.js): the chat page is the caller's, behind `chat`.
+ *
+ * The chat page and the observation are kept apart (ADR 0133): `chatVideoId` is the page that is
+ * open — a countdown, a live chat, or a tail being read — and never the live vote by itself.
+ *
+ * @param {object} o
+ * @param {string}  o.channelId
+ * @param {boolean} [o.relay]   another channel's chat: no countdown is read and no confirm is spent
+ * @param {typeof youtubeLiveState} [o.lookup]
+ * @param {(videoId: string) => Promise<ReturnType<typeof classifyVideosList>>} [o.confirm]  E12
+ * @param {() => number} [o.now]
+ * @param {{ open: (videoId: string, o: { live: boolean }) => Promise<void>, close: () => Promise<void>,
+ *   msSinceOk: () => number, supervise: (videoId: string) => Promise<void> }} o.chat
+ *   open/close the chat page; ms since the page's chat last delivered; run the stall watchdog
+ *   ('' = no live or countdown page to watch)
+ * @param {string} [o.tag]
+ */
+export function createYtWatcher({ channelId, relay = false, lookup = youtubeLiveState, confirm = confirmViaApi, now = Date.now, chat, tag = relay ? 'youtube:relay' : 'youtube' }) {
+  let chatVideoId = null;  // the video whose chat page is open, or null
+  let chatSeenLive = false; // that video has been live: its chat is a live chat (or its tail)
+  let missCount = 0;       // consecutive counted lookup misses while a page is open
+  let endHoldLogged = false; // one hold line per degraded-lookup episode, not per tick
+  // The last lookup's answer; 'unknown' until the first lookup has answered.
+  let last = { state: 'unknown', videoId: '', certain: false, evidence: 'yt-reader', scheduledStart: null };
+  let accepted = null;     // the last accepted answered state (E12 asks on a change from it)
+  let asked = null;        // the last E12 call: { videoId, pageState, at, answer }
+  let noStartLogged = '';  // the last upcoming video logged as having no start time
+
+  // E12: the page's answer, or the Data API's when the page says something new about a known video.
+  const confirmed = async (page, t) => {
+    const videoId = page.videoId || chatVideoId || '';
+    if (relay || page.state === 'unknown' || page.state === accepted || !videoId) return page;
+    if (asked && asked.videoId === videoId && asked.pageState === page.state && t - asked.at < YT_CONFIRM_REASK_MS) return asked.answer ?? page;
+    const o = await confirm(videoId);
+    const answer = o ? { state: o.raw, videoId: o.raw === 'offline' ? '' : o.key, certain: o.certain, evidence: o.evidence, scheduledStart: o.scheduledStart ?? null } : null;
+    asked = { videoId, pageState: page.state, at: t, answer };
+    return answer ?? page;
+  };
+
+  const tick = async () => {
+    const t = now();
+    const lookedUp = await lookup(channelId, { allowEnvOverride: !relay, knownId: chatVideoId || '' });
+    const reading = await confirmed(lookedUp, t);
+    last = reading;
+    if (reading.state !== 'unknown') accepted = reading.state;
+    if (reading.state === 'live' && reading.videoId && reading.videoId === chatVideoId) chatSeenLive = true;
+    if (reading.state === 'live') endHoldLogged = false;
+    const d = decideWatch({ lookup: reading, currentId: chatVideoId, missCount, msSinceChatOk: chat.msSinceOk(), relay, now: t });
+    missCount = d.missCount;
+    // With no start time there is no telling a countdown from a schedule a day ahead, so its chat
+    // is not read (chatPlan) — said once per video, so a missing countdown is never silent.
+    if (!relay && reading.state === 'upcoming' && reading.videoId && typeof reading.scheduledStart !== 'number'
+      && reading.videoId !== noStartLogged && reading.videoId !== chatVideoId) {
+      noStartLogged = reading.videoId;
+      console.log(`[${tag}] scheduled broadcast ${reading.videoId} has no start time — countdown chat not read`);
+    }
+    if (d.action === 'open' && d.videoId) {
+      chatVideoId = d.videoId;
+      chatSeenLive = reading.state === 'live';
+      if (!chatSeenLive) {
+        const mins = typeof reading.scheduledStart === 'number' ? Math.round((reading.scheduledStart - t) / 60_000) : '?';
+        console.log(`[${tag}] scheduled broadcast ${d.videoId} starts in ${mins} min — reading its countdown chat (it does not vote live)`);
+      }
+      await chat.open(d.videoId, { live: chatSeenLive });
+      return;
+    }
+    if (d.action === 'hold') {
+      // The chat page outlives a not-live lookup (lib/ytEndDecision.js): a failed lookup is
+      // "unknown", and after a real end YouTube serves the chat for ~5 minutes more — goodbyes are
+      // still read (ADR 0133). While the chat continuation has delivered recently, hold; otherwise
+      // the 3-miss debounce. The liveness vote is separate (getLiveState): an answered end is offline now.
+      if (!endHoldLogged) {
+        endHoldLogged = true;
+        console.log(reading.state === 'offline'
+          ? `[${tag}] YouTube says the broadcast ended; reading the chat tail while it delivers (logged once per episode)`
+          : `[${tag}] live lookup failing but chat is delivering — holding open (logged once per episode)`);
+      }
+      return;
+    }
+    if (d.action === 'count') return;
+    if (d.action === 'close') {
+      console.log(`[${tag}] stream ended; closing chat`);
+      chatVideoId = null;
+      chatSeenLive = false;
+      missCount = 0;
+      await chat.close();
+      return;
+    }
+    await chat.supervise(chatVideoId || '');
+  };
+
+  /** The observation for the poller, plus the verified live id ('' unless live). */
+  const getLiveState = () => {
+    const o = watcherVote({ lookup: last, holding: chatVideoId != null && chatSeenLive });
+    return { ...o, videoId: o.raw === 'live' ? chatVideoId || last.videoId || '' : '' };
+  };
+
+  return {
+    tick,
+    getLiveState,
+    /** The video whose chat page is open (a countdown, a live chat or its tail), or null. */
+    chatVideoId: () => chatVideoId,
+    /** The open page's broadcast has been live: its chat polls at the 1 s self-poll. */
+    chatIsLive: () => chatSeenLive,
+  };
+}
+
 /**
  * @param {object} [opts]
  * @param {string} [opts.channelId] channel to watch (default: home channel from env)
@@ -716,9 +938,9 @@ export async function startYouTube(opts = {}) {
   });
 
   let page = null;
-  let currentVideoId = null;
-  let missCount = 0;   // consecutive failed live-lookups while watching a video
-  let endHoldLogged = false; // one hold line per degraded-lookup episode, not per tick
+  // The watcher (createYtWatcher, below): the lookup, the chat plan and the liveness observation.
+  // It owns which video's chat page is open; this closure owns the page itself.
+  let watcher = null;
   let stopped = false;
   // Api-poller liveness (watchdog inputs). apiPollerFor holds the page whose
   // poller is running — page-identity, not a boolean, so a dying old loop
@@ -893,7 +1115,7 @@ export async function startYouTube(opts = {}) {
     let token = overrideToken || boot.token;
     const cadence = createCadenceReporter();
     let lastTimeoutMs = '?';
-    console.log(`[${tag}] api poller started (self-poll ${API_POLL_MS}ms, ignoring server timeoutMs)${overrideToken ? ' [bootstrapped from Live chat switch]' : ' [bootstrapped from ytInitialData — Top chat if a switch was expected]'}`);
+    console.log(`[${tag}] api poller started (self-poll ${API_POLL_MS}ms, ignoring server timeoutMs${watcher?.chatIsLive() ? '' : `; a countdown polls every ${chatPollDelay({ live: false, selfPollMs: API_POLL_MS })}ms until live`})${overrideToken ? ' [bootstrapped from Live chat switch]' : ' [bootstrapped from ytInitialData — Top chat if a switch was expected]'}`);
     apiPollerFor = pg;
     lastPollOkAt = Date.now();
     try {
@@ -997,7 +1219,8 @@ export async function startYouTube(opts = {}) {
           }
           resetCounts();
         }
-        await new Promise((r) => setTimeout(r, API_POLL_MS));
+        // The 1 s self-poll once the broadcast is live; a countdown chat every few seconds (chatPollDelay).
+        await new Promise((r) => setTimeout(r, chatPollDelay({ live: watcher?.chatIsLive() !== false, selfPollMs: API_POLL_MS })));
       }
     } finally {
       // Only clear our own registration — a replacement poller may already own it.
@@ -1056,7 +1279,7 @@ export async function startYouTube(opts = {}) {
       }
     }
     if (READ_MODE === 'dom') await page.evaluate(installObserver);
-    console.log(`[${tag}] watching live chat for ${videoId} (${channelId}) [read=${READ_MODE}]`);
+    console.log(`[${tag}] watching ${watcher?.chatIsLive() === false ? 'countdown' : 'live'} chat for ${videoId} (${channelId}) [read=${READ_MODE}]`);
     // The watchdog measures liveness from max(lastPollOkAt, pageOpenedAt). Stamp
     // this BEFORE starting the poller: a page that never gets a poller at all
     // (bootstrap failure) still needs a defensible clock to be judged against,
@@ -1080,47 +1303,30 @@ export async function startYouTube(opts = {}) {
   // against a page still MID-BOOTSTRAP (pageOpenedAt not yet restamped) and
   // could call openChat concurrently: two closures racing on `page`, and in
   // dom mode a second exposeFunction on the same page throws.
-  let ticking = false;
-  const tick = async () => {
-    if (stopped || ticking) return;
-    ticking = true;
-    try {
-      const videoId = await findLiveVideoId(channelId, { allowEnvOverride: !onMessage, knownId: currentVideoId || '' });
-      if (videoId) { missCount = 0; endHoldLogged = false; }
-      if (videoId && videoId !== currentVideoId) {
-        currentVideoId = videoId;
+  watcher = createYtWatcher({
+    channelId,
+    relay: !!onMessage,
+    tag,
+    chat: {
+      open: async (videoId) => {
         apiStallCount = 0;
         await openChat(videoId);
         identity?.stop();          // reset any prior stream's map
         await identity?.start(videoId);
-      } else if (!videoId && currentVideoId) {
-        // A failed lookup is "unknown", not "ended" (lib/ytEndDecision.js): the
-        // /live lookup can fail while the chat poller is still answering every
-        // second. While the chat continuation has delivered recently, hold;
-        // otherwise apply the 3-miss debounce.
-        const d = decideEnd({ missCount, msSinceChatOk: Date.now() - lastPollOkAt });
-        missCount = d.missCount;
-        if (d.action === 'hold') {
-          if (!endHoldLogged) {
-            endHoldLogged = true;
-            console.log(`[${tag}] live lookup failing but chat is delivering — holding open (logged once per episode)`);
-          }
-          return;
-        }
-        if (d.action === 'count') return;
-        console.log(`[${tag}] stream ended; closing chat`);
-        currentVideoId = null;
-        missCount = 0;
+      },
+      close: async () => {
         apiStallCount = 0;
         identity?.stop();
         if (page) { await page.close().catch(() => {}); page = null; }
-      } else {
-        // Liveness watchdog. The decision is in lib/ytWatchdog.js, pure and
-        // tested. It does not require `apiPollerFor === page`: a live page in
-        // api mode that hasn't polled successfully is stalled whether the
-        // poller is wedged, died, or never started.
+      },
+      msSinceOk: () => Date.now() - lastPollOkAt,
+      // Liveness watchdog over the open page (a live chat or a countdown; '' = none to watch). The
+      // decision is in lib/ytWatchdog.js, pure and tested. It does not require `apiPollerFor ===
+      // page`: a page in api mode that hasn't polled successfully is stalled whether the poller is
+      // wedged, died, or never started.
+      supervise: async (videoId) => {
         const now = Date.now();
-        const d = decideWatchdog({
+        const wd = decideWatchdog({
           readMode: READ_MODE,
           videoId,
           hasPage: !!page,
@@ -1130,17 +1336,26 @@ export async function startYouTube(opts = {}) {
           stallMs: STALL_MS,
           stallTicks: STALL_TICKS,
         });
-        apiStallCount = d.stallCount;
+        apiStallCount = wd.stallCount;
         const dead = Math.round((now - Math.max(lastPollOkAt, pageOpenedAt)) / 1000);
-        if (d.action === 'rebuild') {
+        if (wd.action === 'rebuild') {
           rebuildCount++;
-          console.warn(`[${tag}] api poller stalled (${d.reason}, ${dead}s without a successful poll) — rebuilding chat page`);
-          await openChat(currentVideoId);
-        } else if (d.action === 'count') {
+          console.warn(`[${tag}] api poller stalled (${wd.reason}, ${dead}s without a successful poll) — rebuilding chat page`);
+          await openChat(videoId);
+        } else if (wd.action === 'count') {
           // Every strike is logged, so the dead chat before a rebuild leaves a trace.
-          console.warn(`[${tag}] api poller looks stalled (${d.reason}, ${dead}s) — strike ${d.stallCount}/${STALL_TICKS}`);
+          console.warn(stallStrikeLine(tag, wd, dead, STALL_TICKS));
         }
-      }
+      },
+    },
+  });
+
+  let ticking = false;
+  const tick = async () => {
+    if (stopped || ticking) return;
+    ticking = true;
+    try {
+      await watcher.tick();
     } catch (err) {
       console.warn(`[${tag}] tick error:`, err.message);
     } finally {
@@ -1153,9 +1368,14 @@ export async function startYouTube(opts = {}) {
   if (timer.unref) timer.unref();
 
   return {
-    // Authoritative live videoId for the poller: ownership+isLiveNow verified
-    // and 3-miss debounced by this watcher's own tick. '' when not live.
-    getVideoId: () => currentVideoId || '',
+    // The liveness observation for the poller (ADR 0133, lib/ytEndDecision.js watcherVote), plus
+    // the verified live id ('' unless live: the viewer count and the site's embed never point at an
+    // ended or scheduled broadcast). YouTube's own answer, apart from whether a chat page is open:
+    // an answered end is offline while the tail is still read (certain when the known video's own
+    // page, or the Data API, said so); a countdown is upcoming; a lookup that could not ask holds
+    // live only while a live broadcast's page is open, else unknown.
+    getLiveState: () => watcher.getLiveState(),
+    getVideoId: () => watcher.getLiveState().videoId,
     stop: async () => {
       stopped = true;
       clearInterval(timer);

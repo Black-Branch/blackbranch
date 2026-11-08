@@ -15,11 +15,20 @@ import { platformLabel } from "@/app/lib/platforms";
 import { trackPropagation, type FanOut } from "@/app/lib/modPropagation";
 import { siteBansChanged } from "@/app/lib/modQuickActions";
 import { banFormDefaults, banButtonLabel, type BanDuration } from "../banForm";
+import { HISTORY_WINDOWS, type HistoryWindow } from "@/app/lib/banHistory";
+import { useCommunityHistory } from "@/app/lib/useCommunityHistory";
 
 type Ban = {
   matrixId: string; targetName: string | null; bannedBy: string; modName: string | null;
   reason: string | null; expiresAt: string | null; createdAt: string; failedPlatforms?: string[];
 };
+
+/** A refusal's own words (a 403 says who may do it), else the generic failure. */
+async function refusal(res: Response, fallback: string): Promise<string> {
+  if (res.status !== 403) return fallback;
+  const t = (await res.text().catch(() => "")).trim();
+  return t && t.length < 160 ? t : fallback;
+}
 
 // ─── Active bans + ban form ───────────────────────────────────────────────────
 
@@ -29,8 +38,13 @@ export default function BanSection({ note, initialTarget }: { note: (m: string) 
   const [duration, setDuration] = useState<BanDuration>(banFormDefaults.duration);
   const [reason, setReason] = useState("");
   const [override, setOverride] = useState(false);
+  // A ban or timeout also removes their messages of the last 24 hours, unless turned off for this one.
+  const [alsoRemove, setAlsoRemove] = useState(true);
+  // A permanent ban can also delete their community message history (banHistory.ts); default none.
+  const [history, setHistory] = useState<HistoryWindow>(banFormDefaults.history);
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const deleteCommunityHistory = useCommunityHistory();
 
   const load = useCallback(() => {
     getJson<{ bans: Ban[] }>("/api/mod/bans").then((d) => setBans(d.bans)).catch(() => {});
@@ -47,23 +61,41 @@ export default function BanSection({ note, initialTarget }: { note: (m: string) 
     setArmed(false);
     setBusy(true);
     try {
-      const payload: Record<string, unknown> = { targetId: matrixId, override };
+      const payload: Record<string, unknown> = { targetId: matrixId, override, purge: alsoRemove };
       if (duration !== "perm") payload.durationMinutes = Number(duration);
       if (reason.trim()) payload.reason = reason.trim();
       const res = await postJson("/api/mod/ban", payload);
-      const d = await res.json().catch(() => ({} as { applied?: boolean; kept?: string } & FanOut));
-      if (!res.ok) note("Ban failed.");
-      else if (d.applied === false) {
+      if (!res.ok) { note(await refusal(res, "Ban failed.")); load(); return; }
+      const d = await res.json().catch(() => ({} as { applied?: boolean; kept?: string; identitiesKeepBan?: number } & FanOut));
+      const purged = typeof d.purged === "number" ? d.purged : null;
+      if (d.applied === false) {
         note(d.kept === "permanent"
           ? "Kept the existing permanent ban — check Override to downgrade deliberately."
           : "Kept the existing longer timeout — check Override to shorten deliberately.");
       } else {
-        note(`${duration === "perm" ? "Banned" : `Timed out (${duration}m)`} ${shortName(matrixId)}.`);
+        const keep = d.identitiesKeepBan ?? 0;
+        const done = `${duration === "perm" ? "Banned" : `Timed out (${duration}m)`} ${shortName(matrixId)}.` +
+          (purged ? ` Removed ${purged} recent ${purged === 1 ? "message" : "messages"}.` : "") +
+          (d.purgeFailed ? " Their messages couldn't be removed. Purge them by hand." : "") +
+          (keep > 0 ? ` ${keep} linked ${keep === 1 ? "identity keeps its" : "identities keep their"} own ban — Unban lifts it.` : "");
+        note(done);
         trackPropagation(duration === "perm" ? "Ban" : `Timeout ${duration}m`, d);
         siteBansChanged();
+        const window = duration === "perm" ? history : "none";
         setTarget("");
         setReason("");
         setOverride(false);
+        setAlsoRemove(true);
+        setHistory(banFormDefaults.history);
+        // Then their community lines, from this moderator's own client (the ban stands either way).
+        if (window !== "none") {
+          const line = await deleteCommunityHistory({
+            targetId: matrixId, window, reason: reason.trim() || undefined,
+            siteRemoved: purged, batchId: typeof d.batchId === "string" ? d.batchId : null,
+            onProgress: (p) => { if (p) note(`${done} ${p}`); },
+          });
+          if (line) note(`${done} ${line}`);
+        }
       }
       load();
     } catch {
@@ -77,7 +109,7 @@ export default function BanSection({ note, initialTarget }: { note: (m: string) 
     setBusy(true);
     try {
       const res = await postJson("/api/mod/ban", { targetId: matrixId }, "DELETE");
-      note(res.ok ? `Unbanned ${shortName(matrixId)}.` : "Unban failed.");
+      note(res.ok ? `Unbanned ${shortName(matrixId)}.` : await refusal(res, "Unban failed."));
       if (res.ok) { trackPropagation("Unban", (await res.json().catch(() => ({}))) as FanOut); siteBansChanged(); }
       load();
     } catch {
@@ -121,6 +153,20 @@ export default function BanSection({ note, initialTarget }: { note: (m: string) 
           aria-label="Reason"
           className="flex-1 min-w-40 rounded-lg bg-surface-1 border border-edge px-3 py-1.5 text-sm text-body placeholder:text-muted outline-none focus:border-edge-strong"
         />
+        <label className="flex items-center gap-1.5 text-xs text-secondary select-none">
+          <input type="checkbox" checked={alsoRemove} onChange={(e) => setAlsoRemove(e.target.checked)} />
+          Also remove their recent messages
+        </label>
+        {duration === "perm" && (
+          <label className="flex items-center gap-1.5 text-xs text-secondary select-none">
+            Community history
+            <select value={history} onChange={(e) => { setHistory(e.target.value as HistoryWindow); setArmed(false); }}
+              aria-label="Delete message history"
+              className="rounded-lg bg-surface-1 border border-edge px-2 py-1 text-xs text-body outline-none focus:border-edge-strong">
+              {HISTORY_WINDOWS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+            </select>
+          </label>
+        )}
         <label className="flex items-center gap-1.5 text-xs text-secondary select-none">
           <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} />
           Override

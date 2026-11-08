@@ -7,7 +7,7 @@ import { startTwitch } from './platforms/twitch.js';
 import { startKick } from './platforms/kick.js';
 import { startYouTube } from './platforms/youtube.js';
 import { startStreamplace } from './platforms/streamplace.js';
-import { startPoller } from './lib/poller.js';
+import { startPoller, getPlatformStates } from './lib/poller.js';
 import { streamApiBase } from './lib/streamApiUrl.js';
 import { instanceConfig } from './lib/instanceConfig.js';
 import { existsSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { startMemoryFeed } from './lib/embeddings.js';
 import { createSupervisor } from './lib/supervisor.js';
 import { startHelpdesk, helpdeskWanted } from './lib/helpdesk/index.js';
 import { startBotFeed } from './lib/bot/index.js';
-import { choosePlatforms, PLATFORM_KEYS } from './lib/platformsEnv.js';
+import { choosePlatforms } from './lib/platformsEnv.js';
 import { createPlatformStarter, startPlatformsWhenLoaded } from './lib/platformStarter.js';
 import { registerScorer } from './lib/scoring.js';
 import { registerChannelEmotes } from './lib/emotes.js';
@@ -89,18 +89,9 @@ async function main() {
   running.push(startAiReporting());
   // The chat bot hears the feed from the first frame (the history replay seeds its recent chat),
   // so it is listening before the socket opens; whether it ANSWERS is the supervisor's below.
-  // A reader started with new values, or stopped because it was switched off, has applied its
-  // restart-applied keys: the Credentials page is told at once (one report per burst), not at the
-  // next 5-minute re-read.
-  let appliedReport = null;
   const platforms = createPlatformStarter({
     starters: STARTERS,
     choose: () => choosePlatforms(process.env.PLATFORMS, Object.keys(STARTERS), (k) => instanceConfig.get(k)),
-    onApplied: (name) => {
-      instanceConfig.markApplied(PLATFORM_KEYS[name] || []);
-      appliedReport ??= setTimeout(() => { appliedReport = null; instanceConfig.reportNow(); }, 1000);
-      appliedReport.unref?.();
-    },
   });
   const botFeed = startBotFeed({ twitch: () => platforms.handle('twitch') });
   running.push(botFeed);
@@ -118,9 +109,10 @@ async function main() {
   ], { onLoad: (fn) => instanceConfig.onLoad(fn) });
   running.push(supervisor);
   // GET /health (lib/health.js): the readers' states, before any reader starts, so a slow start
-  // reads as `starting` rather than as no answer at all.
+  // reads as `starting` rather than as no answer at all; and each platform's live state as the
+  // poller last decided it (all null until its first tick, or with POLLER_ENABLED=0).
   const health = startHealthServer({
-    snapshot: () => healthBody({ readers: platforms.states(), wanted: (n) => platforms.wanted(n), bot: supervisor.isRunning('bot') }),
+    snapshot: () => healthBody({ readers: platforms.states(), wanted: (n) => platforms.wanted(n), bot: supervisor.isRunning('bot'), liveness: getPlatformStates() }),
   });
   running.push(health);
   await startSessionPolling();
@@ -150,8 +142,8 @@ async function main() {
     }
   }
 
-  // Viewer poller + stream lifecycle (live state is an OR across Twitch,
-  // YouTube and Kick — any one of them opens or sustains the session).
+  // Viewer poller + stream lifecycle (live state is an OR across Twitch, Kick,
+  // YouTube and stream.place — any one of them opens or sustains the session).
   // Gate off with POLLER_ENABLED=0.
   if (process.env.POLLER_ENABLED !== '0') {
     try {
@@ -159,11 +151,15 @@ async function main() {
         // Closures (not method refs): a handle may be null if the platform is
         // disabled or failed to start — the poller then records NULL / scrapes.
         getStreamplaceViewers: () => platforms.handle('streamplace')?.getViewers?.() ?? null,
-        // stream.place's live vote, read off its chat socket; null = no reader to ask.
-        getStreamplaceState: () => platforms.handle('streamplace')?.getLiveState?.() ?? null,
+        // stream.place's live observation, read off its chat socket; null = no reader to ask.
+        getStreamplaceObservation: () => platforms.handle('streamplace')?.getObservation?.() ?? null,
         // The YouTube reader's verified live id ('' = not live). null = NO reader is running: the
         // poller then asks YouTube itself while YouTube is chosen, rather than vote offline.
         getYtVideoId: () => { const h = platforms.handle('youtube'); return h?.getVideoId ? h.getVideoId() : null; },
+        // The reader's liveness observation — live / offline (certain or not) / upcoming / unknown —
+        // plus its verified live id. null = no reader running. ADR 0133: separate from whether it
+        // still reads a chat page (the tail, or our own countdown).
+        getYtLiveState: () => platforms.handle('youtube')?.getLiveState?.() ?? null,
         ytWanted: () => platforms.wanted('youtube'),
       }));
     } catch (err) {

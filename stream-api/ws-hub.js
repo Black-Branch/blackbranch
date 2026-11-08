@@ -4,6 +4,7 @@
 // processes (only pong/error are handled).
 
 const { WebSocketServer } = require('ws');
+const { randomBytes } = require('crypto');
 
 /**
  * @param {object} opts
@@ -98,13 +99,25 @@ function createWsHub({ server, connectFrames = [], isInternalUpgrade = () => fal
   const MSG_BUFFER_SIZE = 200;
   const msgBuffer = [];
 
+  // Resume positions. Every buffered entry carries `seq`, set on insert and moved again on every
+  // later change to it (redaction, a vote) — so "everything past seq N" is exactly what a client
+  // that saw N lacks. `epoch` names this boot: a position from another process means nothing here.
+  // `evictedSeq` is the newest seq that has left the buffer; a client behind it lacks something
+  // the buffer no longer holds (a line, or a deletion's envelope) and gets the full frame.
+  const epoch = randomBytes(8).toString('hex');
+  let seq = 0;
+  let evictedSeq = 0;
+  const stamp = (b) => { b.seq = ++seq; };
+  // The most changes a delta answers (about a busy minute of chat); further back gets the cached full frame.
+  const DELTA_MAX = 40;
+
   // The `history` frame serialized once per buffer CHANGE, not once per
   // connection, so a reconnect storm does not stringify the full buffer per socket. Every mutation of msgBuffer or its
   // entries MUST invalidate — redactBuffered especially: redaction exists
   // because this buffer is replayed to every future connection, and a stale
   // cached string would keep serving the deleted content. Pinned by
   // ws-history-cache.test.js.
-  const history = makeHistoryCache(msgBuffer);
+  const history = makeHistoryCache(msgBuffer, () => ({ epoch, seq }));
 
   // Mark a buffered message deleted AND strip its content.
   //
@@ -123,13 +136,34 @@ function createWsHub({ server, connectFrames = [], isInternalUpgrade = () => fal
     if (b.message) b.message = '';
     if (b.emoteUrl) b.emoteUrl = null;
     if (b.emoteName) b.emoteName = null;
+    stamp(b);
     history.invalidate();
   }
 
-  function bufferPush(msg) {
-    msgBuffer.push(msg);
-    if (msgBuffer.length > MSG_BUFFER_SIZE) msgBuffer.shift();
+  // A buffered entry changed in place (a vote's new score): move its seq so a resuming client
+  // receives it, and drop the cached frame so a new connection sees it.
+  function touchBuffered(b) {
+    if (!b) return;
+    stamp(b);
     history.invalidate();
+  }
+
+  // Stamps the entry BEFORE the caller broadcasts it, so the live frame carries its seq too.
+  function bufferPush(msg) {
+    stamp(msg);
+    msgBuffer.push(msg);
+    if (msgBuffer.length > MSG_BUFFER_SIZE) evictedSeq = Math.max(evictedSeq, msgBuffer.shift().seq || 0);
+    history.invalidate();
+  }
+
+  // The entries a socket resuming from `ask` lacks, or null when the full frame is the answer:
+  // a position this boot cannot vouch for, or one so far back that the delta is no longer small.
+  // A delta is serialized per socket while the full frame is cached per change, so the cap keeps
+  // a flood of old positions from costing more than a flood of plain connects.
+  function resumeFrom(ask) {
+    if (!ask || ask.epoch !== epoch || ask.since > seq || ask.since < evictedSeq) return null;
+    if (seq - ask.since > DELTA_MAX) return null; // every change moves seq: a bound on the delta's size
+    return msgBuffer.filter((b) => b.seq > ask.since);
   }
 
   // Like bufferPush, but first drops any earlier buffered entry for the same
@@ -207,8 +241,13 @@ function createWsHub({ server, connectFrames = [], isInternalUpgrade = () => fal
     // wrong or missing — without this, an internal client silently degrades to a public one
     // (no canonical ids) and nothing says so.
     try { ws.send(JSON.stringify({ type: 'hello', internal: ws.internal })); } catch { /* socket already closing */ }
-    // Send recent message history on connect
-    if (msgBuffer.length) {
+    // Recent message history: only what changed since the position the client resumes from, when
+    // this boot can vouch for it; otherwise the whole buffer (cached per change).
+    const missed = resumeFrom(parseResume(req && req.url));
+    if (missed) {
+      const frame = { type: 'history', delta: true, epoch, seq, messages: missed };
+      try { ws.send(ws.internal ? JSON.stringify(frame) : publicJson(frame)); } catch { /* socket already closing */ }
+    } else if (msgBuffer.length) {
       ws.send(history.get(ws.internal));
     }
     // Then the current state frames (see connectFrames above). After history,
@@ -239,7 +278,18 @@ function createWsHub({ server, connectFrames = [], isInternalUpgrade = () => fal
   }, HEARTBEAT_MS);
   wss.on('close', () => clearInterval(wsHeartbeat));
 
-  return { wss, msgBuffer, broadcast, sendInternal, bufferPush, bufferReplace, redactBuffered, routeUpgrade };
+  return { wss, msgBuffer, broadcast, sendInternal, bufferPush, bufferReplace, redactBuffered, touchBuffered, routeUpgrade };
+}
+
+// `?since=<seq>&epoch=<hex>` on the upgrade URL → { since, epoch }, or null for anything else.
+function parseResume(url) {
+  const q = String(url || '').indexOf('?');
+  if (q === -1) return null;
+  const params = new URLSearchParams(String(url).slice(q + 1));
+  const since = params.get('since');
+  const ep = params.get('epoch');
+  if (!since || !/^\d{1,15}$/.test(since) || !ep || !/^[0-9a-f]{1,32}$/.test(ep)) return null;
+  return { since: Number(since), epoch: ep };
 }
 
 // "::ffff:192.0.2.1" and "192.0.2.1" are the same IPv4 peer.
@@ -336,21 +386,23 @@ function publicReplacer(key, value) { return INTERNAL_ONLY_KEYS.has(key) ? undef
 function publicJson(payload) { return JSON.stringify(payload, publicReplacer); }
 
 // The `history` replay, cached per buffer change in its two forms (internal and public). One
-// invalidate clears both, so a redaction can never survive in either.
-function makeHistoryCache(buffer) {
+// invalidate clears both, so a redaction can never survive in either. `position` adds the hub's
+// { epoch, seq } — the point a client resumes from.
+function makeHistoryCache(buffer, position = () => null) {
   let full = null;
   let pub = null;
+  const frame = () => ({ type: 'history', ...position(), messages: buffer });
   return {
     invalidate() { full = null; pub = null; },
     get(internal = false) {
       if (internal) {
-        if (full === null) full = JSON.stringify({ type: 'history', messages: buffer });
+        if (full === null) full = JSON.stringify(frame());
         return full;
       }
-      if (pub === null) pub = publicJson({ type: 'history', messages: buffer });
+      if (pub === null) pub = publicJson(frame());
       return pub;
     },
   };
 }
 
-module.exports = { createWsHub, sweepVerdict, makeHistoryCache, bucketOf, isLocalDirect };
+module.exports = { createWsHub, sweepVerdict, makeHistoryCache, bucketOf, isLocalDirect, publicReplacer };

@@ -2,83 +2,31 @@
 
 import { useState } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
+import { msgMenuItems, type MsgMenuCtx } from "./msgMenuItems";
 
-// ─── Touch context menu (shared) ─────────────────────────────────────────────
+// ─── The ⋯ menu (desktop, and the toolbar's ⋯ by keyboard) ───────────────────
+// The items come from msgMenuItems, the same list the phone's long-press sheet shows.
 
-export function MsgContextMenu({
-  x, y, onReact, onReply, onThread, onMention, onEdit, onCopy, onCopyLink, onPin, pinned, onDelete, onClose,
-}: {
-  x: number; y: number;
-  onReact?: () => void;
-  onReply?: () => void;
-  onThread?: () => void;
-  /** Insert "@name" into the composer (the row's tap target is the member
-   *  card, so this menu is where that shortcut lives). */
-  onMention?: () => void;
-  onEdit?: () => void;
-  onCopy: () => void;
-  onCopyLink?: () => void;
-  onPin?: () => void;
-  pinned?: boolean;
-  onDelete?: () => void;
-  onClose: () => void;
-}) {
-  // Two-step inline confirm for destructive delete (no window.confirm — a native
-  // dialog would freeze the Chrome-extension automation path).
-  const [confirmDelete, setConfirmDelete] = useState(false);
+export function MsgContextMenu({ x, y, onClose, ...ctx }: MsgMenuCtx & { x: number; y: number; onClose: () => void }) {
+  // The item whose confirm text is showing (its second tap runs it).
+  const [armed, setArmed] = useState<string | null>(null);
 
   return (
     <ContextMenu x={x} y={y} onClose={onClose} className="glyph-text">
-      {onReact && (
-        <MenuItem onClick={() => { onReact(); onClose(); }}>
-          <span>😊</span> React
-        </MenuItem>
-      )}
-      {onReply && (
-        <MenuItem onClick={() => { onReply(); onClose(); }}>
-          <span>↩</span> Reply
-        </MenuItem>
-      )}
-      {onThread && (
-        <MenuItem onClick={() => { onThread(); onClose(); }}>
-          <span>🧵</span> Reply in thread
-        </MenuItem>
-      )}
-      {onMention && (
-        <MenuItem onClick={() => { onMention(); onClose(); }}>
-          <span>@</span> Mention
-        </MenuItem>
-      )}
-      {onEdit && (
-        <MenuItem onClick={() => { onEdit(); onClose(); }}>
-          <span>✎</span> Edit
-        </MenuItem>
-      )}
-      <MenuItem onClick={() => { onCopy(); onClose(); }}>
-        <span>⎘</span> Copy text
-      </MenuItem>
-      {onCopyLink && (
-        <MenuItem onClick={() => { onCopyLink(); onClose(); }}>
-          <span>🔗</span> Copy link
-        </MenuItem>
-      )}
-      {onPin && (
-        <MenuItem onClick={() => { onPin(); onClose(); }}>
-          <span>📌</span> {pinned ? "Unpin message" : "Pin message"}
-        </MenuItem>
-      )}
-      {onDelete && (
+      {msgMenuItems(ctx, "sent").map((item) => (
         <MenuItem
-          className="text-rose-400! hover:bg-rose-500/10!"
+          key={item.id}
+          className={item.danger ? "text-rose-400! hover:bg-rose-500/10!" : ""}
           onClick={() => {
-            if (!confirmDelete) { setConfirmDelete(true); return; }
-            onDelete();
+            if (item.confirm && armed !== item.id) { setArmed(item.id); return; }
+            item.run();
             onClose();
           }}
         >
-          <span>🗑</span> {confirmDelete ? "Confirm delete?" : "Delete"}
+          <span aria-hidden="true" className="flex shrink-0">{item.icon}</span>
+          {armed === item.id && item.confirm ? item.confirm : item.label}
         </MenuItem>
-      )}
+      ))}
     </ContextMenu>
   );
 }

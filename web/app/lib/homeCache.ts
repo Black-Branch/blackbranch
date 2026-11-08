@@ -46,7 +46,7 @@ const cache = createTtlCache<HomePayload>({ ttlMs: 60_000, load: async () => {
         patreon: snap?.self?.["patreon.webhookSecret"]?.display != null,
       });
     },
-    // The forums' most active threads, through the same reader (and the same
+    // The forums' most recently active threads, through the same reader (and the same
     // 60s per-room cache) the Forums tab reads; votes are not shown here.
     threads: () => forumReader.rooms()
       .then((rooms) => Promise.all(rooms.map((r) => forumReader.posts(r.roomId))))

@@ -71,6 +71,7 @@ function PostCard({ url, data }: { url: string; data: OGData }) {
   const fit = fitMediaBox(data.imageWidth, data.imageHeight);
   return (
     <a
+      data-link-card=""
       href={url}
       target="_blank"
       rel="noopener noreferrer"
@@ -139,6 +140,7 @@ export function LinkPreview({ url }: { url: string }) {
 
   return (
     <a
+      data-link-card=""
       href={url}
       target="_blank"
       rel="noopener noreferrer"

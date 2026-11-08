@@ -22,12 +22,14 @@ test("the four stages are reported in lifecycle order, and every failure marks i
   const src = CTX();
   assert.match(src, /registerReadiness\(MATRIX_READINESS_KEY, \[\s*\{ id: "token", label: "Checking your session" \},\s*\{ id: "sdk", label: "Loading Matrix" \},\s*\{ id: "crypto", label: "Preparing encryption" \},\s*\{ id: "sync", label: "Syncing the community" \},\s*\]\)/,
     "the literal stage sequence, registered once at module level");
+  // A stage starts through `enter(…)`: it marks the stage active AND restarts the boot clock.
+  assert.match(src, /const enter = \(stage: BootStageId\) => \{\s*matrixReadiness\.advance\(stage, "active"\);\s*watch = bootWatchStep\(watch, \{ type: "enter", stage, at: Date\.now\(\) \}\);\s*\};/);
   const order = [
     'matrixReadiness.reset()',
-    'advance("token", "active")', 'advance("token", "done")',
-    'advance("sdk", "active")', 'advance("sdk", "done")',
-    'advance("crypto", "active")', 'advance("crypto", "done")',
-    'advance("sync", "active")', 'advance("sync", "done")',
+    'enter("token")', 'advance("token", "done")',
+    'enter("sdk")', 'advance("sdk", "done")',
+    'enter("crypto")', 'advance("crypto", "done")',
+    'enter("sync")', 'advance("sync", "done")',
   ];
   const idx = order.map((s) => { const i = src.indexOf(s); assert.notEqual(i, -1, `missing: ${s}`); return i; });
   const onSyncIdx = src.indexOf("mxClient.on(ClientEvent.Sync");
@@ -64,29 +66,27 @@ test("retry is real, and the old watchdog's dead guard is gone", () => {
     "the old watchdog guard was always true by the time the timer fired (clientRef is set before it is armed): dead code that read as a safety");
 });
 
-test("ONE boot-level timer, armed before the first await, fails whichever stage is still active", () => {
+test("ONE boot clock, ticking from before the first await, speaks for the RUNNING stage (#194)", () => {
   const src = CTX();
-  // A sync-only watchdog would cover the ONE stage that cannot hang without
-  // the SDK already working. A token endpoint that never answers, an SDK chunk
-  // that never arrives and a crypto setup that hangs would all leave the pane
-  // on a silently active stage with no ceiling at all.
-  assert.match(src, /bootTimer = setTimeout\(\(\) => \{\s*if \(stale\(\)\) return;/,
-    "the boot timer's first statement is the generation guard — an abandoned run's timer must not mark a fresh run's stage");
-  assert.match(src, /const active = readReadiness\(\[MATRIX_READINESS_KEY\]\)\.find\(\(s\) => s\.status === "active"\);\s*if \(!active\) return;/,
-    "it reads the registry at FIRE time and marks whichever stage is still running — that is what makes it cover all four");
-  assert.match(src, /matrixReadiness\.advance\(active\.id, "error", "Still connecting after 30 seconds"\)/,
-    "the failed stage is the ACTIVE one, not a hardcoded 'sync'");
-  const armed = src.indexOf("bootTimer = setTimeout(");
+  // What the clock says is matrixBootWatch.ts's (state-machine tested there); this pins the wiring.
+  assert.match(src, /const ticker = setInterval\(\(\) => \{\s*if \(stale\(\) \|\| settled\) \{ clearInterval\(ticker\); return; \}/,
+    "the tick's first statement is the generation guard — an abandoned run's clock must not mark a fresh run's stage");
+  assert.match(src, /const say = bootWatchSay\(watch, Date\.now\(\)\);/);
+  assert.match(src, /if \(say\.kind === "stall"\) \{[^]*?matrixReadiness\.advance\(stage, "error", say\.text\);\s*\} else \{\s*matrixReadiness\.note\(stage, say\.kind === "note" \? say\.text : null\);/,
+    "a stall fails the running stage (Try again lands on it); anything else is a note, never an error");
+  const armed = src.indexOf("const ticker = setInterval(");
   // `const tokenData = …`, not a bare "await fetchFreshToken();" — scheduleRefresh
   // above startClient has one of those, and its index would pass this vacuously.
   const firstAwait = src.indexOf("const tokenData = await fetchFreshToken();");
   assert.ok(armed !== -1 && firstAwait !== -1 && armed < firstAwait,
-    "armed BEFORE the first await, or the stages ahead of it are the ones with no ceiling — the exact defect it replaces");
-  // The branch grew a third statement (the bot ignore-list sync, batch 2), so
-  // the anchor is the two statements that disarm the timer, not the whole block.
-  assert.match(src, /if \(!prepared\) \{\s*prepared = true;\s*clearTimeout\(bootTimer\);/,
-    "disarmed by the first PREPARED/SYNCING — not by a Sync event of any state, which can be an ERROR");
-  assert.doesNotMatch(src, /let watchdog/, "the sync-only watchdog variable is gone, not shadowed by a second timer");
+    "armed BEFORE the first await, or the stages ahead of it are the ones with no ceiling");
+  assert.match(src, /if \(!prepared\) \{\s*prepared = true;\s*settle\(\);/,
+    "settled by the first PREPARED/SYNCING — not by a Sync event of any state, which can be an ERROR");
+  assert.match(src, /setSyncState\(state, prepared\);\s*watch = bootWatchStep\(watch, \{ type: "sync", state \}\);/,
+    "every sync state reaches the clock: ERROR/RECONNECTING before the first sync read as 'still trying'");
+  assert.doesNotMatch(src, /bootTimer|Still connecting after 30 seconds/, "the single 30 s timer that failed a working stage is gone");
+  assert.doesNotMatch(src, /advance\("sync", "error", "Couldn't reach the community"\);\s*\n\s*if \(isAuthError\)/,
+    "a network ERROR before the first sync no longer fails the stage (the SDK is retrying it)");
 });
 
 test("the in-flight client is held from createClient onward, so retry and unmount can stop it", () => {
@@ -138,8 +138,8 @@ test("a retry's generation guard makes the abandoned run's continuation inert", 
   assert.match(src, /CryptoEvent\.VerificationRequestReceived, \([^)]*\) => \{\s*if \(stale\(\)\) return;/,
     "the verification-request handler's first statement must be the stale check — an abandoned run's " +
     "handler otherwise still sets pendingVerification for a client nobody is showing anymore");
-  assert.match(src, /bootTimer = setTimeout\(\(\) => \{\s*if \(stale\(\)\) return;/,
-    "the boot timer's first statement must be the stale check — a stale timer can fire well after a fresh " +
+  assert.match(src, /const ticker = setInterval\(\(\) => \{\s*if \(stale\(\) \|\| settled\)/,
+    "the boot clock's first statement must be the stale check — a stale clock can tick well after a fresh " +
     "run has already reached PREPARED, and would then fail a stage that is running fine");
   const staleReturns = src.match(/if \(stale\(\)\) return;/g) ?? [];
   assert.ok(staleReturns.length >= 5,

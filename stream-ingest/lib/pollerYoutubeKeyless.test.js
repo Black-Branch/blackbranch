@@ -49,12 +49,18 @@ test('YouTube without a key: the poller runs, opens a session, snapshots, and en
       const body = init.body ? JSON.parse(init.body) : null;
       if (method === 'GET' && path === '/stream/current') { currentReads += 1; return json({ live: api.live, streamId: api.streamId }); }
       if (method === 'POST' && path === '/stream/start') { api.live = true; api.streamId = body.streamId; api.starts.push(body.streamId); return json({ ok: true }); }
+      if (method === 'POST' && path === '/stream/platforms') return json({ ok: true }); // the per-tick publish (pollerPublish.test.js)
       if (method === 'POST' && path === '/viewer-snapshot') { api.snapshots.push(body); return json({ ok: true }); }
       if (method === 'POST' && path === '/stream/end') { api.live = false; api.ends.push(body.streamId); readsAtEnd = currentReads; return json({ ok: true }); }
     }
     throw new Error(`unexpected request in a keyless YouTube install: ${method} ${u}`);
   };
-  const poller = startPoller({ getStreamplaceViewers: () => null, getYtVideoId: () => watcherId });
+  // The reader's handle: its state (an uncertain end, as /live's channel page gives) and its
+  // verified id ('' unless live).
+  const getYtLiveState = () => (watcherId
+    ? { raw: 'live', certain: false, key: watcherId, evidence: 'is-live', scheduledStart: null, videoId: watcherId }
+    : { raw: 'offline', certain: false, key: '', evidence: 'channel-canonical', scheduledStart: null, videoId: '' });
+  const poller = startPoller({ getStreamplaceViewers: () => null, getYtVideoId: () => watcherId, getYtLiveState });
   try {
     await until(() => api.snapshots.length >= 3, 'three viewer snapshots while YouTube is live');
     assert.equal(api.starts.length, 1, 'one session, not one per tick');

@@ -46,7 +46,8 @@ function fakeRoom(members: Record<string, { pl: number }>) {
   const room = {
     roomId: "!general:site.test",
     name: "general",
-    client: { getUser: () => null, kick: async () => ({}), ban: async () => ({}), unban: async () => ({}) },
+    client: { getUser: () => null, getAccountData: () => undefined, kick: async () => ({}), ban: async () => ({}), unban: async () => ({}) },
+    getDMInviter: () => undefined,
     currentState: { hasSufficientPowerLevelFor: (_a: string, pl: number) => pl >= 50 },
     getMember: (id: string) => (members[id] === undefined ? null : fakeMember(id, members[id]!.pl)),
   };

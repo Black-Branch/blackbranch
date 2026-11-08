@@ -6,7 +6,8 @@ import { useMatrixIdentity } from "@/app/lib/MatrixClientContext";
 import { useUserMenuEvents } from "@/app/lib/useUserMenuEvents";
 import { useEncryptionStatus } from "@/app/lib/useEncryptionStatus";
 import { useCardStack } from "@/app/lib/useCardStack";
-import { avatarBg } from "@/app/lib/avatarColor";
+import { useImgFallback } from "@/app/lib/useImgFallback";
+import { LetterCircle } from "./Avatar";
 import { keepFocus } from "@/app/lib/keepFocus";
 import { formatMxid } from "@/app/lib/matrixDisplay";
 import { PAGES } from "@/app/lib/accountPages";
@@ -41,12 +42,17 @@ export default function UserMenu({
   onShowTimestampsChange,
   onShowMatrixNameChange,
   isPopout,
+  button = true,
 }: {
   matrixId?: string | null;
   canonicalId?: string | null;
   onShowTimestampsChange?: (v: boolean) => void;
   onShowMatrixNameChange?: (v: boolean) => void;
   isPopout?: boolean;
+  /** false = headless: the event hub and its card, windows and nudges stay, only the avatar
+   *  button is not drawn — where another button on screen opens the same card (the Community
+   *  rail's own profile tile, #255). */
+  button?: boolean;
 }) {
   const { stack, open, back, close, toggle } = useCardStack();
   // Scoped-open context for the pages that take it.
@@ -63,7 +69,8 @@ export default function UserMenu({
   const [adminPlace, setAdminPlace] = useState<string | undefined>(undefined);
   // Shared monotonic cache-buster (profileCardPrefetch) — see ProfileCardBody.
   const [avatarVer, setAvatarVer] = useState(currentAvatarVersion);
-  const [avatarOk, setAvatarOk] = useState(true);
+  // A failure belongs to one version: a new avatar (the events below bump it) is tried again.
+  const { ok: avatarOk, ref: avatarRef, onError: onAvatarError } = useImgFallback(avatarVer);
 
   const { matrixId: sessionMatrixId } = useMatrixIdentity();
   const { dotClass } = useEncryptionStatus();
@@ -100,11 +107,11 @@ export default function UserMenu({
     onChatAppearance: () => open(PAGES.appearance),
     // Matrix → site reconcile (fired on client-ready) may have pulled in an
     // avatar changed externally; refresh the displayed thumbnail in place.
-    onProfileSynced: () => { setAvatarOk(true); setAvatarVer(bumpAvatarVersion()); },
+    onProfileSynced: () => { setAvatarVer(bumpAvatarVersion()); },
     // The Edit page announces avatar changes (same event the rail avatar
     // listens to) — refresh the chat-bar thumbnail too. It already bumped the
     // shared version before dispatching; just re-read it.
-    onAvatarChanged: () => { setAvatarOk(true); setAvatarVer(currentAvatarVersion()); },
+    onAvatarChanged: () => { setAvatarVer(currentAvatarVersion()); },
   });
 
   // Account-link OAuth callbacks land on "/" with ?linked= / ?error=&platform=
@@ -156,7 +163,7 @@ export default function UserMenu({
 
   return (
     <>
-      <button
+      {button && <button
         type="button"
         onClick={toggle}
         // Opening a window must not cost the keyboard (keepFocus.ts): a blur
@@ -177,22 +184,22 @@ export default function UserMenu({
           <img
             src={`/api/avatar/me?v=${avatarVer}`}
             alt={displayName}
-            onError={() => setAvatarOk(false)}
+            ref={avatarRef}
+            onError={onAvatarError}
             className="w-(--composer-ctl) h-(--composer-ctl) rounded-full object-cover"
           />
         ) : (
-          <span
-            className="w-(--composer-ctl) h-(--composer-ctl) rounded-full flex items-center justify-center font-bold text-strong"
-            style={{ backgroundColor: avatarBg(displayName) }}
-          >
-            {/* nested so the smaller letter doesn't shrink the 2em box basis */}
-            <span className="text-[0.8em]">{displayName.charAt(0).toUpperCase()}</span>
-          </span>
+          <LetterCircle
+            name={displayName}
+            className="w-(--composer-ctl) h-(--composer-ctl) font-bold text-strong"
+            // nested so the smaller letter doesn't shrink the 2em box basis
+            wrapLetter={(l) => <span className="text-[0.8em]">{l}</span>}
+          />
         )}
         {dotClass && (
           <span className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border border-canvas ${dotClass}`} />
         )}
-      </button>
+      </button>}
 
       {stack && (
         <AccountCard

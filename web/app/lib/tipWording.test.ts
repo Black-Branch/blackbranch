@@ -30,8 +30,8 @@ test("the checkout line item says Tip, not Donation", () => {
 
 test("the chat card verb is 'tipped'", () => {
   const src = read("app/components/chatEventBody.tsx");
-  assert.match(src, /label\(<>tipped \{formatMoney/);
-  assert.ok(!/label\(<>donated \{formatMoney/.test(src));
+  assert.match(src, /label\(<>tipped \{formatPrice/);
+  assert.ok(!/label\(<>donated \{formatPrice/.test(src));
 });
 
 test("SupportContent: the donation section heading says Tip", () => {

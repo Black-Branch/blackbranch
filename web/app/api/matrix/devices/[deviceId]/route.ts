@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getMatrixSession, RevokedSessionError } from "@/app/lib/matrixSession";
+import { getMatrixSession, endedSessionResponse } from "@/app/lib/matrixSession";
 import { homeserverFetch } from "@/app/lib/homeserverFetch";
 // homeserverFetch, never a raw fetch: `mx.homeserver` is per-user stored state, so for an
 // outside account it is a user-influenced URL carrying a Bearer token and goes through the
@@ -35,9 +35,8 @@ export async function DELETE(
 
     return Response.json({ ok: true });
   } catch (e) {
-    if (e instanceof RevokedSessionError) {
-      return Response.json({ error: "session_expired", reason: "revoked" }, { status: 401 });
-    }
+    const ended = endedSessionResponse(e);
+    if (ended) return ended;
     console.error("[matrix/devices delete]", e);
     return Response.json({ error: "server_error" }, { status: 500 });
   }

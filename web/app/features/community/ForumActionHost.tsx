@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { EventType } from "matrix-js-sdk";
-import type { TimelineEvents } from "matrix-js-sdk";
+import type { MatrixEvent, TimelineEvents } from "matrix-js-sdk";
 import { useMatrixClient, useStartMatrixClient, MATRIX_READINESS_KEY } from "@/app/lib/MatrixClientContext";
 import { BootSequence, Window } from "@/app/components/chrome";
 import { MatrixInput } from "@/app/components/MatrixInput";
@@ -10,6 +10,8 @@ import { buildMatrixMessage } from "@/app/lib/buildMatrixMessage";
 import { threadRelation } from "@/app/lib/matrixThreads";
 import { useEmotes } from "@/app/lib/useEmotes";
 import { postJson } from "@/app/lib/http";
+import { dropEcho, echoState, localEchoOf, retryEcho } from "@/app/lib/localEcho";
+import { NotSentLine } from "@/app/components/NotSentLine";
 import type { ForumAction } from "@/app/lib/forumModel";
 import { matrixServerName } from "@/app/lib/matrixConfig";
 import { NewPostModal } from "./NewPostModal";
@@ -80,41 +82,74 @@ function ReplyComposer({ roomId, rootId, latestId, rootSenderName, onDone, onClo
   const emotes = useEmotes();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  // A reply that did not reach the server: kept here with Retry/Delete, never put back in the box
+  // (a second press would send it twice) — the community's one rule for a failed send.
+  const [failed, setFailed] = useState<{ ev: MatrixEvent; body: string } | null>(null);
+  const [, rerender] = useState(0);
   const room = client?.getRoom(roomId) ?? undefined;
+  const posted = (nid: string | null) => {
+    // Reddit-style: your own comment starts auto-upvoted (+1, immutable).
+    if (nid) postJson("/api/forum/vote", { roomId, eventId: nid, vote: 1 }).catch(() => {});
+    onDone(nid);
+  };
   const send = async () => {
     const body = input.trim();
-    if (!client || !body || sending) return;
+    if (!client || !body || sending || failed) return;
     setSending(true);
     setInput("");
+    const txnId = client.makeTxnId();
     try {
       // The same relation ThreadPanel writes: tied to the root, falling back as
       // a reply to the latest event so plain clients still show it in context.
       const content = buildMatrixMessage(body, emotes) as Record<string, unknown>;
       content["m.relates_to"] = threadRelation(rootId, latestId);
-      const res = await client.sendEvent(roomId, EventType.RoomMessage, content as unknown as TimelineEvents[EventType.RoomMessage]);
-      const nid = res?.event_id ?? null;
-      // Reddit-style: your own comment starts auto-upvoted (+1, immutable).
-      if (nid) postJson("/api/forum/vote", { roomId, eventId: nid, vote: 1 }).catch(() => {});
-      onDone(nid);
+      const res = await client.sendEvent(roomId, EventType.RoomMessage, content as unknown as TimelineEvents[EventType.RoomMessage], txnId);
+      posted(res?.event_id ?? null);
     } catch (e) {
       console.error("forum reply failed", e);
-      setInput(body);
+      const echo = room ? localEchoOf(room, txnId) : null;
+      // No echo means nothing was made: then, and only then, the text goes back in the box.
+      if (echo) setFailed({ ev: echo, body });
+      else setInput(body);
     } finally {
       setSending(false);
     }
   };
+  const retry = async () => {
+    if (!client || !room || !failed) return;
+    setSending(true);
+    await retryEcho(client, room, failed.ev);
+    setSending(false);
+    if (echoState(failed.ev) === "sent") posted(failed.ev.getId() ?? null);
+    else rerender((n) => n + 1);
+  };
+  const drop = () => {
+    if (!client || !failed) return;
+    dropEcho(client, failed.ev);
+    setFailed(null);
+  };
   return (
     <Window presentation="dialog" name="Reply" title={`Reply to ${rootSenderName}'s thread`} onClose={onClose} width={512}>
       <form className="p-4" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+        {failed && (
+          <div className="mb-3">
+            <p className="text-body opacity-60 whitespace-pre-wrap break-words" style={{ fontSize: "var(--text-chat-sm)" }}>{failed.body}</p>
+            {echoState(failed.ev) === "failed" && <NotSentLine onRetry={() => void retry()} onDelete={drop} />}
+          </div>
+        )}
         <MatrixInput
           value={input}
           onChange={setInput}
           onSubmit={() => { void send(); }}
           placeholder={`Reply to ${rootSenderName}'s thread…`}
-          disabled={sending}
+          // One reply per dialog: a failed one is retried or deleted first.
+          disabled={sending || !!failed}
           isSignedIn
           hideUserMenu
           room={room}
+          // A file reply is a reply, not a new post: the same relation send() writes.
+          thread={{ rootId, latestId: () => latestId }}
+          onSent={posted}
         />
       </form>
     </Window>

@@ -110,20 +110,37 @@
     height: var(--chrome-top-h, 2.25rem);
     overflow-x: auto;
     scrollbar-width: none;
+    /* No sliver: the list rests only on an item's start, 40px in
+       (= STRIP_EDGE_PX, the chevron box), so a hand-scroll ends where
+       stripOverflow's rest positions are. A strip that fits never scrolls. */
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 40px;
   }
+  /* The tablist is a row INSIDE the scroller (it owns only tabs); a trailing
+     control (the chat bar's "+" on a phone) follows it and scrolls with it. */
+  .chrome-sections-tabs { display: flex; align-items: stretch; flex: none; }
+  .chrome-sections-trail { display: flex; align-items: stretch; flex: none; scroll-snap-align: start; }
   .chrome-sections::-webkit-scrollbar { display: none; }
   /* Overflow (Sections.tsx marks data-more from scroll/resize): a fade and a
      chevron on exactly the sides that hold more tabs; nothing when everything
      fits. 40px = STRIP_EDGE_PX (app/lib/chrome/stripOverflow.ts), the band the
      active tab is scrolled clear of; the text is gone by 20px from the edge, so
-     the chevron's 12px glyph (centred 12px in) never sits on a letter. The always-on 28px end fade this replaces
-     faded a strip's last label even when nothing followed it. */
-  .chrome-sections-wrap[data-more="end"] > .chrome-sections { mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent calc(100% - 20px)); }
-  .chrome-sections-wrap[data-more="start"] > .chrome-sections { mask-image: linear-gradient(90deg, transparent 20px, #000 40px); }
-  .chrome-sections-wrap[data-more="both"] > .chrome-sections { mask-image: linear-gradient(90deg, transparent 20px, #000 40px, #000 calc(100% - 40px), transparent calc(100% - 20px)); }
-  /* The chevron: a 12px caret in a 1.5rem × full-height hit area (the house
-     size for a caret control — IconRail's), on the faded edge, no fill of its
-     own so the band shade shows through as it does under the tabs. */
+     the chevron's 12px glyph (centred 20px in) never sits on a letter. The always-on 28px end fade this replaces
+     faded a strip's last label even when nothing followed it. A tab that does
+     not fit PEEKS under the end fade — it is never hidden, which left a blank
+     stretch in the strip. Each side's stops are custom properties that
+     Sections.tsx writes from stripOverflow fadeCovers: the standard 20/40px
+     ramp, or — when a label touching that band cannot show three characters
+     clear of it — one hard stop at that label's edge, so the whole sliver is
+     transparent ("S›" at the end, "‹e" at the start). -t = transparent up to,
+     -o = opaque from, both measured in from that side's edge. */
+  .chrome-sections-wrap[data-more="end"] > .chrome-sections { mask-image: linear-gradient(90deg, #000 calc(100% - var(--strip-end-o, 40px)), transparent calc(100% - var(--strip-end-t, 20px))); }
+  .chrome-sections-wrap[data-more="start"] > .chrome-sections { mask-image: linear-gradient(90deg, transparent var(--strip-start-t, 20px), #000 var(--strip-start-o, 40px)); }
+  .chrome-sections-wrap[data-more="both"] > .chrome-sections { mask-image: linear-gradient(90deg, transparent var(--strip-start-t, 20px), #000 var(--strip-start-o, 40px), #000 calc(100% - var(--strip-end-o, 40px)), transparent calc(100% - var(--strip-end-t, 20px))); }
+  /* The chevron: a 12px caret in a 40px × full-height touch box (BarButton's
+     touch width; 40px = STRIP_EDGE_PX, the band a tab must clear to count as
+     whole), laid OVER the strip's faded edge so it takes no strip width. No
+     fill of its own, so the band shade shows through as it does under the tabs. */
   .chrome-more {
     position: absolute;
     z-index: 2;
@@ -132,7 +149,7 @@
     display: none;
     align-items: center;
     justify-content: center;
-    width: 1.5rem;
+    width: 40px;
     color: var(--color-secondary);
     transition: color var(--anim-fast) var(--anim-ease);
   }
@@ -144,6 +161,7 @@
   .chrome-sections .chrome-tab {
     padding: 0 .875rem;
     border-right: 1px solid var(--color-edge);
+    scroll-snap-align: start;
   }
   /* Each cap: one element, moved by transform from a 100px base. Starts at
      opacity 0 and is raised to .85 by the FIRST paint, which the strip's
@@ -168,7 +186,7 @@
     pointer-events: none;
     transition: transform var(--anim-default) var(--anim-ease), opacity var(--anim-fast) var(--anim-ease);
   }
-  .chrome-sections-floating { height: auto; gap: .125rem; }
+  .chrome-sections-floating, .chrome-sections-floating > .chrome-sections-tabs { height: auto; gap: .125rem; }
   .chrome-sections-floating .chrome-tab { padding: .125rem .5rem; border-right: 0; border-radius: 999px; }
   .chrome-sections-floating .chrome-tab[aria-selected="true"] { background: var(--color-surface-4); }
   /* Unseen dot + the ✕ on an active closable tab (the chat's content tabs, the dock's) */
@@ -401,6 +419,11 @@
   .chrome-rail-group-toggle:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: -2px; }
   .chrome-rail-caret { font-size: .625rem; }
   .chrome-rail-sub { margin-left: auto; padding-left: .25rem; color: var(--color-muted); }
+  /* A pending count (an item's `count`): a small pill at the row's end, also in the icon rail. */
+  .chrome-rail-count {
+    margin-left: auto; flex: none; min-width: 1.25rem; padding: 0 .35rem; border-radius: 999px;
+    background: var(--accent); color: var(--color-canvas); font-size: .6875rem; font-weight: 700; line-height: 1.25rem; text-align: center;
+  }
   /* Picker: wide = the ordinary rail, the picker button hidden. Narrow =
      one column, the rail folded behind the picker button, shown labelled (never icons) when open. */
   .chrome-rail-picker { display: none; }
@@ -602,7 +625,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .chrome-window-mark { display: inline-flex; align-items: center; color: var(--color-secondary); }
+  /* A title that is a control (onTitle): the same text, a button's reset, a hover and a focus ring. */
+  .chrome-window-title-btn { display: block; max-width: 100%; min-width: 0; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+  .chrome-window-title-btn:hover { color: var(--color-strong); text-decoration: underline; }
+  .chrome-window-title-btn:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: 1px; border-radius: .25rem; }
+  .chrome-window-mark { display: inline-flex; align-items: center; gap: .25rem; color: var(--color-secondary); }
   /* The one bar control: the ✕, popout, back arrow and fold arrow in every
      top/bottom bar — and every icon toggle beside them
      (the gear and theatre buttons, the chat tab bar's compact / split / fold,
@@ -627,6 +654,29 @@
   .chrome-bar-btn[data-active] { color: var(--color-strong); background: var(--color-surface-3); }
   .chrome-bar-btn:active { transform: scale(.92); }
   .chrome-bar-btn:focus-visible { outline: 2px solid var(--color-edge-bright); outline-offset: -2px; }
+  /* Touch size: the BUTTON is 40px wide and the bar's full height (Discord's
+     thumb-sized header icons); the look stays the 26px pill — the fill moves
+     onto ::before, centred behind the icon (isolation keeps it above the bar).
+     Neighbouring touch buttons drop the bar's gap: their own width already
+     spaces the icons, and six must fit a 390px header beside the name. */
+  .chrome-bar-btn--touch { position: relative; isolation: isolate; flex: none; height: 100%; width: 2.5rem; padding: 0; }
+  .chrome-bar-btn--touch:hover, .chrome-bar-btn--touch[data-active] { background: transparent; }
+  .chrome-bar-btn--touch::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 1.625rem;
+    height: 1.625rem;
+    transform: translate(-50%, -50%);
+    border-radius: .4375rem;
+    z-index: -1;
+    transition: background-color var(--anim-fast) var(--anim-ease);
+  }
+  .chrome-bar-btn--touch:hover::before { background: var(--color-surface-2); }
+  .chrome-bar-btn--touch[data-active]::before { background: var(--color-surface-3); }
+  .chrome-bar-center > .chrome-bar-btn--touch + .chrome-bar-btn--touch { margin-left: -.5rem; }
+  :is(.chrome-bar-lead, .chrome-bar-trail) > .chrome-bar-btn--touch + .chrome-bar-btn--touch { margin-left: -.25rem; }
   /* Slim window headers: the band reads its own fixed token (the override is
      ON the band so a tabbed window's .chrome-sections inherits it), 30px in a
      phone panel (declared in .chrome-window-panel's own block). Band buttons
@@ -852,7 +902,8 @@
      the same line. It drops in from above and leaves upward, clipped by the
      layer's top edge the way the bottom panel is by the composer's. None of the
      keyboard-hold / drag / detent rules above ever apply: Window.tsx takes no
-     hold for a top box, and usePanelPull moves only its translate. */
+     hold for a top box, and usePanelPull SIZES it (its height) by the bottom
+     panel's own release rule. */
   .chrome-window-panel[data-from="top"] {
     --top-room: clamp(96px, calc((100% - var(--pane-ceiling)) * 0.3), 240px);
     top: var(--pane-ceiling);
@@ -861,14 +912,23 @@
     animation-name: panel-drop-in;
   }
   /* A task from the top opens at HALF its full size; the pull
-     (usePanelPull.ts, topCap) still sizes it up to the full size — the same
-     100% − ceiling − --top-room — or down to closed. */
+     (usePanelPull.ts) sizes it anywhere from closed to the whole pane. */
   .chrome-window-panel[data-from="top"][data-kind="task"] { height: calc((100% - var(--pane-ceiling) - var(--top-room)) / 2); }
+  /* The clear strip is where a top window OPENS, never how far it goes (#234,
+     k: "slide down pages … have a limit to how far they slide down"): pulled,
+     or resting at a size the user chose, it may reach the composer — the whole
+     visible pane, as far as a bottom window reaches up. Let go at the full
+     pane it rests by THIS rule rather than a px (usePanelPull.ts), so a
+     keyboard opening under it takes the box with the pane, the way a bottom
+     panel's cap box follows. After the half-height task rule (equal
+     specificity, later wins). */
+  .chrome-window-panel[data-from="top"]:is([data-pull], [data-size]) { max-height: calc(100% - var(--pane-ceiling)); }
+  .chrome-window-panel[data-from="top"][data-size="cap"] { height: calc(100% - var(--pane-ceiling)); }
   /* FILLED (Window `fill` — the chat TUI has the window): it slides all the way
      down and replaces the typing bar: no clear strip, the
      pane's whole height — and the host folds the chat box away (chatTakeover.ts,
      composerReplaced), so the pane itself reaches the column's bottom edge. The pull
-     (usePanelPull.ts, topCap `full`) sizes it anywhere from closed to that edge. A window that
+     (usePanelPull.ts) sizes it anywhere from closed to that edge. A window that
      CAN fill eases its height on every change — the half ⇄ full flip, a let-go pulled size —
      on the chrome's one curve: a layout transition, once per flip, never per gesture frame
      (the pull sets `transition: none` inline for its life). */
@@ -968,7 +1028,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .chrome-tab, .chrome-cap, .chrome-thumb, .chrome-shade, .chrome-bar, .chrome-pane-expand,
-    .chrome-iconrail-item, .chrome-iconrail-icon, .chrome-iconrail-caret, .chrome-bar-btn,
+    .chrome-iconrail-item, .chrome-iconrail-icon, .chrome-iconrail-caret, .chrome-bar-btn, .chrome-bar-btn--touch::before,
     .chrome-window-panel { transition: none; }
     /* The lift/dip rules are (0,4,0); a bare .chrome-iconrail-icon reset
        would lose to them on specificity and the icon would still jump. */

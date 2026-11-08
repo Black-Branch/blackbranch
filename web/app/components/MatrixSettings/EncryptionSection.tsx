@@ -7,6 +7,8 @@ import { MATRIX_READINESS_KEY } from "@/app/lib/MatrixClientContext";
 import { FRESH_DEVICE_ACTION } from "@/app/lib/matrixDeviceKeys";
 
 const MATRIX_BOOT = [MATRIX_READINESS_KEY] as const;
+/** What every "Start fresh" costs, said before it runs. */
+const RESET_COST = "Messages older than this can't be read on new devices.";
 
 type Props = Pick<
   MatrixSettingsState,
@@ -16,6 +18,7 @@ type Props = Pick<
   | "hasCrossSigningKeys"
   | "flowState"
   | "backupActive"
+  | "fourSExists"
   | "verifyPending"
   | "restoreResult"
   | "showRecoveryKey"
@@ -145,8 +148,8 @@ export function EncryptionSection(p: Props) {
             {!p.setupError ? (
               <>
                 <p className="text-3xs text-secondary leading-relaxed">
-                  This generates a new recovery key and re-encrypts your secrets. Device verifications are{" "}
-                  <span className="text-body">not affected</span>.
+                  This makes a new recovery key and stops the old one working. Your message history
+                  and device verifications are <span className="text-body">kept</span>.
                 </p>
                 <div className="flex gap-1.5">
                   <button
@@ -180,7 +183,9 @@ export function EncryptionSection(p: Props) {
           <div>
             <p className="text-xs text-green-400 mb-1">This device is verified</p>
             {p.restoreResult && <p className="text-3xs text-secondary">{p.restoreResult}</p>}
-            {p.backupActive === false && (
+            {/* The account's secret storage (server state), never this device's local backup
+                state: a device that had not loaded the backup was offered "Generate". */}
+            {p.fourSExists === false && (
               <p className="text-3xs text-yellow-400/80 mt-1 leading-relaxed">
                 No recovery key saved — you won&apos;t be able to verify a new browser without one.
               </p>
@@ -189,7 +194,7 @@ export function EncryptionSection(p: Props) {
               onClick={() => p.setShowSetupFlow(true)}
               className="mt-2 text-3xs text-muted hover:text-secondary transition-colors"
             >
-              {p.backupActive === false ? "Generate a recovery key →" : "Rotate recovery key →"}
+              {p.fourSExists === false ? "Generate a recovery key →" : "Rotate recovery key →"}
             </button>
           </div>
         )
@@ -271,8 +276,8 @@ export function EncryptionSection(p: Props) {
                 <>
                   <p className="text-3xs text-secondary leading-relaxed">
                     Without your recovery key this device can&apos;t restore the old encryption.
-                    Starting fresh replaces your encryption keys — previously encrypted messages
-                    will stay unreadable, and your other devices will need verifying again.
+                    Starting fresh replaces your encryption keys, and your other devices will need
+                    verifying again. {RESET_COST}
                   </p>
                   <div className="flex gap-1.5">
                     <button
@@ -296,8 +301,7 @@ export function EncryptionSection(p: Props) {
                 <p className="text-3xs text-yellow-400/80">{p.setupError}</p>
                 <p className="text-3xs text-secondary leading-relaxed">
                   If you have it saved, enter your recovery key instead. Or start fresh — this will
-                  replace your old encryption keys. Any previously encrypted messages will become
-                  unreadable.
+                  replace your old encryption keys. {RESET_COST}
                 </p>
                 <div className="flex gap-1.5">
                   <button
@@ -338,8 +342,7 @@ export function EncryptionSection(p: Props) {
             </div>
             <p className="text-3xs text-secondary leading-relaxed">
               A previous encryption setup didn&apos;t complete, so your saved recovery key can&apos;t
-              work. Start fresh to create new keys — previously encrypted messages will stay
-              unreadable.
+              work. Start fresh to create new keys. {RESET_COST}
             </p>
             {p.setupError && <p className="text-3xs text-yellow-400/80">{p.setupError}</p>}
             <button

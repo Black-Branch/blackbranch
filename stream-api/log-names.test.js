@@ -30,7 +30,7 @@ const FILES = {
   'stream-api/webhooks.js': 5,
   'stream-ingest/platforms/youtube.js': 45,
   'stream-ingest/platforms/twitch.js': 10,
-  'stream-ingest/platforms/kick.js': 26,
+  'stream-ingest/platforms/kick.js': 29, // incl. the moderation receipt line (#185 lag read)
   'stream-ingest/platforms/streamplace.js': 8,
   'stream-ingest/lib/alerts.js': 3,
   'stream-ingest/lib/pipeline.js': 8,

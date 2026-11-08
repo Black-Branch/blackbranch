@@ -37,18 +37,21 @@ import { keepFocus } from "@/app/lib/keepFocus";
 import { useBadges } from "@/app/lib/BadgesContext";
 import { chatCharLimit } from "@/app/lib/chatLimits";
 import { CommandPalette } from "@/app/components/CommandPalette";
-import { parseCommandLine, suggestFor, applySuggestion, currentArg } from "@/app/lib/commands/parse";
+import { parseCommandLine, suggestFor, applySuggestion, currentArg, dmNameToken, personSuggestions } from "@/app/lib/commands/parse";
+import { useDmNameSearch } from "@/app/lib/dm/useDmNameSearch";
 import { createCommandRunner } from "@/app/lib/commands/run";
-import { currentBinding, releaseComposer } from "@/app/lib/composerBinding";
+import { currentBinding, releaseComposer, watchBoundText } from "@/app/lib/composerBinding";
 import { CHAT_CONSOLE } from "@/app/lib/plugins/chat";
 import { formatMxid } from "@/app/lib/matrixDisplay";
 import { useComposerBinding } from "@/app/lib/useComposerBinding";
+import { dmPlaceholder } from "@/app/lib/dm/dmPlaceholder";
 import { provideChatSender, setChatDest } from "@/app/lib/chatSender";
 import { shouldRecallHistory } from "@/app/lib/historyRecallGate";
 import { chatScrollKey, type ChatScrollKey } from "@/app/lib/chatScrollKeys";
 import { normalizePlatform } from "@/app/lib/nativePlatform";
 import { useRefusalNote, useSkippedPlatforms, dismissRefusalNote, retryDestination } from "@/app/lib/platformRefusals";
 import { failedSendAction } from "@/app/lib/failedSend";
+import { createLineIds } from "@/app/lib/lineId";
 import { takeReHideNotice } from "@/app/lib/behaviorStore";
 import { featureOn } from "@/app/lib/siteFeatures";
 import { useComposerFocus } from "./useComposerFocus";
@@ -67,7 +70,8 @@ type Props = {
     replyTo: ChatMsg | null,
     forcedDest?: string | null,
     spend?: { mode: SpendMode; spendId: string; expectedPrice: number } | null,
-    encrypted?: boolean
+    encrypted?: boolean,
+    clientMsgId?: string,
   ) => Promise<string | null>;
   anchorToBottom: () => void;
   /** PgUp/PgDn/Home/End from the composer scroll the feed. */
@@ -199,6 +203,10 @@ export default function ChatInput({
   // A window holding the composer — reactive, for the send-to control's face.
   // Null unless a window binds the composer.
   const binding = useComposerBinding();
+  // The window holding the box hears its text (the DM window announces typing from it).
+  useEffect(() => {
+    if (binding?.kind === "sendTo") binding.onText?.(input);
+  }, [binding, input]);
 
   // Support-mode signals to the sidebar. Landing on the support destination
   // alone shows NOTHING — the panel pops when the user starts TYPING in
@@ -231,6 +239,10 @@ export default function ChatInput({
   // Does the box have focus — from onFocus, or from a keystroke when the focus came before the
   // page was listening (useComposerFocus). Read by `composing` below.
   const { focused, onFocus: onFieldFocus, onBlur: onFieldBlur, noteInput } = useComposerFocus(inputRef);
+  // Text typed for a DM window belongs to it: a window that lets go of the box by itself takes the
+  // text (the box empties, so Enter never posts it to Live), and hands it back when it holds the
+  // box again. Synchronous with the slot, not a render (composerBinding.watchBoundText).
+  useEffect(() => watchBoundText(() => inputRef.current?.value ?? "", setInput), [inputRef]);
 
   function showNotice(text: string) {
     setNotice(text);
@@ -328,11 +340,17 @@ export default function ChatInput({
   const [cmdSel, setCmdSel] = useState(0);
   const [cmdDismissed, setCmdDismissed] = useState(false);
   const parsedCmd = useMemo(() => parseCommandLine(input, caret), [input, caret]);
+  // `/dm <name>` completes from EVERY account (the server's lookup, anywhere in the name — #193),
+  // not from the people in chat right now; signed out, there is no one to message.
+  const dmToken = matrixId ? dmNameToken(parsedCmd) : null;
+  const dmSearch = useDmNameSearch(dmToken);
   const cmdSuggestions = useMemo(
     // Slash-command argument suggestions still want plain names — a command
     // takes a name, not an identity.
-    () => (parsedCmd.isCommand ? suggestFor(parsedCmd, viewer, mentionCandidates.map((p) => p.name)) : []),
-    [parsedCmd, viewer, mentionCandidates],
+    () => (!parsedCmd.isCommand ? []
+      : dmToken !== null ? personSuggestions(dmSearch.people)
+      : suggestFor(parsedCmd, viewer, mentionCandidates.map((p) => p.name))),
+    [parsedCmd, viewer, mentionCandidates, dmToken, dmSearch.people],
   );
   const showingCommandHints = parsedCmd.isCommand && !cmdDismissed;
 
@@ -417,8 +435,13 @@ export default function ChatInput({
     handleInputChange(v);
     setCmdSel(0);
     if (!v.startsWith("/")) setCmdDismissed(false);
-    // The caret has not moved yet at this point; read it next frame.
-    requestAnimationFrame(() => setCaret(inputRef.current?.selectionStart ?? v.length));
+    // The caret is set HERE, in the keystroke's own batch, never from a frame callback: work a
+    // keystroke leaves for later is counted by React as a nested update, and a browser that runs
+    // key input ahead of it threw #185 (task 185). From the box's own input event the DOM caret has
+    // already moved; any other caller (the emote picker's insert) replaces the value, which puts
+    // the caret at the end.
+    const el = inputRef.current;
+    setCaret(el && el.value === v ? (el.selectionStart ?? v.length) : v.length);
   }, [handleInputChange, inputRef, noteInput]);
 
   // The parser needs the caret, not just the text, to know which token is
@@ -534,7 +557,10 @@ export default function ChatInput({
   // someone else): its line is held here and offered as a retry, never written
   // over what they are typing now (failedSend.ts).
   type CapturedSpend = { mode: SpendMode; spendId: string; expectedPrice: number };
-  const [failedLine, setFailedLine] = useState<{ text: string; reply: ChatMsg | null; spend: CapturedSpend | null } | null>(null);
+  const [failedLine, setFailedLine] = useState<{ text: string; reply: ChatMsg | null; spend: CapturedSpend | null; clientMsgId: string } | null>(null);
+  // One id per composed line, kept while the box holds the same text, so resending a restored
+  // line is answered by the server with the first copy instead of a second post (lineId.ts).
+  const [lineIds] = useState(createLineIds);
   // The reply banner as it is NOW — the send's own closure holds the one from
   // when it started.
   const replyNow = useRef(replyTo);
@@ -552,20 +578,20 @@ export default function ChatInput({
       spendMode && spendActive && spendAffordable
         ? { mode: spendMode, spendId: armSpendId(spendMode), expectedPrice: spendPrice }
         : null;
-    await sendLine(text, replyTo, capturedSpend, true);
+    await sendLine(text, replyTo, capturedSpend, true, lineIds.forText(text));
   }
 
-  // Send the held failed line again, leaving the composer and its draft alone. A
-  // spend keeps its idempotency key, so the server replays rather than charging twice.
+  // Send the held failed line again, leaving the composer and its draft alone. It keeps its line
+  // id, and a spend its idempotency key, so the server replays rather than posting or charging twice.
   async function retryFailed() {
     const f = failedLine;
     if (!f || sending || slowActive) return;
     setFailedLine(null);
     setSendError(null);
-    await sendLine(f.text, f.reply, f.spend, false);
+    await sendLine(f.text, f.reply, f.spend, false, f.clientMsgId);
   }
 
-  async function sendLine(text: string, capturedReply: ChatMsg | null, capturedSpend: CapturedSpend | null, fromComposer: boolean) {
+  async function sendLine(text: string, capturedReply: ChatMsg | null, capturedSpend: CapturedSpend | null, fromComposer: boolean, clientMsgId: string) {
     // What a FAILED send should put back. Normally the captured reply — but a
     // routing command deliberately discards it (see the "send" branch below),
     // and re-arming a banner the command just overrode would leave the retry
@@ -658,7 +684,8 @@ export default function ChatInput({
           : null;
         setSendError(null);
         replyToRestore = null;
-        await onSendMessage(outcome.text, null, outcome.destination, spend, outcome.encrypted);
+        await onSendMessage(outcome.text, null, outcome.destination, spend, outcome.encrypted, clientMsgId);
+        lineIds.sent(clientMsgId);
         // It went: the terminal's on_send hears it, with where.
         publishOwnSend(outcome.text, destMark(outcome.encrypted ? ENCRYPTED_DEST : outcome.destination));
         // An armed redaction lock is LEFT armed here: there is no cooldown, and
@@ -692,7 +719,8 @@ export default function ChatInput({
         // the routable platform list and would silently drop it to null,
         // sending the message in clear text. It is translated to the flag here.
         const sentTo = encryptArmed ? null : forcedDest;
-        await onSendMessage(text, capturedReply, sentTo, capturedSpend, encryptArmed);
+        await onSendMessage(text, capturedReply, sentTo, capturedSpend, encryptArmed, clientMsgId);
+        lineIds.sent(clientMsgId);
         // It went: the terminal's on_send hears it, with where.
         publishOwnSend(text, destMark(encryptArmed ? ENCRYPTED_DEST : sentTo));
         // The redaction lock STICKS, so no one accidentally posts a
@@ -719,7 +747,7 @@ export default function ChatInput({
         if (replyToRestore) onRestoreReply(replyToRestore);
       } else {
         // They have moved on: keep their draft, offer this line as a retry.
-        setFailedLine({ text, reply: replyToRestore, spend: capturedSpend });
+        setFailedLine({ text, reply: replyToRestore, spend: capturedSpend, clientMsgId });
       }
     } finally {
       setSending(false);
@@ -927,7 +955,8 @@ export default function ChatInput({
           personalNeedsRelink={personalNeedsRelink}
           maxLength={charLimit}
           counterMax={charLimit}
-          placeholder="Send a message…"
+          // While a DM window holds the box, it says who the line goes to (its screen-reader name too).
+          placeholder={binding?.kind === "sendTo" ? dmPlaceholder(binding.face.label) : "Send a message…"}
           note={refusal ? { text: refusal.text, forms: refusal.forms, onDismiss: () => dismissRefusalNote(refusal.id) } : null}
           showEmotePicker={showEmotePicker}
           setShowEmotePicker={setShowEmotePicker}

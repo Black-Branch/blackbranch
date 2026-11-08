@@ -1,16 +1,25 @@
 import { auth } from "@/auth";
 import pool from "@/lib/db";
-import { checkModerationCeiling, type CeilingOptions } from "./modCeiling";
+import { checkAccountCanonicalsCeiling, checkModerationCeiling, type CeilingOptions } from "./modCeiling";
 import { authRefusal } from "./siteSession";
 import { MOD_GATE_SQL, passesModGate, type ModGateRow } from "./modRole";
 
 // Privilege ceiling for destructive moderation (ban/timeout/purge/merge): only an admin
-// may act on an admin or a moderator, whether targeted by matrix id or by a linked
+// may act on an admin, a moderator or Staff, whether targeted by matrix id or by a linked
 // platform canonical. `actorId` is the signed-in mod (from requireMod). Returns 403 to
 // refuse, 503 when the database cannot answer (it fails closed), else null.
 export function assertCanModerate(actorId: string, target: string, opts?: CeilingOptions): Promise<Response | null> {
   return checkModerationCeiling(actorId, target, (sql, params) =>
-    pool.query<{ matrix_id: string; is_admin?: boolean; is_mod?: boolean }>(sql, params), opts);
+    pool.query<{ matrix_id: string; is_admin?: boolean; is_mod?: boolean; is_staff?: boolean }>(sql, params), opts);
+}
+
+// The ceiling for an action on account `matrixId` that is ALSO written onto its linked canonicals
+// (ban, timeout, unban): the account itself, then every canonical (modCeiling.ts
+// checkAccountCanonicalsCeiling). Before any write.
+export async function assertCanModerateAccount(actorId: string, matrixId: string): Promise<Response | null> {
+  const q = (sql: string, params: unknown[]) =>
+    pool.query<{ matrix_id: string; is_admin?: boolean; is_mod?: boolean; is_staff?: boolean }>(sql, params);
+  return (await checkModerationCeiling(actorId, matrixId, q)) ?? checkAccountCanonicalsCeiling(actorId, matrixId, q);
 }
 
 // Returns the signed-in admin's matrix id, or null if not signed in / not an

@@ -49,6 +49,8 @@ x-install-values: &install-values
   CURRENCY_SYMBOL: ${CURRENCY_SYMBOL:-}
   CURRENCY_ICON: ${CURRENCY_ICON:-}
   COMMUNITY_SCORE_NAME: ${COMMUNITY_SCORE_NAME:-}
+  COMMUNITY_LOCALPART: ${COMMUNITY_LOCALPART:-}
+  COMMUNITY_RECONCILER: ${COMMUNITY_RECONCILER:-}
 
 x-app: &app
   restart: unless-stopped
@@ -123,6 +125,30 @@ services:
       WS_TRUSTED_PROXIES: ${BB_CADDY_IP:-172.29.83.249}
       TTS_TMP_DIR: /data/tts
       TTS_CLIPS_DIR: /data/tts-clips
+      # Outgoing mail, when .env sets it (else the Admin Panel's): `blackbranch` reads it in this image
+      # when it renders the sign-in service (install/matrix/mail.cjs). Empty = not set here.
+      MAIL_SMTP_HOST: ${MAIL_SMTP_HOST:-}
+      MAIL_SMTP_PORT: ${MAIL_SMTP_PORT:-}
+      MAIL_SMTP_MODE: ${MAIL_SMTP_MODE:-}
+      MAIL_SMTP_USERNAME: ${MAIL_SMTP_USERNAME:-}
+      MAIL_SMTP_PASSWORD: ${MAIL_SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      # Sign-in providers, when .env sets them (else the Admin Panel's): read in this image when the
+      # host renders the sign-in service (install/matrix/signin.cjs). Empty = not set here.
+      SIGNIN_GOOGLE_ENABLED: ${SIGNIN_GOOGLE_ENABLED:-}
+      SIGNIN_GOOGLE_CLIENT_ID: ${SIGNIN_GOOGLE_CLIENT_ID:-}
+      SIGNIN_GOOGLE_CLIENT_SECRET: ${SIGNIN_GOOGLE_CLIENT_SECRET:-}
+      SIGNIN_DISCORD_ENABLED: ${SIGNIN_DISCORD_ENABLED:-}
+      SIGNIN_DISCORD_CLIENT_ID: ${SIGNIN_DISCORD_CLIENT_ID:-}
+      SIGNIN_DISCORD_CLIENT_SECRET: ${SIGNIN_DISCORD_CLIENT_SECRET:-}
+      SIGNIN_TWITCH_ENABLED: ${SIGNIN_TWITCH_ENABLED:-}
+      SIGNIN_TWITCH_CLIENT_ID: ${SIGNIN_TWITCH_CLIENT_ID:-}
+      SIGNIN_TWITCH_CLIENT_SECRET: ${SIGNIN_TWITCH_CLIENT_SECRET:-}
+      SIGNIN_OIDC_ENABLED: ${SIGNIN_OIDC_ENABLED:-}
+      SIGNIN_OIDC_ISSUER: ${SIGNIN_OIDC_ISSUER:-}
+      SIGNIN_OIDC_CLIENT_ID: ${SIGNIN_OIDC_CLIENT_ID:-}
+      SIGNIN_OIDC_CLIENT_SECRET: ${SIGNIN_OIDC_CLIENT_SECRET:-}
+      SIGNIN_OIDC_NAME: ${SIGNIN_OIDC_NAME:-}
     volumes:
       - media:/data
     depends_on:
@@ -191,6 +217,25 @@ services:
       WEB_TRUSTED_PROXIES: ${BB_CADDY_IP:-172.29.83.249}
       # MAS's admin API is on its internal listener only (the router never routes it).
       MAS_ADMIN_URL: http://mas:8081/api/admin/v1
+      # The mail values .env sets, so the Admin Panel's Mail card shows them as set there (the
+      # password is stream-api's alone).
+      MAIL_SMTP_HOST: ${MAIL_SMTP_HOST:-}
+      MAIL_SMTP_PORT: ${MAIL_SMTP_PORT:-}
+      MAIL_SMTP_MODE: ${MAIL_SMTP_MODE:-}
+      MAIL_SMTP_USERNAME: ${MAIL_SMTP_USERNAME:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      # The sign-in provider values .env sets, so the card shows them as set there (the secrets are
+      # stream-api's alone).
+      SIGNIN_GOOGLE_ENABLED: ${SIGNIN_GOOGLE_ENABLED:-}
+      SIGNIN_GOOGLE_CLIENT_ID: ${SIGNIN_GOOGLE_CLIENT_ID:-}
+      SIGNIN_DISCORD_ENABLED: ${SIGNIN_DISCORD_ENABLED:-}
+      SIGNIN_DISCORD_CLIENT_ID: ${SIGNIN_DISCORD_CLIENT_ID:-}
+      SIGNIN_TWITCH_ENABLED: ${SIGNIN_TWITCH_ENABLED:-}
+      SIGNIN_TWITCH_CLIENT_ID: ${SIGNIN_TWITCH_CLIENT_ID:-}
+      SIGNIN_OIDC_ENABLED: ${SIGNIN_OIDC_ENABLED:-}
+      SIGNIN_OIDC_ISSUER: ${SIGNIN_OIDC_ISSUER:-}
+      SIGNIN_OIDC_CLIENT_ID: ${SIGNIN_OIDC_CLIENT_ID:-}
+      SIGNIN_OIDC_NAME: ${SIGNIN_OIDC_NAME:-}
       STREAM_API_SECRET: ${STREAM_API_SECRET:?}
       MATRIX_OAUTH_CLIENT_SECRET: ${MATRIX_OAUTH_CLIENT_SECRET:?}
       # First boot. The setup link's token as a hash only — the token itself stays in
@@ -310,15 +355,33 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
-  # The Discord bridge (1.0): only with the Discord module on.
-  mautrix-discord:
+  # The Discord bridge: Out Of Your Element (AGPL-3.0-or-later), built here from its pinned upstream
+  # source (install/ooye/Dockerfile). Started only with `discord` in COMPOSE_PROFILES. Its settings
+  # are ONE file the renderer writes into ./rendered/ooye; its database is the bridge-data volume,
+  # owned by the uid it runs as (node, 1000). Port 6693 stays on the bundle network: Synapse pushes
+  # to it, and caddy serves its page.
+  ooye:
     <<: *app
-    image: dock.mau.dev/mautrix/discord:v0.7.7
+    image: blackbranch/ooye:${BB_RELEASE:-local}
+    build: { context: "${BB_RELEASE_DIR:-./release}/install/ooye" }
     profiles: ["discord"]
+    # node as PID 1 ignores SIGTERM: without an init every stop waited Docker's 10 s and then killed
+    # the bridge with its SQLite database open.
+    init: true
     volumes:
       - bridge-data:/data
+      - ./rendered/ooye:/config:ro
     depends_on:
       synapse: { condition: service_started }
+    # Healthy = OOYE answers on its port, which it opens only once Discord and the homeserver have
+    # let it in. Discord is outside the box, so `up` and an update never wait for this (blackbranch
+    # wait_healthy); the doctor's discord.bridge row says it. The image has no curl: node asks.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:6693/',{signal:AbortSignal.timeout(4000)}).then(()=>process.exit(0),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   # ── Backups ─────────────────────────────────────────────────────────────────────────────
   # One-shots, run by `blackbranch backup` / `restore` and the nightly and weekly timers (profile

@@ -27,12 +27,13 @@ export const ADMIN_HOME: AdminSection = "site";
 const AI_SUBS = [
   { key: "models", label: "Models" },
   { key: "bot", label: "Chat Bot" },
-  { key: "scoring", label: "Scoring" },
   { key: "automod", label: "Automod" },
   { key: "helpdesk", label: "Help Desk" },
   { key: "embeddings", label: "Embeddings" },
 ] as const;
-export type AiSub = (typeof AI_SUBS)[number]["key"];
+/** An AI place: the product's, or "scoring" — the owner plugin's place for its score.* tasks
+ *  (ADR 0128: a public install has none, so the product rail has no Scoring tab). */
+export type AiSub = (typeof AI_SUBS)[number]["key"] | "scoring";
 
 /** One place in a section. `depth: 1` nests it under the place before it in the rail. */
 export type AdminSub = { key: string; label: string; depth?: 0 | 1 };
@@ -62,7 +63,7 @@ export const SUBS: Record<AdminSection, readonly AdminSub[]> = {
   // The site currency has its own screen beside the site's cards.
   // Badges and Support tickets live here, not in the mod panel.
   site: [
-    { key: "general", label: "Site" }, { key: "points", label: "Points" }, { key: "leaderboard", label: "Leaderboard" },
+    { key: "general", label: "Site" }, { key: "community", label: "Community" }, { key: "discord", label: "Discord", depth: 1 }, { key: "points", label: "Points" }, { key: "leaderboard", label: "Leaderboard" },
     { key: "badges", label: "Badges" }, { key: "tickets", label: "Support tickets" }, { key: "moderators", label: "Moderators" },
   ],
   doctor: [],
@@ -136,11 +137,11 @@ const KEY_HINT = new Map<string, string>((INSTANCE_KEYS as readonly { key: strin
 /** Words the search also matches for a place with no key cards of its own. */
 const EXTRA_WORDS: Record<string, string> = {
   "ai/models": "anthropic openai model provider key", "ai/bot": "bot name account trigger speak",
-  "ai/scoring": "sentiment temperament intelligence score", "ai/automod": "moderation classify model",
+  "ai/automod": "moderation classify model",
   "ai/helpdesk": "help desk support answers", "ai/embeddings": "memory vectors embed",
   "utility/timer": "subathon clock countdown", "utility/bar": "goal colours shape overlay",
   "utility/effects": "alerts sounds overlay", "utility/obs": "obs browser source overlay rig bubble poll sticker", "payments/history": "refunds failures totals donations",
-  "platforms/player": "embed embeds sources watch page", "site/badges": "badge price unlock", "site/tickets": "help requests bug reports", "site/points": "currency store prices", "site/leaderboard": "boards ranks home top", "platforms/emotes": "7tv bttv ffz emote sets refresh",
+  "platforms/player": "embed embeds sources watch page", "site/badges": "badge price unlock", "site/community": "channels categories roles rooms spaces archive encryption retention runs put back", "site/discord": "discord bridge links link unlink channel server ooye", "site/tickets": "help requests bug reports", "site/points": "currency store prices", "site/leaderboard": "boards ranks home top", "platforms/emotes": "7tv bttv ffz emote sets refresh",
   doctor: "health checks logs", updates: "release version upgrade",
 };
 
@@ -219,6 +220,11 @@ export const UNPLACED: Readonly<Record<string, string>> = {
 /** Every card, in order — the move table as code.
  *  @test-only adminLayout.test.ts checks every card against the schema and the sub-tab list; the
  *  panel itself reads cards through keyGroupsFor. */
+/** The Sign-in providers card's rows: per slot its switch, then what it needs (ADR 0154). */
+const SIGNIN_KEYS = ["google", "discord", "twitch", "oidc"].flatMap((s) => s === "oidc"
+  ? [`signin.${s}.enabled`, `signin.${s}.issuer`, `signin.${s}.clientId`, `signin.${s}.clientSecret`, `signin.${s}.humanName`]
+  : [`signin.${s}.enabled`, `signin.${s}.clientId`, `signin.${s}.clientSecret`]);
+
 export const KEY_GROUPS: readonly KeyGroup[] = [
   { section: "ai", sub: "models", title: "Built-in connection keys", blurb: "The keys for the built-in Anthropic and OpenAI connections above.", keys: ["anthropic.apiKey", "openai.apiKey"] },
   { section: "ai", sub: "bot", title: "Accounts", keys: ["bot.matrixId"] },
@@ -246,34 +252,58 @@ export const KEY_GROUPS: readonly KeyGroup[] = [
   { section: "site", sub: "general", title: "Streamer", keys: ["streamer.displayName", "streamer.matrixId"] },
   { section: "site", sub: "general", title: "Site", keys: ["site.name", "site.shortName", "site.description", "site.tagline", "site.homeHeading", "site.homeIntro", "site.iconSet"] },
   { section: "site", sub: "general", title: "Legal", blurb: "Who runs the site, as the Terms, Privacy and About pages name it, and the liability cap the Terms state.", keys: ["legal.operator", "legal.contactEmail", "legal.governingLaw", "legal.effectiveDate", "legal.liabilityCapUsd"] },
-  // Federation and sign-in from other servers are two cards on purpose: they read as one switch
-  // when they share a heading, and they are not one.
-  { section: "site", sub: "general", title: "Community", blurb: "Federation lets other Matrix servers exchange messages with this community's rooms. It does not decide who may sign in here: the next card does.", keys: ["matrix.federation", "matrix.registration"] },
+  // Federation and sign-in from other servers are two cards on purpose (on two pages): they read as
+  // one switch when they share a heading, and they are not one.
   { section: "site", sub: "general", title: "Sign-in from other servers", blurb: "Who may sign in HERE with an account made on another Matrix server. This is not federation, which is about servers exchanging messages. This site's own server always signs in. Server names are matched exactly; a change applies at once, to people already signed in too.", keys: ["auth.federatedSignin", "auth.federatedAllow", "auth.federatedDeny"] },
-  // The two rooms the server's community setup made. The installer passes neither id to any
-  // service: `blackbranch matrix bootstrap` records them in the database. Facts, not settings.
-  { section: "site", sub: "general", title: "Community rooms", readOnly: true,
-    blurb: "The community space and #general, as the server made them.",
-    readOnlyNote: "Found by the server when it made the community. Nothing to change here.",
-    keys: ["matrix.rooms.hub", "matrix.rooms.general"] },
-  { section: "site", sub: "general", title: "Alerts to your phone", blurb: "Where alerts for whoever runs the site are pushed: urgent ones and quiet ones.", keys: ["ntfy.wakeUrl", "ntfy.quietUrl"] },
+  // The install's own account that runs those rooms: set when the site was installed, never here.
+  { section: "site", sub: "general", title: "Community service", readOnly: true,
+    blurb: "The account this install uses to run the community. Nothing to change here.",
+    readOnlyNote: "Set when this site was installed.",
+    keys: ["community.serviceLocalpart", "community.reconciler"] },
+  { section: "site", sub: "general", title: "Channels",
+    blurb: "How the server looks after the community's channels.",
+    keys: ["community.keepElementEdits", "community.retentionCapDays"] },
+  { section: "site", sub: "general", title: "Auto-pin", blurb: "A chat message with enough upvotes pins itself at the top of chat. It never replaces a moderator's pin. A change applies at the next vote.",
+    keys: ["chat.autoPin.off", "chat.autoPin.votes", "chat.autoPin.chattersPerVote", "chat.autoPin.maxVotes", "chat.autoPin.minutes"] },
+  { section: "site", sub: "general", title: "Streamer highlight", blurb: "An admin clicks a chat message to show everyone which one is being answered on stream. A change applies at the next click.",
+    keys: ["chat.spotlight.off"] },
+  { section: "site", sub: "general", title: "Alerts to your phone", blurb: "Where alerts for whoever runs the site are pushed: urgent ones and quiet ones, the server's own (a failed backup or update, low disk) included.", keys: ["ntfy.wakeUrl", "ntfy.quietUrl"] },
   { section: "site", sub: "general", title: "Running the site", keys: ["site.timeZone", "site.dataSince", "updates.quietHour"] },
+  { section: "site", sub: "general", title: "Mail", blurb: "Optional. With a mail server, people can reset a forgotten password by mail, and a new account confirms its address. Without one, neither (as on a new install). A change applies when the server re-renders the sign-in service, which saving asks for; run sudo blackbranch mail test <your address> on the server to try it.",
+    keys: ["mail.smtp.host", "mail.smtp.port", "mail.smtp.mode", "mail.smtp.username", "mail.smtp.password", "mail.from"] },
+  { section: "site", sub: "general", title: "Sign-in providers", blurb: "Optional. Each one switched on adds a \"Continue with …\" button to the sign-in page, so people can sign in with an account they already have. Make the app at the provider, paste the redirect URL shown under its switch there, then fill in its id and secret here. A change applies when the server re-renders the sign-in service, which saving asks for. Switched off, its button goes; people who signed in with it keep the link and use it again once it is back on (for your own OpenID server: at the same address — another address is another server, and nobody's link carries over to it).",
+    keys: SIGNIN_KEYS,
+    onlyWhen: Object.fromEntries(SIGNIN_KEYS.filter((k) => !k.endsWith(".enabled")).map((k) => [k, { key: `${k.slice(0, k.lastIndexOf("."))}.enabled`, is: ["true"] }])) },
   { section: "site", sub: "general", title: "Backups", blurb: "Where the nightly backup goes. A change applies at the next backup; run sudo blackbranch backup on the server to try it now.",
     keys: ["backup.target", "backup.repository", "backup.s3.region", "backup.s3.accessKeyId", "backup.s3.secretAccessKey", "backup.keepDaily", "backup.keepWeekly"],
     onlyWhen: Object.fromEntries(["backup.s3.region", "backup.s3.accessKeyId", "backup.s3.secretAccessKey"].map((k) => [k, { key: "backup.target", is: ["s3"] }])) },
   // Every value the install was made with, in one closed card at the bottom: the addresses, the
   // homeserver and its sign-in client, the two rooms the bootstrap made. Changed on the server.
   { section: "site", sub: "general", title: "Install values", folded: true, readOnly: true,
-    blurb: "Set when this site was installed. To change one, change it on the server, then restart the site.",
+    blurb: "Set when this site was installed. The addresses, the server name and the sign-in client are the install's identity and never change.",
     keys: ["site.origin", "site.apiOrigin", "site.apiWsOrigin", "matrix.serverName", "matrix.baseUrl", "matrix.federationServer",
       "matrix.oauth.issuer", "matrix.oauth.clientId", "matrix.oauth.clientSecret", "site.legacyId", "matrix.legacyNamespace"],
     hideUnset: ["site.legacyId", "matrix.legacyNamespace"] },
 
+  // Site → Community: the channels, roles and runs are CommunityPanel's own; these cards sit under them.
+  { section: "site", sub: "community", title: "Federation and sign-up", blurb: "Federation lets other Matrix servers exchange messages with this community's rooms. It does not decide who may sign in here: the Sign-in from other servers card on the Site page does.", keys: ["matrix.federation", "matrix.registration"] },
+  // The two rooms the server's community setup made. The installer passes neither id to any
+  // service: `blackbranch matrix bootstrap` records them in the database. Facts, not settings.
+  { section: "site", sub: "community", title: "Community rooms", readOnly: true,
+    blurb: "The community space and #general, as the server made them.",
+    readOnlyNote: "Found by the server when it made the community. Nothing to change here.",
+    keys: ["matrix.rooms.hub", "matrix.rooms.general"] },
+  // The accounts the community's server treats as a chat bridge's own: listed here, never taken from a room.
+  { section: "site", sub: "community", title: "Bridge accounts",
+    blurb: "Accounts that belong to a chat bridge; their power is left alone and they are never kicked. A room that looks bridged by an account not listed here is named in the community's runs.",
+    keys: ["community.bridgeAccounts"] },
+
   // Site → Leaderboard: Home's Leaderboard on or off, and which boards it offers.
   { section: "site", sub: "leaderboard", title: "Leaderboard", keys: ["leaderboard.off", "leaderboard.hidden"] },
 
-  // Site → Moderators: the accounts treated as staff besides the streamer and the bot.
-  { section: "site", sub: "moderators", title: "Staff", keys: ["staff.extraMatrixIds"] },
+  // Site → Moderators: the accounts treated as staff besides the streamer and the bot (staff.ts). Not the
+  // Staff role (site.users.is_staff), which is the Staff list above this card.
+  { section: "site", sub: "moderators", title: "House accounts", blurb: "Always Supporters, with badges set by hand, and listed with the bots in the community.", keys: ["staff.extraMatrixIds"] },
 
   // Site → Points. The Store prices card is PointsPanel's own (it is a table, not keys).
   { section: "site", sub: "points", title: "Name and look", blurb: "What people read wherever points show.", keys: ["currency.name", "currency.namePlural", "currency.symbol", "currency.icon", "community.scoreName"] },

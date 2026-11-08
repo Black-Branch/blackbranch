@@ -34,6 +34,26 @@ test("advance moves one stage; error carries a message and clears when the stage
   assert.equal(readReadiness(["matrix"])[1]!.error, "Something went wrong", "an error without a reason still says SOMETHING — a blank error row reads as a stuck stage");
 });
 
+test("a running stage can carry a note (how long it has run); any move of the stage clears it", () => {
+  const r = registerReadiness("matrix", MATRIX);
+  let changes = 0;
+  subscribeReadiness(() => { changes++; });
+  r.note("token", "Still connecting… 6 s");
+  assert.equal(readReadiness(["matrix"])[0]!.note, null, "a pending stage has nothing running to describe");
+  r.advance("token", "active");
+  r.note("token", "Still connecting… 6 s");
+  assert.equal(readReadiness(["matrix"])[0]!.note, "Still connecting… 6 s");
+  assert.equal(readReadiness(["matrix"])[0]!.status, "active", "a note never changes the status");
+  const before = changes;
+  r.note("token", "Still connecting… 6 s");
+  assert.equal(changes, before, "the same note again is not a change");
+  r.note("token", null);
+  assert.equal(readReadiness(["matrix"])[0]!.note, null);
+  r.note("token", "Still connecting… 7 s");
+  r.advance("token", "done");
+  assert.deepEqual([readReadiness(["matrix"])[0]!.status, readReadiness(["matrix"])[0]!.note], ["done", null], "a finished stage keeps no stale note");
+});
+
 test("the merged view follows the ORDER OF KEYS the surface asks for, and skips keys nobody has registered yet", () => {
   registerReadiness("matrix", MATRIX);
   registerReadiness("emotes", EMOTES);

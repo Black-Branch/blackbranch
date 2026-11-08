@@ -11,6 +11,8 @@ import { matrixBaseUrl } from "@/app/lib/matrixConfig";
 import { oauthTokenRequest, oauthRevoke } from "@/app/lib/matrixOAuthClient";
 import { accountDeletedForSignIn } from "@/app/lib/deletedAccounts";
 import { createLoginHandoff } from "@/app/lib/loginHandoff";
+import { endReplacedSession } from "@/app/lib/matrixSessionCore";
+import { upstreamDeps, sessionRefusals } from "@/app/lib/matrixSessionUpstream";
 
 // REDIRECT_URI must also be REGISTERED in MAS's client config — deriving it
 // is necessary but not sufficient (localhost:3002 is the registered dev one).
@@ -136,16 +138,13 @@ export async function GET(req: NextRequest) {
   // every sign-in, best-effort, never fails the sign-in.
   await createIdentityResolver({ pool, fetch: (p, i) => streamApiFetch(p, i, RESOLVE_TIMEOUT_MS) }).resolveSiteIdentity(matrixId).catch(() => {});
 
-  // Re-auth of the same device replaces its chain; revoke the old sign-in session
-  // first so each device has exactly one live session (no MAS clutter).
-  const { rows: prior } = await pool.query(
-    `SELECT mx_refresh_token FROM site.user_sessions WHERE matrix_id = $1 AND mx_device_id = $2`,
-    [matrixId, stateData.deviceId]
-  ).catch(() => ({ rows: [] as { mx_refresh_token: string | null }[] }));
-  const oldRefresh = decToken(prior[0]?.mx_refresh_token);
-  if (oldRefresh && oldRefresh !== tokens.refresh_token) {
-    await oauthRevoke(oldRefresh, "refresh_token");
-  }
+  // Re-auth of the same device replaces its chain; revoke the old sign-in session first so each
+  // device has exactly one live session (no MAS clutter). Revoke only, never /logout — the new
+  // session keeps this device id (matrixSessionCore.ts endReplacedSession). One that cannot be
+  // revoked is logged and counted toward the burst alarm. Best-effort: never fails the sign-in.
+  await endReplacedSession({
+    ...upstreamDeps(decToken), query: (sql, params) => pool.query(sql, params), onUnconfirmed: (m, side) => sessionRefusals.record(m, side),
+  }, matrixId, stateData.deviceId, tokens.refresh_token ?? null);
 
   // A re-sign-in on the same device gets a NEW session id: the cookie from before it is dead
   // (siteSession.ts), not carried over with the device.

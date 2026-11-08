@@ -14,6 +14,7 @@ const routePath = join(here, "..", "api", "stream", "status", "route.ts");
 const storePath = join(here, "sourceCensusStore.ts");
 const pollPath = join(here, "useStreamStatusPoll.ts");
 const streamViewPath = join(here, "..", "components", "StreamView.tsx");
+const modRoutePath = join(here, "..", "api", "mod", "player-sources", "route.ts");
 
 test("the status route resolves the live status before the census call, and never awaits the census", () => {
   // An unawaited fire-and-forget, not a try/catch-await, is what keeps a hung
@@ -135,9 +136,22 @@ test("StreamView writes sourceRef from folded/currentSource in an effect, and pa
   );
 });
 
+test("every census source has its column: the INSERT writes it and the mod readout's history reads it", async () => {
+  const { countSources } = await import("./sourceCensus.ts");
+  const sources = Object.keys(countSources(new Map(), 0)).map((k) => (k === "none" ? "folded" : k));
+  assert.ok(sources.includes("kick"), "vacuity: the Kick embed is a census source");
+  const store = stripComments(readFileSync(storePath, "utf8"));
+  const cols = store.match(/INSERT INTO site\.player_source_snapshots\s*\(([^)]+)\)/)?.[1]!.split(",").map((s) => s.trim()) ?? [];
+  assert.deepEqual([...cols].sort(), [...sources].sort(), "the INSERT names every census source");
+  const route = stripComments(readFileSync(modRoutePath, "utf8"));
+  const sel = route.match(/SELECT recorded_at, ([^\n]+)\n/)?.[1]!.split(",").map((s) => s.trim()) ?? [];
+  assert.deepEqual([...sel].sort(), [...sources].sort(), "the history SELECT reads every column");
+  for (const s of sources.filter((x) => x !== "folded")) assert.match(route, new RegExp(`\\b${s}: r\\.${s}\\b`), `history maps ${s}`);
+});
+
 test("VACUITY ANCHOR: the scanned files were read to the END", () => {
   for (const [label, p] of [
-    ["route", routePath], ["store", storePath], ["poll", pollPath], ["streamView", streamViewPath],
+    ["route", routePath], ["store", storePath], ["poll", pollPath], ["streamView", streamViewPath], ["modRoute", modRoutePath],
   ] as const) {
     const raw = readFileSync(p, "utf8");
     assert.match(raw.trimEnd().slice(-40), /[}\);]\s*$/, `${label} was read truncated`);

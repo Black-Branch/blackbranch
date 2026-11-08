@@ -8,8 +8,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { stripComments } from "./testSource.ts";
-const read = (...p: string[]) => { const r = readFileSync(join(process.cwd(), ...p), "utf8"); assert.ok(r.trimEnd().length > 500); return stripComments(r); };
+import { stripComments, stripCssComments } from "./testSource.ts";
+// CSS goes through the CSS stripper: the shared one also drops `--` lines (a custom property).
+const read = (...p: string[]) => { const r = readFileSync(join(process.cwd(), ...p), "utf8"); assert.ok(r.trimEnd().length > 500); return p.at(-1)!.endsWith(".css") ? stripCssComments(r) : stripComments(r); };
 const REG = read("app", "lib", "settingsRegistry.ts");
 const CSS = read("app", "globals.css");
 const LAYOUT = read("app", "layout.tsx");
@@ -53,5 +54,5 @@ test("pronoun colour: Coloured default; Plain is a fixed light grey", () => {
 
 test("ring thickness defaults to today's 2px and feeds the ring", () => {
   assert.match(REG, /pfpRingWidth:\s*2,/);
-  assert.match(CSS, /\.chat-pfp-ring-on \{ --chat-pfp-ring: var\(--chat-pfp-ring-w, 2px\); \}/);
+  assert.match(CSS, /\.chat-pfp-ring-on \.chat-pfp-ring-el \{\s*--avatar-ring-w: max\(1px, round\(calc\(var\(--chat-pfp-ring-w, 2px\)/);
 });

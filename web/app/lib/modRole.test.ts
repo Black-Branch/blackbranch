@@ -58,7 +58,7 @@ test("a PERMANENT ban of a mod removes the role and logs it; a timeout does not"
   const ban = read("../api/mod/ban/route.ts");
   // One account's ban (a ban by canonical runs it for every linked account).
   const one = ban.slice(ban.indexOf("async function banAccount"), ban.indexOf("export async function POST"));
-  const insert = one.indexOf("INSERT INTO site.bans");
+  const insert = one.indexOf("await pool.query<{ kept_identities: string[] }>(BAN_ACCOUNT_SQL,");
   const revoke = one.indexOf("if (!a.durationMinutes && (await applyModRole(");
   assert.ok(insert > 0 && revoke > insert, "the role is removed after the ban is stored");
   assert.match(one.slice(revoke, revoke + 260), /targetId, false\)\) === "changed"\) \{\s*await appendModLog\(\{ action: "mod_revoked", target: targetId, by: a\.mod, reason: "banned" \}\);/);
@@ -74,10 +74,13 @@ test("/mod and /unmod's route changes the role through applyModRole and logs onl
 });
 
 test("the owner's client gets the role's source of truth (site.users), never a list derived from the log", () => {
+  const answer = read("./community/modsAnswer.ts");
+  assert.match(answer, /SELECT matrix_id FROM site\.users WHERE \(is_mod OR is_admin\) AND deleted_at IS NULL/);
+  assert.doesNotMatch(answer, /mod_log/);
+  assert.match(answer, /return Response\.json\(\{ modIds: rows\.map\(\(r\) => r\.matrix_id\), keepIds: \[\.\.\.deps\.keepIds\(\)\], \.\.\.ladder \}, \{ headers: NO_STORE \}\);\s*\}\s*$/, "vacuity anchor");
   const route = read("../api/community/mods/route.ts");
-  assert.match(route, /SELECT matrix_id FROM site\.users WHERE \(is_mod OR is_admin\) AND deleted_at IS NULL/);
   assert.doesNotMatch(route, /mod_log/);
-  assert.match(route, /return Response\.json\(\{ modIds: rows\.map\(\(r\) => r\.matrix_id\), keepIds: \[\.\.\.staffMatrixIds\(\)\] \}\);\s*\}\s*$/, "vacuity anchor");
+  assert.match(route, /keepIds: staffMatrixIds,\s*\}\);\s*\}\s*$/, "vacuity anchor");
 });
 
 test("account deletion records the end of a moderator's role before it clears is_mod", () => {

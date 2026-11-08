@@ -120,7 +120,10 @@ Services: `postgres` (one server; databases `stream`, `synapse`, `mas`, each wit
 `migrate` (one-shot: the baseline on an empty database, then newer migrations), `stream-api`,
 `stream-ingest`, `web` (the site), `caddy` (the router), `cloudflared`
 (tunnel mode), and the community's chat server: `synapse` (the homeserver) and `mas` (its sign-in
-service). The Discord bridge is declared under the Compose profile `discord`, off until a later release.
+service). The Discord bridge, `ooye` (Out Of Your Element, built here from its pinned upstream source:
+`install/ooye/`; its licence and source: `docs/public/licences.md`), runs only with `discord` in
+`COMPOSE_PROFILES`; it is off on a new install, and the doctor's "Discord bridge" row reads "off" until
+`DISCORD_BOT_TOKEN` is set. Its connection and the Admin Panel's Discord page arrive in a later release.
 
 The site is **one image for every install**: nothing about an install is built into it. Its name,
 addresses, legal details and points words are read from `.env` when it starts, so a release pulls it by
@@ -146,15 +149,18 @@ service at `https://matrix.example.com/auth/`.
   none. `blackbranch federation on` turns it on (it re-renders and restarts Synapse; the server name
   does not change); `blackbranch federation off` turns it back off; `blackbranch federation` shows it.
   The setting lives with the site's other settings (`matrix.federation`), so the Admin Panel can switch
-  it too.
+  it too. Every setting the host writes (this one, and the room ids `matrix ensure` records) is followed
+  by `POST /config/reload` to stream-api, so the Admin Panel shows it at once; a call that fails is a
+  warning naming `sudo blackbranch restart stream-api`.
 - **Sign-up is closed until setup is finished.** The setup pages make your account through the
   sign-in service's admin API, so nobody needs sign-up before then, and keeping it shut means no one
   can claim the community's room names first. Once setup is finished it follows the Admin Panel's
-  switch (Site → Community → *Let people make accounts*): unset means **closed**.
+  switch (Site → Community, card Federation and sign-up, *Let people make accounts*): unset means **closed**.
   Set it to Yes when you want viewers to make accounts. The site re-renders the config when it
   changes. With the database down a render keeps
-  what the last one wrote. No email address is required: this release sends no mail, and requiring
-  an address nothing can verify would lock everyone out. The site's raid switch closes sign-ups too.
+  what the last one wrote. No email address is required unless a mail server is set (`MAIL_SMTP_HOST`, or the Admin
+  Panel's Site → Site, card Mail): without one nothing can verify an address, and requiring one would
+  lock everyone out. With one, password recovery is on and sign-up asks for a verified address. The site's raid switch closes sign-ups too.
   Uploads to the homeserver are capped at 20 MB (`max_upload_size`, from the generator's `MX_MAX_UPLOAD`).
 - **The sign-in service's admin API is not on the internet.** It answers only on the service's
   internal listener (port 8081 inside the bundle's network), which the router never routes; the site
@@ -259,7 +265,7 @@ for another channel, a feed whose publisher has not signed it again before it ex
 that would move the database to another Postgres major version. That is always its own announced step.
 
 **When:** the timer `blackbranch-update.timer` reads the feed every night at the quiet hour (Admin Panel
-→ Site → Running the site) plus up to ten minutes. A **security release** applies itself then, but
+→ Site → Site, card Running the site) plus up to ten minutes. A **security release** applies itself then, but
 never while the stream is live: it waits, checking every minute, until the stream ends (for up to six
 hours; after that, the next night). A **feature release** waits for you: the Admin Panel's Updates
 section shows it with an Apply button, or run `blackbranch update`. A box that cannot read its feed
@@ -324,7 +330,7 @@ again) and the chat service's sound scratch files.
 
 **Where:** [restic](https://restic.net) snapshots, encrypted with the **backup passphrase** on the
 recovery sheet (`BACKUP_PASSPHRASE` in `.env`). The target is a setting (setup's last page, or Admin
-Panel → Site → Backups): `local` (default, `/opt/blackbranch/backups/restic`), `s3`
+Panel → Site → Site, card Backups): `local` (default, `/opt/blackbranch/backups/restic`), `s3`
 (`s3:https://<endpoint>/<bucket>[/<folder>]` with an access key id and secret key: Backblaze B2,
 Cloudflare R2, …) or `sftp` (`sftp:<user>@<host>:<folder>`; put the key `blackbranch backup key`
 prints into that account's `authorized_keys`). Kept: 7 daily and 4 weekly snapshots (settings
@@ -373,14 +379,17 @@ The box tells whoever runs it about the problems only it can see:
   data lives, a certificate within 14 days of its end in direct mode (or none read), and no good
   backup for 36 hours. These are the doctor's floors, and `alerts.test.mjs` holds them equal.
 
-**One channel, in `.env`.** `BB_ALERT_NTFY_URL` is an ntfy topic address. It reaches curl through a
-config file on a descriptor, never on a command line. `BB_ALERT_EMAIL_COMMAND` is a command run by
+**One channel, in `.env` or the site's.** `BB_ALERT_NTFY_URL` is an ntfy topic address. Unset, the
+site's own alerts topic (`ntfy.wakeUrl` / `ntfy.quietUrl`) is used: `install/alerts/topic.cjs` reads it
+inside the stream-api image as stream-api resolves it, priority 4 and up to the urgent topic, and the
+host keeps the last one read root-only (`state/alert-topic.env`) for when the database is down. Either
+address reaches curl through a config file on a descriptor, never on a command line. `BB_ALERT_EMAIL_COMMAND` is a command run by
 `bash -c`. It gets the whole message on its input, headers first, so `sendmail you@example.com`
 works. The subject is also in `$BB_ALERT_SUBJECT`. Write the command in single quotes, so Compose does
 not read a `$` in it. Neither value is ever printed, and `doctor --report` refuses a report that
 holds either.
 
-**No channel means the alert is logged only**: on stderr (the unit's journal) and through
+**No channel at all means the alert is logged only**: on stderr (the unit's journal) and through
 `logger -t blackbranch-alert`. A channel that fails is reported and never changes the outcome of what
 raised the alert. An ntfy topic has no password, so an alert holds only fixed words, versions,
 numbers and the site's public names. It never holds a tool's own error text. `blackbranch alerts

@@ -16,7 +16,8 @@ import { INSTANCE_KEYS } from "../lib/instanceSchema.generated.mjs";
 import { legalFactsFrom, type LegalInputs } from "./legalFacts.ts";
 import type { StreamApiSnapshot } from "../lib/instanceAdminView.ts";
 import type { AiRoutesSnapshot } from "../lib/aiAdminView.ts";
-import { HOMESERVER_DEFAULT_RETENTION_DAYS, HOMESERVER_GENERAL_RETENTION_DAYS } from "./homeserverRetention.ts";
+import { HOMESERVER_GENERAL_RETENTION_DAYS, homeserverRetentionFor, homeserverRetentionFrom } from "./homeserverRetention.ts";
+const CAP_DEFAULT = INSTANCE_KEYS.find((k) => k.key === "community.retentionCapDays")?.default as number;
 import { AUTOMOD_HELD_RETENTION_DAYS } from "./automodRetention.ts";
 const { LegalDocument } = await import("./LegalDocument.tsx");
 
@@ -55,7 +56,7 @@ const DEFAULT: LegalInputs = {
   youtube: { publicData: false, linking: false },
   stripe: false, subscriptions: false, paypal: false, pointsPurchase: false, currencyName: "points", cloudflare: false,
   twitch: false, liabilityCapUsd: defaultOf("legal.liabilityCapUsd") as number, thirdPartyImages: { vods: false, news: false },
-  homeserverRetention: { dms: HOMESERVER_DEFAULT_RETENTION_DAYS, general: HOMESERVER_GENERAL_RETENTION_DAYS },
+  homeserverRetention: homeserverRetentionFor(CAP_DEFAULT, CAP_DEFAULT),
   errorLogDays: 30,
   plugin: null,
 };
@@ -141,8 +142,58 @@ test("a fresh install's page claims no AI, no payments, no YouTube, no Cloudflar
   assert.doesNotMatch(html, /YouTube API Services|YouTube Data API|Manage your YouTube account/);
   assert.match(html, /connect\s+a Twitch, Kick, or other account/, "YouTube is not offered for linking");
   assert.doesNotMatch(html, /Cloudflare/);
-  assert.match(html, new RegExp(`after ${HOMESERVER_DEFAULT_RETENTION_DAYS} days, and messages in #general after ${HOMESERVER_GENERAL_RETENTION_DAYS} days`));
+  assert.match(html, new RegExp(`after ${CAP_DEFAULT} days, and messages in #general after ${HOMESERVER_GENERAL_RETENTION_DAYS} days`));
   assert.doesNotMatch(html, /PLUGIN-/);
+});
+
+test("no retention cap: the page says DMs are kept until deleted, never a number of days the server does not keep", () => {
+  const html = render({ ...DEFAULT, homeserverRetention: homeserverRetentionFor(0, 0) });
+  assert.match(html, /every direct message among them — are kept until they are deleted; messages in #general are deleted after 30 days\./);
+  assert.doesNotMatch(html, /direct message among them — are deleted after/);
+});
+
+test("the page states the cap the server was last rendered with; a saved change not applied yet is said beside it", () => {
+  const facts = (capDays: unknown, saved: number) => homeserverRetentionFrom({ v: 1, capDays, at: "2026-10-23T00:00:00Z" }, saved);
+  // Equal: one statement.
+  const same = render({ ...DEFAULT, homeserverRetention: facts(365, 365) });
+  assert.match(same, /are deleted after 365 days, and messages in #general after 30 days\./);
+  assert.doesNotMatch(same, /next start/);
+  // 365 rendered, 30 saved: the server still deletes at 365 — the page never promises 30 alone.
+  const shorter = render({ ...DEFAULT, homeserverRetention: facts(365, 30) });
+  assert.match(shorter, /are deleted after 365 days, and messages in #general after 30 days\. This setting was changed to 30 days; the server still applies the period above until its next start\./);
+  // 365 rendered, 0 saved: still deleted at 365; the change to no limit is said, not promised.
+  const off = render({ ...DEFAULT, homeserverRetention: facts(365, 0) });
+  assert.match(off, /are deleted after 365 days/);
+  assert.match(off, /This setting was changed to no limit; the server still applies the period above until its next start\./);
+  assert.doesNotMatch(off, /kept until they are deleted/);
+  // 0 rendered, 90 saved.
+  assert.match(render({ ...DEFAULT, homeserverRetention: facts(0, 90) }), /kept until they are deleted; messages in #general are deleted after 30 days\. This setting was changed to 90 days;/);
+  // No host fact (an install whose homeserver runs elsewhere, or a box that has not rendered since): no sentence.
+  for (const f of [null, undefined, {}, { v: 2, capDays: 30 }, { v: 1, capDays: -1 }, { v: 1, capDays: 3651 }, { v: 1, capDays: "30" }]) {
+    assert.equal(homeserverRetentionFrom(f, 365), null, JSON.stringify(f));
+  }
+  const none = render({ ...DEFAULT, homeserverRetention: homeserverRetentionFrom(null, 365) });
+  assert.doesNotMatch(none, /On our Matrix server/);
+});
+
+test("#general's row decides its days once it has one; the bootstrap's 30 only before", () => {
+  // A row with its own days: those, cut to the saved cap (what the reconciler writes).
+  assert.equal(homeserverRetentionFor(365, 365, { retentionDays: 90 }).general, 90);
+  assert.equal(homeserverRetentionFor(365, 60, { retentionDays: 90 }).general, 60);
+  // A row with no days: as long as the server allows (the cap), or no limit when there is none.
+  assert.equal(homeserverRetentionFor(365, 365, { retentionDays: null }).general, 365);
+  assert.equal(homeserverRetentionFor(0, 0, { retentionDays: null }).general, null);
+  assert.equal(homeserverRetentionFor(0, 0, { retentionDays: 14 }).general, 14);
+  // No row: the bootstrap's days.
+  assert.equal(homeserverRetentionFor(365, 365, null).general, HOMESERVER_GENERAL_RETENTION_DAYS);
+  // The page says what the numbers mean, never "after null days".
+  const kept = render({ ...DEFAULT, homeserverRetention: homeserverRetentionFor(365, 365, { retentionDays: 90 }) });
+  assert.match(kept, /are deleted after 365 days, and messages in #general after 90 days\./);
+  const both = render({ ...DEFAULT, homeserverRetention: homeserverRetentionFor(0, 0, { retentionDays: null }) });
+  assert.match(both, /are kept until they are deleted; messages in #general too\./);
+  const capOnForever = render({ ...DEFAULT, homeserverRetention: { dms: 365, general: null, pending: null } });
+  assert.match(capOnForever, /and messages in #general are kept until they are deleted\./);
+  for (const html of [kept, both, capOnForever]) assert.doesNotMatch(html, /null days|after null/);
 });
 
 test("an install with every part on names each part, its providers and its numbers", () => {
@@ -235,6 +286,14 @@ test("a held message keeps its words with the moderation record, open case or no
   }
 });
 
+// A3-09: deletion removes the live data, not the copies in the backups — and restoring one of them
+// brings the account back. The operator's wiki said so; the page a deleting person reads did not.
+test("deleting an account: the page says copies stay in backups and a restore brings the account back", () => {
+  for (const html of [render(DEFAULT), render(EVERYTHING)]) {
+    assert.match(html, /Copies of a deleted account stay in the site(?:&#x27;|')s backups until those backups are\s+replaced by newer ones; if the site is ever restored from one of them, the account comes back with it until it\s+is deleted again\./);
+  }
+});
+
 test("held rows are pruned by automod.js at the page's number; only automod's open marks go, and only with their evidence", () => {
   // The page says a held row goes AUTOMOD_HELD_RETENTION_DAYS after it was held, an automatic mark
   // goes when its last evidence is deleted, and a cleared mark stays. All three are held here: the
@@ -323,12 +382,23 @@ test("stream-api unreachable: each switch falls back to web's own reading", () =
 });
 
 test("the numbers come from where the code keeps them", () => {
+  // DMs: the server's default policy is the install's cap (render.sh renders it from
+  // MX_RETENTION_CAP_DAYS, which the host reads from community.retentionCapDays), and the page
+  // states the same setting (legalFactsServer.ts reads retentionCapDays()).
   const render = readFileSync(join(REPO, "install", "matrix", "render.sh"), "utf8");
-  const dms = /default_policy:\s*\n\s*max_lifetime: (\d+)d/.exec(render);
-  assert.ok(dms, "the homeserver's default retention moved");
-  assert.equal(HOMESERVER_DEFAULT_RETENTION_DAYS, Number(dms[1]));
-  const boot = readFileSync(join(REPO, "install", "matrix", "bootstrap.mjs"), "utf8");
-  const general = /const GENERAL_RETENTION_MS = (\d+) \* 24 \* 60 \* 60 \* 1000;/.exec(boot);
+  assert.match(render, /default_policy:\s*\n\s*max_lifetime: \$\{cap\}d/, "the homeserver's default retention is the cap");
+  assert.match(render, /local cap="\$\{MX_RETENTION_CAP_DAYS-\}"/);
+  assert.match(readFileSync(join(REPO, "install", "blackbranch"), "utf8"), /config_get community\.retentionCapDays/);
+  assert.deepEqual(homeserverRetentionFor(365, 365), { dms: 365, general: 30, pending: null });
+  assert.deepEqual(homeserverRetentionFor(7, 7), { dms: 7, general: 7, pending: null }, "#general is cut to a shorter cap");
+  assert.deepEqual(homeserverRetentionFor(0, 0), { dms: null, general: 30, pending: null }, "no cap: DMs are not deleted automatically");
+  const facts = readFileSync(join(REPO, "web", "app", "legal", "legalFactsServer.ts"), "utf8");
+  assert.match(facts, /homeserverRetentionFrom\(await hostFile\("retention-cap\.json"\)\.catch\(\(\) => null\), retentionCapDays\(\), await generalRow\(\)\)/, "the RENDERED cap, published by the host, and #general's row");
+  assert.match(facts, /FROM site\.community_rooms WHERE matrix_room_id = \$1 AND NOT archived/, "#general's row is the room the setup recorded");
+  // The bootstrap's room shapes (install/matrix/community-rooms.mjs, imported by bootstrap.mjs).
+  const boot = readFileSync(join(REPO, "install", "matrix", "community-rooms.mjs"), "utf8");
+  assert.match(readFileSync(join(REPO, "install", "matrix", "bootstrap.mjs"), "utf8"), /body: generalBody\(hub\)/, "the bootstrap makes #general from it");
+  const general = /export const GENERAL_RETENTION_MS = (\d+) \* 24 \* 60 \* 60 \* 1000;/.exec(boot);
   assert.ok(general, "#general's retention moved");
   assert.equal(HOMESERVER_GENERAL_RETENTION_DAYS, Number(general[1]));
   const server = readFileSync(join(REPO, "web", "app", "legal", "legalFactsServer.ts"), "utf8");

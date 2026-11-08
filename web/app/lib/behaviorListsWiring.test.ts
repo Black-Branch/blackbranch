@@ -71,7 +71,7 @@ test("vacuity: files read to their end", () => {
   assert.ok(sidebar.length > 20000 && win.length > 5000 && deriv.length > 1000 && css.length > 20000);
 });
 
-test("the name card offers Hide / Show again, never on your own messages", () => {
+test("the name card offers Hide messages / Show messages, never on your own messages", () => {
   const card = read("app", "components", "UserCard.tsx");
   // Your own lines on any platform are told apart by your own public ids (ownIdentity.ts); until
   // they have loaded, only a site row (checked by Matrix id) is offered Hide.
@@ -79,8 +79,9 @@ test("the name card offers Hide / Show again, never on your own messages", () =>
     "a platform row (maybe your own Twitch line) is offered Hide before your own ids are known");
   // The /chat window publishes the viewer too, so its name cards can check.
   assert.match(win, /publishLiveDirectory\(directory, \{ matrixId: me\.matrixId \?\? null, canonicalId: me\.canonicalId \?\? null, ownIds: \[\.\.\.ownIds\] \}\)/);
-  assert.match(card, /!isOwnMessage && \(msg\.matrixId \|\| hideTarget \|\| canReport\)/);
-  assert.match(card, /\{isHiddenHere \? "Show again" : "Hide"\}/);
+  // The card's action row (ticket #191; its place is userCardActions.render.test.ts).
+  assert.match(card, /!isOwnMessage && \(hideTarget \|\| canReport\) && \(\s*<div data-card-actions/);
+  assert.match(card, /\{isHiddenHere \? "Show messages" : "Hide messages"\}/);
 });
 
 test("/ignore and /unignore are everyone's commands and run the store", () => {

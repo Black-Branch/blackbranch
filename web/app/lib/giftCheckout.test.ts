@@ -65,7 +65,7 @@ test("no gift: nothing to say", () => {
 test("checkout reads the viewer's unexpired gift and sends its end as trial_end", () => {
   const raw = readFileSync(join(import.meta.dirname, "..", "api", "billing", "checkout", "route.ts"), "utf8");
   const src = stripComments(raw);
-  assert.match(src, /return Response\.json\(\{ clientSecret: checkout\.client_secret \}\);\s*\}\s*$/, "END of the route not read");
+  assert.match(src, /return Response\.json\(\{ clientSecret: opened\.session\.client_secret \}\);\s*\}\s*$/, "END of the route not read");
   assert.match(src, /FROM site\.gift_subscriptions\s+WHERE recipient_matrix_id = \$1 AND expires_at > now\(\)/);
   assert.match(src, /const trialEnd = giftTrialEnd\(/);
   const create = src.slice(src.indexOf("stripe.checkout.sessions.create("));
@@ -82,14 +82,17 @@ test("the sheet renders both notes", () => {
 });
 
 // Money: a trialing subscription has paid NOTHING at creation (a $0 invoice), and Stripe charges at
-// trial end as a subscription_cycle invoice, which recordRenewal credits. So the creation card must
-// not credit the price too — that would be income that never arrived, then counted twice.
-test("the creation card skips a trialing subscription; the trial-end charge is credited once, as month one", () => {
-  const raw = readFileSync(join(import.meta.dirname, "..", "api", "billing", "webhook", "route.ts"), "utf8");
+// trial end as a subscription_cycle invoice. Every sub card comes from a PAID invoice
+// (subscriptionSync.ts paidInvoiceCard), so the $0 first invoice credits nothing and the trial-end
+// charge is month one — run in subscriptionSync.test.ts ("a trial's $0 first invoice…") and
+// subRenewal.test.ts; this pins the two lines that make it so.
+test("the trial's $0 first invoice credits nothing; the trial-end charge is credited once, as month one", () => {
+  const raw = readFileSync(join(import.meta.dirname, "subscriptionSync.ts"), "utf8");
   const src = stripComments(raw);
-  assert.match(src, /currency: price\?\.currency \?\? "usd",\s*\}\);\s*\}\s*\}\s*$/, "END of the webhook route not read");
-  assert.match(src, /if \(sub && isActiveStatus\(sub\.status\) && sub\.status !== "trialing"\) \{/);
-  assert.match(src, /months: tenureMonths\(paid, sub\.trial_end != null\),/);
+  assert.match(src, /export const syncSubscriptionState = bound\.syncSubscription;\s*$/, "END of subscriptionSync.ts not read");
+  assert.match(src, /months: tenureMonths\(count, sub\.trial_end != null\)/);
+  const guard = stripComments(readFileSync(join(import.meta.dirname, "subRenewal.ts"), "utf8"));
+  assert.match(guard, /if \(!\(inv\.amount_paid > 0\)\) return null;/);
 });
 
 // ─── Security review 2026-10-22: a trial is not a payment ─────────────────────────────────────────
@@ -148,7 +151,7 @@ test("the reconciler settles every Stripe subscription before it is observed or 
   const raw = readFileSync(join(import.meta.dirname, "subscriptionSync.ts"), "utf8");
   const src = stripComments(raw);
   assert.match(src, /export const syncSubscriptionState = bound\.syncSubscription;\s*$/, "END of subscriptionSync.ts not read");
-  assert.match(src, /async function settle\(sub: Stripe\.Subscription\): Promise<Stripe\.Subscription> \{[\s\S]*?needsPaymentHistory\(sub\)[\s\S]*?invoices\.list\(\{ subscription: sub\.id, status: "paid", limit: 100 \}\)[\s\S]*?settleNeverPaid\(sub, /);
+  assert.match(src, /async function settle\(sub: Stripe\.Subscription\): Promise<Stripe\.Subscription> \{[\s\S]*?needsPaymentHistory\(s\)[\s\S]*?invoices\.list\(\{ subscription: s\.id, status: "paid", limit: 100 \}\)[\s\S]*?settleNeverPaid\(s, /);
   assert.match(src, /const all = await Promise\.all\(\(await viewerSubscriptions\(client, matrixId, eventCustomer\)\)\.map\(settle\)\);/);
   assert.match(src, /const sub = countsForViewer\(all\) \?\? \(await settle\(await deps\.stripe\(\)\.subscriptions\.retrieve\(ref\.id\)\)\);/);
   assert.match(src, /observations\.push\(stripeObservation\(await settle\(await deps\.stripe\(\)\.subscriptions\.retrieve\(id\)\), stamp\)\);/);

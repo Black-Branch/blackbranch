@@ -42,7 +42,13 @@ function RailTab<K extends string>({ t, props, parent }: { t: TabItem<K>; props:
       data-depth={t.depth ? String(t.depth) : undefined} data-parent={parent ? "" : undefined}>
       {t.icon && <span className="chrome-rail-icon" aria-hidden="true">{t.icon}</span>}
       <span className="chrome-tab-label" data-l={t.label}><span>{t.label}</span></span>
-      {parent && <span className="chrome-rail-sub" aria-hidden="true">›</span>}
+      {!!t.count && t.count > 0 && (
+        <span className="chrome-rail-count" data-count={t.count}>
+          <span aria-hidden="true">{t.count > 99 ? "99+" : t.count}</span>
+          <span className="sr-only">, {t.count} waiting</span>
+        </span>
+      )}
+      {parent &&<span className="chrome-rail-sub" aria-hidden="true">›</span>}
     </button>
   );
 }

@@ -49,9 +49,20 @@ const CORE_FACTS = [
   'Voting on chat messages: a signed-in viewer can upvote (▲) or downvote (▼) anyone else\'s chat message; their own messages cannot be voted on. On a laptop or desktop, point at a message and the vote buttons appear at its top right. On a phone or tablet, press and hold a message and the same buttons appear. Forum posts show their vote arrows on the post itself.',
 ];
 
-/** Is a module switched on, by this process's settings layer? An unknown key is off. */
-function moduleOn(cfg, id) {
-  try { return cfg.get(`modules.${id}`) === true; } catch { return false; }
+/** Is a module on, as the process that serves it runs it (config/modules.mjs, ONE RULE — web's
+ *  twin is app/lib/moduleRunning.ts)? stream-api applies its modules' switches at its start, so
+ *  for those this reads what stream-api RUNS (GET /config `self`); a module only web or this
+ *  process serves goes by the saved switch, as does any module while stream-api has not said.
+ *  An unknown key is off. */
+function moduleOn(cfg, m) {
+  const key = `modules.${m.id}`;
+  let saved = false;
+  try { saved = cfg.get(key) === true; } catch { /* an unknown key is off */ }
+  const pkg = m.packages.includes('stream-api') ? 'stream-api' : (m.packages.find((p) => p !== 'web') ?? 'web');
+  if (pkg === 'web' || pkg === 'stream-ingest') return saved;
+  const snap = typeof cfg.serving === 'function' ? cfg.serving() : null;
+  const shown = pkg === 'stream-api' ? snap?.self?.[key]?.display : snap?.reports?.[pkg]?.keys?.[key]?.display;
+  return typeof shown === 'boolean' ? shown : saved;
 }
 
 /**
@@ -64,7 +75,7 @@ export function siteFacts(cfg = instanceConfig, modules = MODULES) {
   const hasNot = [];
   for (const m of modules) {
     if (!m.helpdesk) continue;
-    if (moduleOn(cfg, m.id)) has.push(m.helpdesk.on);
+    if (moduleOn(cfg, m)) has.push(m.helpdesk.on);
     else if (m.helpdesk.off) hasNot.push(m.helpdesk.off);
   }
   return [...has, ...hasNot].map((f) => `- ${f}`).join('\n');

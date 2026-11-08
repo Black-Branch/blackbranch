@@ -16,6 +16,7 @@ import pool from "@/lib/db";
 import { packSecret, unpackSecret } from "./atprotoSecretStore";
 import { installValue } from "./installValues.ts";
 import { siteName } from "./siteName.ts";
+import { atprotoFetch } from "./atprotoFetch.ts";
 
 // The client_id is a URL on this site, so it is the site's own origin (install key site.origin).
 const BASE_URL = installValue("site.origin");
@@ -97,6 +98,9 @@ export function getAtprotoClient(): Promise<NodeOAuthClient> {
         handleResolver: "https://bsky.social",
         stateStore,
         sessionStore,
+        // Every request (handle, DID, metadata, token, PDS) goes to servers a user can name: size-capped,
+        // https only, no private addresses (atprotoFetch.ts).
+        fetch: atprotoFetch,
       });
     })().catch((e) => {
       // Don't cache the rejection — a transient/bad-config failure would

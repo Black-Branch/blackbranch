@@ -13,6 +13,11 @@ export async function register() {
     // written by the server, for the per-address rate limits (rateLimit.ts ipKey, ipKeyPeer.ts).
     const { installPeerStamp } = await import("@/app/lib/ipKeyPeer");
     installPeerStamp();
+    // Next's stop waits for every socket that was busy at the signal, and the tunnel keeps reusing
+    // one — so a stop under load never finished and systemd killed the site at 90 s (O01). From the
+    // signal on, each response closes its connection; anything still open is let go at a deadline.
+    const { installStopDrain } = await import("@/app/lib/stopDrain");
+    installStopDrain();
     // The install values FIRST: the site's name, origins, Matrix client and the rest are read from
     // this process's environment here, once, before any module that shows them runs —
     // app/lib/installValues.ts says why nothing is built in. A required one missing or a
@@ -60,6 +65,10 @@ export async function register() {
       .catch((e) => console.error(`[store-prices] seed check failed: ${e instanceof Error ? e.message : String(e)}`));
     const { startGiftExpirySweep } = await import("@/app/lib/giftServer");
     startGiftExpirySweep();
+    // "Delete my account": a Matrix account the erase could not deactivate at the time is retried
+    // at boot and hourly until it lands; the Doctor counts what still waits (matrixEraseRetry.ts).
+    const { startMatrixEraseRetry } = await import("@/app/lib/matrixEraseRetry");
+    startMatrixEraseRetry();
     // PayPal subscriptions (S3): every 6 h, re-read the records whose access runs out soon, so a
     // CANCELLED/EXPIRED webhook lost for good cannot leave access open.
     const { startPaypalRecheck } = await import("@/app/lib/subscriptions/paypal");
@@ -79,5 +88,9 @@ export async function register() {
     // whose reports never reach the route's every-50th prune: once a day, from a minute after boot.
     const { startClientErrorPrune } = await import("@/app/lib/clientErrorPrune");
     startClientErrorPrune();
+    // The community slot: which community streamers are live, read in the background from boot and
+    // every 3 min; the status loader, the chat send and the heartbeat read it from memory.
+    const { startCommunityRefresher } = await import("@/app/lib/communityLive");
+    startCommunityRefresher();
   }
 }

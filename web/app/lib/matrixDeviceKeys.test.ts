@@ -6,6 +6,10 @@ import { stripComments } from "./testSource.ts";
 import {
   fetchServerDeviceKeys,
   ownDeviceKeyState,
+  bootKeyVerdict,
+  readKeysOnServer,
+  markKeysOnServer,
+  forgetKeysOnServer,
   verifyFailureMessage,
   diagnoseVerifyFailure,
   FRESH_DEVICE_ACTION,
@@ -53,6 +57,71 @@ const serverCopy = (ed25519: string, signedBy: string | null = null) => ({
 test("no server entry → absent (a device that never uploaded is not a mismatch)", () => {
   assert.equal(ownDeviceKeyState({ ed25519: "A" }, null, DEVICE), "absent");
   assert.equal(ownDeviceKeyState({ ed25519: "A" }, { keys: {} }, DEVICE), "absent");
+});
+
+/** localStorage in memory; `failWrites` makes setItem throw (a full or blocked storage). */
+function memStorage(failWrites = false) {
+  const m = new Map<string, string>();
+  return {
+    m,
+    getItem: (k: string) => m.get(k) ?? null,
+    setItem: (k: string, v: string) => { if (failWrites) throw new Error("QuotaExceededError"); m.set(k, v); },
+    removeItem: (k: string) => { m.delete(k); },
+  };
+}
+const PREFIX = "mx-rust-_casey_site_test-webDEVICE0001";
+
+test("a new device reloaded before its first sync keeps its store and stays signed in", () => {
+  // The store was made on the last boot, the first /sync never answered: the server has no keys
+  // yet, and this device was never seen holding them there.
+  const s = memStorage();
+  assert.equal(bootKeyVerdict({ hadStore: true, keysOnServer: readKeysOnServer(s, PREFIX) }, "absent"), "keep");
+});
+
+test("a kept store whose device was removed upstream (its keys WERE on the server) is still discarded", () => {
+  const s = memStorage();
+  markKeysOnServer(s, PREFIX);
+  assert.equal(bootKeyVerdict({ hadStore: true, keysOnServer: readKeysOnServer(s, PREFIX) }, "absent"), "discard");
+  // Mismatch is discarded whatever the mark; a match keeps; a store made on this boot keeps on absent.
+  assert.equal(bootKeyVerdict({ hadStore: false, keysOnServer: false }, "mismatch"), "discard");
+  assert.equal(bootKeyVerdict({ hadStore: true, keysOnServer: true }, "match"), "keep");
+  assert.equal(bootKeyVerdict({ hadStore: false, keysOnServer: true }, "absent"), "keep", "a mark without the store is not this store's");
+});
+
+test("the mark: per device (keyed like the store), survives a restart, and a failed write is retried at the next match", () => {
+  const s = memStorage();
+  markKeysOnServer(s, PREFIX);
+  assert.equal(readKeysOnServer(s, PREFIX), true);
+  assert.equal(readKeysOnServer(s, "mx-rust-_casey_site_test-webOTHERDEV1"), false, "another device's store is not marked");
+  // Restart: a new module instance reads what the last boot wrote.
+  assert.equal(readKeysOnServer({ getItem: (k: string) => s.m.get(k) ?? null }, PREFIX), true);
+  // Retry: a write that throws never breaks the boot, and the next match writes it.
+  const full = memStorage(true);
+  assert.doesNotThrow(() => markKeysOnServer(full, PREFIX));
+  assert.equal(readKeysOnServer(full, PREFIX), false);
+  const later = memStorage();
+  markKeysOnServer(later, PREFIX);
+  assert.equal(readKeysOnServer(later, PREFIX), true);
+  // A storage that cannot be read reads as "not marked" (keep), never as a reason to discard.
+  assert.equal(readKeysOnServer({ getItem: () => { throw new Error("SecurityError"); } }, PREFIX), false);
+  // Forgotten with its store.
+  forgetKeysOnServer(s, PREFIX);
+  assert.equal(readKeysOnServer(s, PREFIX), false);
+});
+
+test("setupCrypto: hadStore before the store opens; the verdict reads the mark; a match writes it; so does the first sync's check", () => {
+  const raw = readFileSync(join(import.meta.dirname, "MatrixClientContext.tsx"), "utf8");
+  const src = stripComments(raw);
+  const setup = src.slice(src.indexOf("async function setupCrypto("), src.indexOf("export function MatrixClientProvider"));
+  const had = setup.indexOf("const hadStore =");
+  const init = setup.indexOf("await mxClient.initRustCrypto(");
+  assert.ok(had > 0 && init > had, "hadStore must be read before the store is opened (opening it creates it)");
+  assert.match(setup, /const state = ownDeviceKeyState\(local, server, deviceId\);\s*if \(state === "match"\) markKeysOnServer\(localStorage, prefix\);\s*if \(bootKeyVerdict\(\{ hadStore, keysOnServer: readKeysOnServer\(localStorage, prefix\) \}, state\) === "discard"\) \{/);
+  // After the first sync the device's keys are checked on the server once, and marked when there.
+  assert.match(src, /void markWhenKeysOnServer\(mxClient, userId, deviceId\);/);
+  const fn = src.slice(src.indexOf("async function markWhenKeysOnServer("), src.indexOf("\n}\n", src.indexOf("async function markWhenKeysOnServer(")));
+  assert.match(fn, /ownDeviceKeyState\(local, server, deviceId\) === "match"\) markKeysOnServer\(localStorage, cryptoStorePrefix\(userId, deviceId\)\)/);
+  assert.match(src, /export function MatrixClientProvider/, "vacuity: the scan reached past setupCrypto");
 });
 
 test("same ed25519 key → match; a different one → mismatch", () => {

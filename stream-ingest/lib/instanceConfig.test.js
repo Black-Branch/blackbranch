@@ -16,7 +16,8 @@ function stubApi({ values = {}, secrets = {}, content = {}, fail = false } = {})
     calls.push({ url: String(url), method: init.method || 'GET', headers: init.headers, body: init.body ? JSON.parse(init.body) : null });
     if (fail) return { ok: false, status: 503, json: async () => ({}) };
     if (String(url).startsWith('https://api.anthropic.com/')) return { ok: true, status: 200, json: async () => ({ data: [{}, {}] }) };
-    if (String(url).endsWith('/config')) return { ok: true, status: 200, json: async () => ({ values }) };
+    // A copy, as a real HTTP body is: a test that changes `values` is seen only after a re-read.
+    if (String(url).endsWith('/config')) return { ok: true, status: 200, json: async () => ({ values: { ...values } }) };
     if (String(url).includes('/config/secrets?package=stream-ingest')) return { ok: true, status: 200, json: async () => ({ values: secrets }) };
     if (String(url).endsWith('/content')) return { ok: true, status: 200, json: async () => ({ content }) };
     if (String(url).endsWith('/config/report')) return { ok: true, status: 200, json: async () => ({ ok: true }) };
@@ -67,6 +68,21 @@ test('config_changed for one of OUR keys re-reads and re-reports; someone else\'
   await cfg.handleFrame({ type: 'config_changed', keys: ['bot.matrixId'] });
   assert.equal(cfg.get('bot.matrixId'), '@bot:example.tv');
   assert.ok(api.calls.some((c) => c.url.endsWith('/config/report') && c.body.package === 'stream-ingest'));
+});
+
+test('a module switch stream-ingest reads (stripe, paypal) is re-read on its config_changed frame', async () => {
+  // !dono and the help desk read modules.stripe / modules.paypal every turn, though the manifests
+  // name only web as their package; the frame for the switch must still re-read here.
+  for (const key of ['modules.stripe', 'modules.paypal']) {
+    const values = { [key]: true };
+    const api = stubApi({ values });
+    const cfg = createInstanceConfig({ env: BASE, fetchImpl: api, log: quiet });
+    await cfg.load();
+    assert.equal(cfg.get(key), true);
+    values[key] = false;
+    await cfg.handleFrame({ type: 'config_changed', keys: [key] });
+    assert.equal(cfg.get(key), false, `${key}: the frame re-reads the switch`);
+  }
 });
 
 test('config_test runs the provider check HERE with this process\'s value and reports the nonce', async () => {
@@ -220,7 +236,9 @@ test('config_ai_probe op embed: the memory panel\'s probe runs HERE on a candida
   assert.deepEqual(replies, [['e-1', 3072], ['e-2', 1536]]);
 });
 
-test('a restart-applied key is reported as the first load took it — what this process runs — until the restart', async () => {
+test('the YouTube switch applies live: the report shows the saved value on the next load, never a pending restart', async () => {
+  // The platform starter reconciles on every settings load (lib/platformStarter.js), so the switch
+  // is reload: 'live' (config/modules.mjs appliesLive) and nothing here waits for a restart.
   const values = { 'modules.youtube': false };
   const api = stubApi({ values });
   const cfg = createInstanceConfig({ env: BASE, fetchImpl: api, log: quiet });
@@ -229,18 +247,29 @@ test('a restart-applied key is reported as the first load took it — what this 
   values['modules.youtube'] = true;
   await cfg.load();
   assert.equal(cfg.get('modules.youtube'), true, 'the layer holds the saved value');
-  assert.equal(cfg.statusReport()['modules.youtube'].display, false, 'the report says the old value still runs');
+  assert.equal(cfg.statusReport()['modules.youtube'].display, true, 'the report says what now runs');
 });
 
-test('a channel key applies live: the report shows the new value as soon as it is saved, and markApplied leaves it', async () => {
+test('a channel key applies live: the report shows the new value as soon as it is saved', async () => {
   // platform.* keys are reload: 'live' since the starter reconciles on every settings load, so
-  // nothing is ever "pending restart" for them; markApplied is for keys that still are.
+  // nothing is ever "pending restart" for them.
   const values = { 'platform.kick.slug': 'casey-old' };
   const cfg = createInstanceConfig({ env: BASE, fetchImpl: stubApi({ values }), log: quiet });
   await cfg.load();
   values['platform.kick.slug'] = 'casey-new';
   await cfg.load();
   assert.equal(cfg.statusReport()['platform.kick.slug'].display, 'casey-new', 'live: no pending state');
-  cfg.markApplied(['platform.kick.slug', 'site.origin', 'no.such.key']);
+});
+
+test('no boot-value snapshot: every key this process reads reports its current value, and nothing marks keys applied', async () => {
+  // stream-ingest has no Admin Panel setting that waits for its restart (the YouTube switch and the
+  // channels apply on the settings load), so there is no "value as of the last restart" to keep.
+  const values = { 'modules.youtube': false, 'platform.kick.slug': 'casey-old' };
+  const cfg = createInstanceConfig({ env: BASE, fetchImpl: stubApi({ values }), log: quiet });
+  await cfg.load();
+  values['modules.youtube'] = true; values['platform.kick.slug'] = 'casey-new';
+  await cfg.load();
+  assert.equal(cfg.statusReport()['modules.youtube'].display, true);
   assert.equal(cfg.statusReport()['platform.kick.slug'].display, 'casey-new');
+  assert.equal('markApplied' in cfg, false, 'the restart-snapshot machinery is gone');
 });

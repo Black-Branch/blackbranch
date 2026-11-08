@@ -5,17 +5,20 @@ import type { DmPerson } from "./bus.ts";
 /** The longest announcement — stream-api's /chat/announce holds the same limit. */
 export const ANNOUNCE_MAX = 300;
 
-export type ResolveResult = { ok: true; people: DmPerson[] } | { ok: false; reason: "signin" | "banned" | "failed" };
+/** `exact`: the name was typed in full (a username, a full id or a display name), so one answer may
+ *  open without asking; a near match always goes through the picker. */
+export type ResolveResult = { ok: true; people: DmPerson[]; exact: boolean } | { ok: false; reason: "signin" | "banned" | "failed" };
 
-/** A typed name → the site accounts it can mean (exact matches first; empty = nobody). */
+/** A typed name → the site accounts it can mean: every account, by username or display name,
+ *  anywhere in either (lib/dm/resolvePeople.ts); exact matches first; empty = nobody. */
 export async function resolveDmName(name: string): Promise<ResolveResult> {
   try {
     const res = await fetch(`/api/dm/resolve?q=${encodeURIComponent(name.trim())}`);
     if (res.status === 401) return { ok: false, reason: "signin" };
     if (res.status === 403) return { ok: false, reason: "banned" };
     if (!res.ok) return { ok: false, reason: "failed" };
-    const d = (await res.json()) as { people?: DmPerson[] };
-    return { ok: true, people: Array.isArray(d.people) ? d.people : [] };
+    const d = (await res.json()) as { people?: DmPerson[]; exact?: unknown };
+    return { ok: true, people: Array.isArray(d.people) ? d.people : [], exact: d.exact === true };
   } catch {
     return { ok: false, reason: "failed" };
   }

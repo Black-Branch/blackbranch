@@ -40,7 +40,7 @@ const OTHER = keyPair();
 const IMAGES = {
   postgres: `pgvector/pgvector:pg18@${D("1")}`, synapse: `ghcr.io/element-hq/synapse:v1.162.0@${D("2")}`,
   mas: `ghcr.io/element-hq/matrix-authentication-service:1.26.0@${D("3")}`, caddy: `caddy:2.10.2-alpine@${D("4")}`,
-  cloudflared: `cloudflare/cloudflared:2025.9.1@${D("5")}`, "mautrix-discord": `dock.mau.dev/mautrix/discord:v0.7.7@${D("6")}`,
+  cloudflared: `cloudflare/cloudflared:2025.9.1@${D("5")}`,
   restic: `restic/restic:0.19.1@${D("7")}`, node: `node:26.11.1-trixie-slim@${D("8")}`, dockerfile: `docker/dockerfile:1@${D("9")}`,
   // The site's prebuilt image: a test registry's repository, tagged with the release.
   web: `localhost/blackbranch/web:1.2.0@${D("a")}`,
@@ -179,7 +179,8 @@ test("the release tool cuts a reproducible tarball in the public cut's shape, pi
     assert.equal(opened.ok, true, opened.reason);
     assert.equal(opened.manifest.source.sha256, createHash("sha256").update(tar(out1)).digest("hex"));
     assert.equal(opened.manifest.source.size, tar(out1).length);
-    assert.deepEqual(opened.manifest.images, IMAGES);
+    // The bridge's old name rides along as the node image: a 0.1.0-preview box's verifier requires it.
+    assert.deepEqual(opened.manifest.images, { ...IMAGES, "mautrix-discord": IMAGES.node });
     const names = execFileSync("tar", ["-tzf", path.join(out1, "blackbranch-1.2.0.tar.gz")], { encoding: "utf8" }).split("\n").filter(Boolean);
     assert.ok(names.every((n) => n.startsWith("blackbranch-1.2.0/")), "one top folder");
     assert.ok(names.includes("blackbranch-1.2.0/RELEASE") && names.includes("blackbranch-1.2.0/install/update/release.mjs"));
@@ -189,9 +190,30 @@ test("the release tool cuts a reproducible tarball in the public cut's shape, pi
     execFileSync("tar", ["-xzf", path.join(out1, "blackbranch-1.2.0.tar.gz"), "-C", x, "--strip-components=1"]);
     assert.equal(readFileSync(path.join(x, "RELEASE"), "utf8"), "1.2.0\n");
     assert.deepEqual(pinProblems(readFileSync(path.join(x, "install/compose.yaml"), "utf8"), readFileSync(path.join(x, "install/Dockerfile"), "utf8"), IMAGES), []);
+    assert.ok(names.includes("blackbranch-1.2.0/install/ooye/Dockerfile") && names.includes("blackbranch-1.2.0/install/ooye/entrypoint.js"), "the bridge's source ships");
     // A digest the registry (here: the table) does not give is a refusal, not an unpinned release.
     const bad = spawnSync(process.execPath, [path.join(root, "tools/release.mjs"), "cut", "--version", "1.2.1", "--channel", "stable", "--key", "/nonexistent", "--out", out1, "--tree", tree], { encoding: "utf8" });
     assert.notEqual(bad.status, 0);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
+// A box on 0.1.0-preview.1 to .4 updates with ITS verifier (unchanged since then: the same
+// manifestProblems and pinProblems), whose name list still had mautrix-discord. A release that drops
+// a name must still write it, as an image its files use, or every such box refuses every update.
+test("retry from an older box: a release without mautrix-discord still carries every name a 0.1.0-preview verifier requires, each one its files use", () => {
+  const PREVIEW_NAMES = ["postgres", "synapse", "mas", "caddy", "cloudflared", "mautrix-discord", "restic", "node", "dockerfile", "web"];
+  const work = mkdtempSync(path.join(tmpdir(), "bb-legacy-"));
+  try {
+    const out = path.join(work, "o");
+    cut(miniTree(path.join(work, "tree")), out, "1.2.0");
+    const m = openFeed(readFileSync(path.join(out, "stable.json"), "utf8"), KEY.pub).manifest;
+    for (const k of PREVIEW_NAMES) assert.ok(typeof m.images[k] === "string", `the manifest has ${k}`);
+    assert.equal(m.images["mautrix-discord"], m.images.node);
+    const x = path.join(work, "x"); mkdirSync(x);
+    execFileSync("tar", ["-xzf", path.join(out, "blackbranch-1.2.0.tar.gz"), "-C", x, "--strip-components=1"]);
+    // What the older box runs on the new release's files (`release.mjs pins` with every manifest image).
+    assert.deepEqual(pinProblems(readFileSync(path.join(x, "install/compose.yaml"), "utf8"), readFileSync(path.join(x, "install/Dockerfile"), "utf8"), m.images), []);
+    assert.deepEqual(manifestProblems(m), []);
   } finally { rmSync(work, { recursive: true, force: true }); }
 });
 
@@ -527,13 +549,13 @@ test("an update, in order: fetched and checked, .env migrated on a copy, built, 
     writeFileSync(path.join(b.home, "releases/1.0.0/MANIFEST.json"), JSON.stringify({ images: { caddy: `caddy:2.9.0-alpine@${D("e")}` } }));
     // 1.2.0 renames a key with a migration (and its .env.example says so).
     const example = read(".env.example").replace(/^LEGAL_OPERATOR=/m, "LEGAL_OPERATOR_NAME=");
-    b.publish("1.2.0", { envExample: example, migrations: { "005-legal-operator-name.sh": '#!/usr/bin/env bash\n. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"\nenvm_rename LEGAL_OPERATOR LEGAL_OPERATOR_NAME\n' } });
+    b.publish("1.2.0", { envExample: example, migrations: { "008-legal-operator-name.sh": '#!/usr/bin/env bash\n. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"\nenvm_rename LEGAL_OPERATOR LEGAL_OPERATOR_NAME\n' } });
     const before = b.env();
     const r = await b.run(["update", "--apply", "1.2.0"]);
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
     assert.equal(b.release(), "releases/1.2.0");
     const env = b.env();
-    assert.match(env, /^BB_RELEASE="?1\.2\.0"?$/m); assert.match(env, /^BB_ENV_VERSION="?5"?$/m);
+    assert.match(env, /^BB_RELEASE="?1\.2\.0"?$/m); assert.match(env, /^BB_ENV_VERSION="?8"?$/m);
     assert.match(env, /^LEGAL_OPERATOR_NAME=/m); assert.doesNotMatch(env, /^LEGAL_OPERATOR=/m);
     assert.equal(env.match(/^BB_RELEASE_KEY=.*$/m)[0], before.match(/^BB_RELEASE_KEY=.*$/m)[0], "the key is never changed by an update");
     assert.equal(readFileSync(path.join(b.home, "releases/1.2.0/RELEASE"), "utf8"), "1.2.0\n");
@@ -575,7 +597,7 @@ test("a release that fails its health check: the box goes back to the previous r
   const b = await box();
   try {
     const example = read(".env.example").replace(/^LEGAL_OPERATOR=/m, "LEGAL_OPERATOR_NAME=");
-    b.publish("1.2.0", { envExample: example, migrations: { "005-x.sh": '#!/usr/bin/env bash\n. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"\nenvm_rename LEGAL_OPERATOR LEGAL_OPERATOR_NAME\n' } });
+    b.publish("1.2.0", { envExample: example, migrations: { "008-x.sh": '#!/usr/bin/env bash\n. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"\nenvm_rename LEGAL_OPERATOR LEGAL_OPERATOR_NAME\n' } });
     writeFileSync(path.join(b.fake, "health-1.2.0"), "1");
     const before = b.env();
     const r = await b.run(["update", "--apply", "1.2.0"]);

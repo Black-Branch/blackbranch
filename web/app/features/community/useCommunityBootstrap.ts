@@ -5,6 +5,8 @@ import { ClientEvent, RoomEvent, RoomMemberEvent } from "matrix-js-sdk";
 import type { Room, MatrixClient } from "matrix-js-sdk";
 import { findRoomByAlias, COMMUNITY_HUB_ALIAS, GENERAL_ALIAS } from "@/app/lib/matrixRooms";
 import { matrixServerName } from "@/app/lib/matrixConfig";
+import { joinCommunity } from "@/app/lib/communityJoin";
+import { fetchCommunityAnswer } from "@/app/lib/communityAnswer";
 
 // Returns the PREVIOUS array when it holds exactly the same rooms in the same
 // order, so React bails out instead of reconciling. Order-sensitive on purpose:
@@ -20,8 +22,8 @@ function keepIfUnchanged(prev: Room[], next: Room[]): Room[] {
 // the pending invites (rooms in `invite` membership — DM invites especially,
 // which are invisible without this: the recipient must accept before any
 // encrypted message can flow).
-// On first ready it silently joins the Community Hub space + its whole tree
-// (membership, in the BACKGROUND) and — only when the caller has no remembered
+// On first ready it silently joins the Community Hub space + the rooms of its tree
+// the member may join (membership, in the BACKGROUND) and — only when the caller has no remembered
 // space to restore (`landDefaultRoom`) — lands the timeline on General via
 // `onLandingRoom`. Landing is decoupled from the hierarchy join so the timeline
 // appears as soon as General is reachable (usually already in local cache),
@@ -85,48 +87,21 @@ export function useCommunityBootstrap({
   }, [client, status]);
 
   // Membership (BACKGROUND): ensure we're in the Community Hub space and auto-join
-  // its whole tree (sub-spaces + channels, recursively) so every member sees the
-  // full community — including the forum — without hunting for rooms. This is the
+  // the rooms of its tree this member may join (sub-spaces + channels, recursively)
+  // so they see the community — including the forum — without hunting for rooms. This is the
   // slow part (getRoomHierarchy + N joins) and is intentionally NOT awaited by the
   // landing effect below, so it never delays the timeline appearing.
   useEffect(() => {
     if (status !== "ready" || !client || membershipDoneRef.current) return;
     membershipDoneRef.current = true;
     void (async () => {
-      let hub = findRoomByAlias(client.getRooms(), COMMUNITY_HUB_ALIAS);
-      if (!hub) {
-        try {
-          const joined = await client.joinRoom(COMMUNITY_HUB_ALIAS);
-          hub = typeof joined === "string" ? client.getRoom(joined) : joined;
-        } catch (e) {
-          console.warn("[Matrix] could not join community hub:", e);
-        }
-      }
-      if (!hub) return;
-      try {
-        const hier = await client.getRoomHierarchy(hub.roomId, 100, 5);
-        const entries: Array<{ room_id: string; children_state?: Array<{ state_key: string; content?: { via?: string[] } }> }> =
-          hier?.rooms ?? [];
-        // Map each child room id → its via servers (from parent m.space.child).
-        const viaFor = new Map<string, string[]>();
-        for (const e of entries) {
-          for (const cs of e.children_state ?? []) {
-            if (cs.state_key && cs.content?.via?.length) viaFor.set(cs.state_key, cs.content.via);
-          }
-        }
-        await Promise.all(
-          entries
-            .filter((e) => e.room_id && e.room_id !== hub!.roomId)
-            .filter((e) => client.getRoom(e.room_id)?.getMyMembership() !== "join")
-            .map((e) =>
-              client
-                .joinRoom(e.room_id, { viaServers: viaFor.get(e.room_id) ?? [matrixServerName()] })
-                .catch((err: unknown) => console.warn("[Matrix] auto-join failed", e.room_id, err))
-            )
-        );
-      } catch (e) {
-        console.warn("[Matrix] hub hierarchy auto-join failed:", e);
-      }
+      // The hub is the room the server names (matrix.rooms.hub); the alias is the fallback for a
+      // server that names none. Which children are joined: communityJoin.ts.
+      await joinCommunity(client, {
+        hubRoomId: (await fetchCommunityAnswer())?.hubRoomId ?? null,
+        hubAlias: COMMUNITY_HUB_ALIAS,
+        serverName: matrixServerName(),
+      });
     })();
   }, [status, client]);
 

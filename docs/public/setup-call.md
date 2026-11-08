@@ -40,7 +40,7 @@ never takes a copy of any of them.
 6. [ ] Your site, Points: their words, their legal details (who runs the site, a contact address),
        their time zone from the list, and the site icon if they have one.
 7. [ ] Modules: switch on only what they will use today; everything can be added later. OBS is set
-       up after setup, in Admin Panel → Utility → OBS and → Overlays.
+       up after setup, in Admin Panel → Utility → OBS, cards The rig page and Overlays.
 8. [ ] Each platform and payment page: open the provider's page from the link on the setup page, paste
        the values it shows, fill the fields, press **Check** on each value until it passes. Stripe: make the
        **restricted** key with exactly the listed permissions, never the full secret key. Behind

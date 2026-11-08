@@ -1,5 +1,6 @@
 // WHO a mod action lands on, for the privilege ceiling (modCeiling.ts), when the route is handed a
-// thing rather than a person: a chat line (delete), a report (resolve), a suspicious mark (clear).
+// thing rather than a person: a chat line (delete), a report (resolve), a suspicious mark (clear),
+// a held line (automod resolve).
 // Each answers the person the ceiling checks — a matrix id, or a canonical id it resolves itself —
 // or null when the thing names nobody (an unknown id: there is nothing to act on).
 //
@@ -15,6 +16,7 @@ export type TargetQuery = (sql: string, params: unknown[]) => Promise<{ rows: Re
 
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
 const NUMERIC = /^[0-9]{1,18}$/;
+const CANONICAL = /^[0-9a-f]{12}$/;
 
 /** A chat line's id as the request gave it, normalised ONCE: a string of 1–18 digits, or a safe
  *  non-negative integer, as that digit string. Anything else (" 12", "12abc", 12.5, an object) is
@@ -73,18 +75,58 @@ export async function reportsForViewer<T extends ReportRow>(
   rows: T[], viewer: { id: string; admin: boolean }, query: TargetQuery,
 ): Promise<T[]> {
   if (viewer.admin) return rows;
-  const mine = new Map<string, boolean>();
+  const about = aboutViewer(viewer.id, query);
   const out: T[] = [];
   for (const r of rows) {
-    if (r.reported_id === viewer.id) continue;
-    const canon = str(r.reported_canonical_id);
-    if (canon) {
-      if (!mine.has(canon)) {
-        mine.set(canon, (await linkedMatrixIds(canon, query as LinkQuery)).includes(viewer.id));
-      }
-      if (mine.get(canon)) continue;
-    }
+    if (await about(r.reported_id, r.reported_canonical_id)) continue;
     out.push({ ...r, reporter: REPORTER_FOR_MODS });
   }
   return out;
+}
+
+/** The same rule for suspicious marks (GET /api/mod/marks): a mod never sees a mark ON themselves —
+ *  by their account or a platform identity linked to it — or its evidence; an admin sees all.
+ *  Throws on a failed identity read, like reportsForViewer. */
+export async function marksForViewer<T extends { matrixId: string | null; canonicalId: string | null }>(
+  rows: T[], viewer: { id: string; admin: boolean }, query: TargetQuery,
+): Promise<T[]> {
+  if (viewer.admin) return rows;
+  const about = aboutViewer(viewer.id, query);
+  const out: T[] = [];
+  for (const r of rows) if (!(await about(r.matrixId, r.canonicalId))) out.push(r);
+  return out;
+}
+
+/** Is a case (by its account, else its canonical) about this viewer? One answer per canonical. */
+function aboutViewer(viewerId: string, query: TargetQuery): (account: unknown, canonical: unknown) => Promise<boolean> {
+  const mine = new Map<string, boolean>();
+  return async (account, canonical) => {
+    if (account === viewerId) return true;
+    const canon = str(canonical);
+    if (!canon) return false;
+    if (!mine.has(canon)) mine.set(canon, (await linkedMatrixIds(canon, query as LinkQuery)).includes(viewerId));
+    return mine.get(canon) === true;
+  };
+}
+
+/** Who a held line (site.automod_held) is by: the site account it was held for; for a Twitch AutoMod
+ *  hold, the site line it is a cross-posted copy of, else the Twitch account's canonical; for our own
+ *  platform holds, the canonical the row recorded. null = the row names nobody resolvable (an
+ *  unknown row, or a Twitch chatter who never chatted here). */
+export async function heldLineSubject(rowId: number, query: TargetQuery): Promise<string | null> {
+  const { rows } = await query(
+    `SELECT h.source, h.matrix_id, h.user_id, m.matrix_id AS copy_of
+       FROM site.automod_held h LEFT JOIN site.chat_messages m ON m.id = h.site_msg_id
+      WHERE h.id = $1`, [rowId]);
+  const r = rows[0];
+  if (!r) return null;
+  const direct = str(r.matrix_id) ?? str(r.copy_of);
+  if (direct) return direct;
+  const uid = str(r.user_id);
+  if (!uid) return null;
+  if (r.source === "twitch") {
+    const { rows: l } = await query(`SELECT canonical FROM stream.links WHERE platform = 'twitch' AND platform_id = $1`, [uid]);
+    return str(l[0]?.canonical);
+  }
+  return CANONICAL.test(uid) ? uid : null;
 }

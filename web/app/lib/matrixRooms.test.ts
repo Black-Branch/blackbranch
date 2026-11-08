@@ -15,15 +15,22 @@ import { buildSpaceNode, getSpaceChildren, allChannelsInNode, isForumRoom } from
 type Ev = { getStateKey: () => string; getContent: () => { via?: unknown } };
 
 /** Duck-typed stand-in for the SDK's Room — only the surface these helpers touch. */
-function room(roomId: string, opts: { space?: boolean; children?: string[]; parents?: string[]; noVia?: boolean } = {}) {
+function room(roomId: string, opts: { space?: boolean; children?: string[]; parents?: string[]; noVia?: boolean; name?: string; order?: Record<string, unknown> } = {}) {
   const mk = (ids: string[]): Ev[] =>
-    ids.map((id) => ({ getStateKey: () => id, getContent: () => (opts.noVia ? {} : { via: ["site.test"] }) }));
+    ids.map((id) => ({
+      getStateKey: () => id,
+      getContent: () => (opts.noVia ? {} : { via: ["site.test"], ...(opts.order && id in opts.order ? { order: opts.order[id] } : {}) }),
+    }));
   return {
     roomId,
+    name: opts.name ?? roomId,
     getType: () => (opts.space ? "m.space" : null),
     currentState: {
-      getStateEvents: (type: string) =>
-        type === "m.space.child" ? mk(opts.children ?? []) : type === "m.space.parent" ? mk(opts.parents ?? []) : [],
+      // The SDK's shape: no key → every event of the type; a key → that one event or null.
+      getStateEvents: (type: string, key?: string) => {
+        const list = type === "m.space.child" ? mk(opts.children ?? []) : type === "m.space.parent" ? mk(opts.parents ?? []) : [];
+        return key === undefined ? list : list.find((e) => e.getStateKey() === key) ?? null;
+      },
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double: this stands in for a Matrix SDK Room, of which the code under test uses four members. Typing the mock as Room would demand the whole (large, SDK-owned) interface, and the compiler error that cast hides is the one the test is deliberately taking on
   } as any;
@@ -77,6 +84,41 @@ test("a link with no `via` is not a link — in BOTH directions", () => {
     ["!joined"],
     "a parent link WITH via still counts, even with no matching child event"
   );
+});
+
+test("children sort by order then name", () => {
+  // The space's own m.space.child `order` decides (the reconciler writes it from the panel's order);
+  // children without a usable order follow, by name. An order outside the spec's shape (not a
+  // string, longer than 50, or outside printable ASCII) counts as none.
+  const kids = {
+    "!b": room("!b", { name: "Bravo" }),
+    "!a": room("!a", { name: "alpha" }),
+    "!z": room("!z", { name: "Zulu" }),
+    "!y": room("!y", { name: "Yankee" }),
+    "!bad": room("!bad", { name: "Charlie" }),
+    "!long": room("!long", { name: "Delta" }),
+    "!cat2": room("!cat2", { space: true, name: "Second" }),
+    "!cat1": room("!cat1", { space: true, name: "First" }),
+  };
+  const hub = room("!hub", {
+    space: true,
+    children: Object.keys(kids),
+    order: { "!z": "a0", "!y": "a1", "!bad": 7, "!long": "x".repeat(51), "!cat2": "a0", "!cat1": "a1" },
+  });
+  const node = buildSpaceNode(hub, [hub, ...Object.values(kids)]);
+  assert.deepEqual(node.channels.map((r) => r.roomId), ["!z", "!y", "!a", "!b", "!bad", "!long"],
+    "ordered first by the order string, then the rest by name (case-insensitive)");
+  assert.deepEqual(node.subSpaces.map((n) => n.space.roomId), ["!cat2", "!cat1"], "categories follow the order too, not their names");
+});
+
+test("restart: the same rooms in another arrival order give the same column", () => {
+  // A reload hands getRooms() back in whatever order sync filled the store; the column must not move.
+  const a = room("!a", { name: "alpha" }), b = room("!b", { name: "bravo" }), c = room("!c", { name: "charlie" });
+  const hub = room("!hub", { space: true, children: ["!a", "!b", "!c"], order: { "!c": "m" } });
+  const first = buildSpaceNode(hub, [hub, a, b, c]).channels.map((r) => r.roomId);
+  const again = buildSpaceNode(hub, [c, b, hub, a]).channels.map((r) => r.roomId);
+  assert.deepEqual(first, ["!c", "!a", "!b"]);
+  assert.deepEqual(again, first);
 });
 
 // ── isForumRoom: the forum flag under either namespace ────────────────────────────────────────
@@ -136,4 +178,16 @@ test("no forum space id lives in the community client (no FORUM_SPACE_IDS)", asy
   assert.match(src, /export function favouriteRooms\(rooms: Room\[\]\): Room\[\] \{[\s\S]*\}\s*$/);
   assert.doesNotMatch(src, /FORUM_SPACE_IDS|!lembZf8h/);
   assert.match(src, /readFirst\(ROOM_TYPE,/, "the namespaced flag is how a forum is recognised");
+});
+
+test("buildNav lists no DM room — the DM list shows conversations, one per person (Task 20)", async () => {
+  const { buildNav } = await import("./matrixRooms.ts");
+  const dm = Object.assign(room("!dm"), {
+    getDMInviter: () => "@robin:site.test",
+    getMembers: () => [{ userId: "@me:site.test", membership: "join" }, { userId: "@robin:site.test", membership: "join" }],
+  });
+  const lobby = Object.assign(room("!lobby"), { getDMInviter: () => undefined, getMembers: () => [] });
+  const nav = buildNav([dm, lobby], "@me:site.test", new Set());
+  assert.deepEqual(nav.orphanChannels.map((r: { roomId: string }) => r.roomId), ["!lobby"], "a DM is not a channel");
+  assert.deepEqual(Object.keys(nav).sort(), ["orphanChannels", "spaceTree"], "no per-room DM list");
 });

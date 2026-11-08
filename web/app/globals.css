@@ -75,6 +75,15 @@
      CONSTANT, NOT required to track --chat-font-size or its default. Consumed
      via chatFont.ts CHAT_ROW_BASIS / rowBasisCalc(). */
   --chat-row-basis: 1.352rem;
+  /* The ONE avatar scale: every picture of a person or a room takes a step by name
+     (app/lib/avatarSize.ts says which surface uses which; `.avatar` below draws the box).
+     Only a picture in a chat row is × the Avatar-size slider. */
+  --avatar-xs: 1rem;
+  --avatar-sm: 1.5rem;
+  --avatar-md: 2rem;
+  --avatar-lg: 2.5rem;
+  --avatar-xl: 4rem;
+  --avatar-line: var(--chat-row-basis);
   --bg-body-start: #0c1020;
   --bg-body-end: #08080a;
   /* Panel colours, model B (settingsRegistry applyPanel/applyPage). Defaults =
@@ -137,7 +146,7 @@
   --z-popout:     150; /* /chat popout overlay chrome; its settings panel at +1 */
   --z-float:      200; /* floating menus/cards over the main layout (user menu, overlay user card) */
   --z-modal:      210; /* chrome's dialog scrim (Window) — poll composer, embed manager, every other chrome dialog; must beat --z-float */
-  --z-nudge:      240; /* bottom nudges, +10 per layer: apps hint < PWA install < secure-account */
+  --z-nudge:      240; /* bottom nudges, +10 per layer: PWA install < secure-account (one shows at a time: nudgeSlot.ts) */
   --z-overlay:    300; /* image lightbox */
   --z-rail-menu:  400; /* spaces-rail flyout menu */
   --z-menu:       500; /* context menus + confirm popovers; submenu at +10 */
@@ -412,6 +421,32 @@
   --text-chat-lg: calc(var(--chat-font-size, 0.875rem) * 1.10);
 }
 
+/* The phone switches (settings › Site & bars › On a phone; both off by default).
+   Community text: the setting writes --mx-font-size on <html>; untouched, it IS the chat size,
+   so the scope below changes nothing. The community root (MatrixView) carries `.mx-scope`.
+   A custom property resolves where it is DECLARED, so the chat scale above would keep the
+   chat's size inside the scope: the four steps are declared again there, identically
+   (settingsRegistry.test.ts holds the two lists equal), and so is the timestamp size, from
+   the Timestamps › Size multiplier (--chat-ts-scale, written beside --chat-ts-size). No
+   fallback on purpose: Size never set → the declaration is invalid → --chat-ts-size stays
+   unset and each reader keeps its own fallback. */
+:root { --mx-font-size: var(--chat-font-size); }
+@media (max-width: 607px) {
+  .mx-scope {
+    --chat-font-size: var(--mx-font-size);
+    --text-chat-xs: calc(var(--chat-font-size, 0.875rem) * 0.72);
+    --text-chat-sm: calc(var(--chat-font-size, 0.875rem) * 0.80);
+    --text-chat-md: calc(var(--chat-font-size, 0.875rem) * 0.88);
+    --text-chat-lg: calc(var(--chat-font-size, 0.875rem) * 1.10);
+    --chat-ts-size: calc(var(--chat-font-size, 0.875rem) * var(--chat-ts-scale));
+  }
+}
+/* Edge to edge: no gap and no frame. !important because a viewer's own gap or frame width
+   is an inline style on <html>, which a plain rule loses to. */
+@media (max-width: 607px) {
+  html.phone-edge { --panel-gap: 0px !important; --frame-width: 0px !important; }
+}
+
 /* Explicit dark canvas — during mobile keyboard viewport resizes the browser
    can expose the root background before the body gradient repaints; without
    this it flashes white */
@@ -465,6 +500,18 @@ body {
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
 }
 
+/* A picture on the avatar scale: the box is its step (`--avatar-size`, set by avatarStyle),
+   snapped to whole, even pixels so a ring drawn on it and the picture inside share one centre
+   at any zoom. `--avatar-box` is readable inside (Avatar's letter is 0.44 of it). */
+.avatar {
+  --avatar-box: round(var(--avatar-size, var(--avatar-md)), 2px);
+  width: var(--avatar-box);
+  height: var(--avatar-box);
+  border-radius: 9999px;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
 /* Alternating message backgrounds (the "Alternating rows" toggle → `alt-rows`
    on <html>). Parity is a STABLE per-message flag from useChatMessages, not
    :nth-child — position parity would re-stripe the whole list every time the
@@ -477,14 +524,18 @@ body {
    registry + the layout pre-paint). They sit AFTER the alternating stripe and
    out-specify it: as Tailwind utilities (layered) they would lose to that
    unlayered stripe, so a mention on every other row would show no tint at all. */
-html:not(.chat-mention-hl-off) .chat-reply-me { color: #f0b464; }
-html:not(.chat-mention-hl-off) .chat-row-mention-mx { border-left: 2px solid rgb(251 191 36); padding-left: 0.875rem; }
-html:not(.chat-mention-hl-off) .chat-row-mention-mx:not([data-hl]) { background: rgb(251 191 36 / 0.1); }
+/* The colours are the viewer's (Colours › Mentions & highlights): a mention reads
+   --chat-mention, a highlight (one of your Behavior › Words) reads --chat-highlight.
+   Unset = the fallbacks here, which are the colours each surface always had. */
+html:not(.chat-mention-hl-off) .chat-reply-me { color: var(--chat-mention, #f0b464); }
+html:not(.chat-mention-hl-off) .chat-row-mention-mx { border-left: 2px solid var(--chat-mention, rgb(251 191 36)); padding-left: 0.875rem; }
+html:not(.chat-mention-hl-off) .chat-row-mention-mx:not([data-hl]) { background: color-mix(in srgb, var(--chat-mention, rgb(251 191 36)) 10%, transparent); }
 /* Equal specificity on purpose: a row can carry several of these, and the LAST
-   applicable one wins — own < upvote < mention. */
+   applicable one wins — own < upvote < highlight < mention. */
 html.chat-own-tint .chat-msg-row.chat-row-own { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 html:not(.chat-upvote-hl-off) .chat-msg-row.chat-row-up { background: rgba(153, 193, 241, 0.05); }
-html:not(.chat-mention-hl-off) .chat-msg-row.chat-row-mention { background: rgba(240, 180, 100, 0.08); }
+html:not(.chat-mention-hl-off) .chat-msg-row.chat-row-word { background: color-mix(in srgb, var(--chat-highlight, #f0b464) 8%, transparent); }
+html:not(.chat-mention-hl-off) .chat-msg-row.chat-row-mention { background: color-mix(in srgb, var(--chat-mention, #f0b464) 8%, transparent); }
 /* Support-event rows (tip / sub / gift) wear a per-platform tint; ChatMessage
    puts the colour in --row-event-bg. A CLASS rule, not an inline background:
    inline — even "transparent" — beats the alternating stripe and the hover, so
@@ -514,18 +565,92 @@ html:not(.chat-event-hl-off) .chat-msg-row.chat-row-event { background-color: va
    • Message gap — added on top of the base spacing: the slider's default (1px)
      adds nothing, so an untouched Community keeps the base spacing.
    • Avatars / Times (Community's own switches; live chat's default them OFF).
-   • Layout: cozy = the row's own utilities; compact = tighter heads;
-     bubbles = one tinted block per message group, in the existing surface
-     token (no new colour). These are unlayered on purpose: they must beat the
-     row's padding / hover utilities while the layout is picked. */
-.mx-row { margin-top: max(0px, calc(var(--chat-msg-gap, 1px) - 1px)); }
+   • Layout: cozy = Discord's row (below); compact = today's inline look with
+     tighter heads; bubbles = one tinted block per message group, in the
+     existing surface token (no new colour). These are unlayered on purpose:
+     they must beat the row's padding / hover utilities while the layout is picked.
+   Cozy is the DEFAULT, so it is the layout with no class: `html:not(.mx-compact)
+   :not(.mx-bubbles)`. One markup serves all three (MatrixMessageRow): the head's
+   avatar is the name line's first child; Cozy pads the body column (.mx-body) by
+   the gutter and lifts the avatar — and a grouped row's hover time — into it,
+   placed against .mx-main (the name line and what follows), so a reply quote
+   above it never pushes the picture off its name.
+   The gutter is DERIVED: Discord's cozy avatar (40px on a wide pane, 32px on a
+   narrow one — [data-mx-pane="narrow"]: MatrixView's mode 1, which is every phone
+   and the desktop side panel, and the thread panel always; the PANE, not the
+   viewport) × the Avatar-size slider (--chat-pfp-scale, the same multiplier
+   Avatar.tsx applies to the inline avatar), plus the row's own inset (Discord:
+   16px both). At 390px the text column is 390 − 2 × 16 (row inset) − 48 (gutter)
+   − 24 (.mx-body pr-6) = 286px, less the panel's frame.
+   A narrow pane also drops the head's day part ("Today at"): the day divider says
+   it, and name + full stamp does not fit one line there. */
+.mx-row {
+  margin-top: max(0px, calc(var(--chat-msg-gap, 1px) - 1px));
+  --mx-row-inset: calc(var(--spacing, 0.25rem) * 4);
+  padding-inline: var(--mx-row-inset);
+  --mx-gutter: calc(var(--mx-gutter-avatar) + var(--mx-row-inset));
+  --mx-head-pad: 0.75rem;
+}
+/* The gutter picture: a step of the avatar scale × the Avatar-size slider (a chat row's
+   picture), snapped as `.avatar` snaps it so the gutter and the picture agree to the pixel.
+   The member list is a list, not a chat row: it takes the md step itself (MemberList.tsx). */
+.mx-row {
+  --mx-gutter-avatar-base: var(--avatar-lg);
+  --mx-gutter-avatar: round(calc(var(--mx-gutter-avatar-base) * var(--chat-pfp-scale, 1)), 2px);
+}
+[data-mx-pane="narrow"] .mx-row { --mx-gutter-avatar-base: var(--avatar-md); }
+[data-mx-pane="narrow"] .mx-row .mx-time-day { display: none; }
+/* A head row's top padding is ONE term, so its hover bar can stand on it (the bar
+   rule sits after .row-actions below). Each layout sets the term; the bar follows. */
+.mx-row[data-head] { padding-top: var(--mx-head-pad); }
+/* …so the bar reaches ABOVE a head row by its height less the head's padding. A
+   scroller that hosts rows (.mx-scroll: Timeline, ThreadPanel, the DM window's
+   DmConversation) keeps that reach clear at its top, or the first row's bar is cut off.
+   The bound is the whole bar, one term for every layout (the reach is never more):
+   its height from its own terms — an h-8 button (2rem), the bar's py-1 (2 × 0.25rem)
+   and its 1px border each side (MatrixMessageRow's `.row-actions`). */
+.mx-scroll {
+  --mx-bar-h: calc(2rem + 2 * 0.25rem + 2 * 1px);
+  padding-top: var(--mx-bar-h);
+}
+.mx-avatars-off .mx-row { --mx-gutter-avatar: 0px; --mx-gutter: 0px; }
+.mx-row .mx-gutter-time { display: none; }
+html:not(.mx-compact):not(.mx-bubbles) .mx-row .mx-body { padding-left: var(--mx-gutter); }
+html:not(.mx-compact):not(.mx-bubbles) .mx-row .mx-main { position: relative; }
+html:not(.mx-compact):not(.mx-bubbles) .mx-row[data-head] .mx-main { min-height: var(--mx-gutter-avatar); }
+html:not(.mx-compact):not(.mx-bubbles) .mx-row .mx-head > .mx-avatar {
+  position: absolute;
+  top: 0;
+  left: calc(-1 * var(--mx-gutter));
+  --mx-avatar-box: var(--mx-gutter-avatar);
+}
+/* A grouped row's time: centred on the avatar slot and as wide as it plus the inset
+   on each side (the row's edge to the text's edge), one text line tall (font size ×
+   line height, the text's own terms) so it centres on the first line. Its form has
+   no seconds (chatTime "community-gutter"). */
+html:not(.mx-compact):not(.mx-bubbles):not(.mx-avatars-off) .mx-row .mx-gutter-time {
+  display: flex;
+  position: absolute;
+  top: 0;
+  left: calc(-1 * var(--mx-gutter) - var(--mx-row-inset));
+  width: calc(var(--mx-gutter-avatar) + 2 * var(--mx-row-inset));
+  height: calc(var(--chat-font-size, 0.875rem) * var(--chat-line-height, 1.4));
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  visibility: hidden;
+}
+/* Its hover reveal is in the one (hover: hover) gate with the row toolbar's (below);
+   keyboard focus reveals it as it does the toolbar (:has(:focus-visible), not
+   :focus-within — a clicked or tapped pill keeps focus). */
+html:not(.mx-compact):not(.mx-bubbles) .mx-row:has(:focus-visible) .mx-gutter-time { visibility: visible; }
 .mx-text { text-shadow: var(--chat-shadow); }
 .mx-row .img-shadow-chat { filter: var(--chat-shadow-filter); }
 .mx-avatars-off .mx-avatar { display: none !important; }
 .mx-times-off .mx-time { display: none !important; }
 .alt-rows .mx-row.chat-msg-alt:hover { background: var(--color-surface-1); }
 .chat-pron-plain .mx-row .chat-pron { color: #c3cddb !important; }
-.mx-compact .mx-row[data-head] { padding-top: 0.25rem; }
+.mx-compact .mx-row[data-head] { --mx-head-pad: 0.25rem; }
 .mx-compact .mx-row:not([data-head]) { padding-top: 0; padding-bottom: 0; }
 .mx-bubbles .mx-row {
   margin-inline: 0.5rem;
@@ -538,7 +663,7 @@ html:not(.chat-event-hl-off) .chat-msg-row.chat-row-event { background-color: va
 .alt-rows .mx-row.chat-msg-alt[data-hl] { background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .mx-bubbles .mx-row[data-head] {
   margin-top: max(0.5rem, calc(0.5rem + var(--chat-msg-gap, 1px) - 1px));
-  padding-top: 0.375rem;
+  --mx-head-pad: 0.375rem;
   border-top-left-radius: 0.75rem;
   border-top-right-radius: 0.75rem;
 }
@@ -770,6 +895,11 @@ html:not(.chat-event-hl-off) .chat-msg-row.chat-row-event { background-color: va
   transition-timing-function: var(--anim-ease);
   transition-behavior: allow-discrete;
 }
+/* A Community head row's bar stands on the head's top padding (--mx-head-pad, the
+   Community block): its bottom edge is where the reply quote or the name line
+   starts, so it never covers them — it overhangs the row above instead, as
+   Discord's does. Grouped rows keep the bar's -top-2.5. */
+.mx-row[data-head] > .row-actions { top: auto; bottom: calc(100% - var(--mx-head-pad)); }
 /* THE DOWNVOTE FADE DIMS THE MESSAGE, NOT ITS CONTROLS: the hover controls of a
    downvoted message must be as solid as an upvoted one's.
 
@@ -816,6 +946,9 @@ html:not(.chat-event-hl-off) .chat-msg-row.chat-row-event { background-color: va
    Gating on (hover: hover) is robust to HOW the phone decided it was hovering,
    because on a touch-only device the rule no longer exists at all. */
 @media (hover: hover) {
+  /* Community Cozy: a grouped row's time shows in the gutter on hover (the
+     Community block above has the rule's other half). */
+  html:not(.mx-compact):not(.mx-bubbles) .mx-row:hover .mx-gutter-time { visibility: visible; }
   /* Hovering the bar keeps the row hovered — :hover matches every ancestor of
      the element under the pointer — so the row is the only condition needed,
      even where the bar overhangs the row's own box. */
@@ -890,6 +1023,20 @@ html:not(.chat-event-hl-off) .chat-msg-row.chat-row-event { background-color: va
     width: 44px;
     height: 44px;
     transform: translate(-50%, -50%);
+  }
+
+  /* The same for a pill wider than 44px (the player card's "Watch on Kick"):
+     its full width, 44px tall, so the ends of the pill are as easy to hit as
+     the middle. */
+  .tap-hit-tall { position: relative; }
+  .tap-hit-tall::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 44px;
+    transform: translateY(-50%);
   }
 }
 /* The money buttons' touch area: 44px tall, and wide only to half
@@ -1435,6 +1582,13 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
 [data-anim-off] .chat-pi-cycle-5,
 [data-anim-off] .un-anim,
 [data-anim-off].un-anim { animation-play-state: paused !important; }
+/* The Pulse glow animates on its layers, which the element's play-state does not reach. Stopped,
+   not paused: a paused opacity animation still holds a compositor layer per name; stopped, the
+   layer rests on its first frame (the look of a still name) and restarts from it on return. */
+[data-anim-off] .un-pulse::before,
+[data-anim-off] .un-pulse::after,
+[data-anim-off].un-pulse::before,
+[data-anim-off].un-pulse::after { animation: none; }
 @keyframes chat-pi-cycle-2 {
   0%    { background-color: var(--pi-c1); color: var(--pi-c1); }
   50%   { background-color: var(--pi-c2); color: var(--pi-c2); }
@@ -1555,9 +1709,18 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
 .chat-pfp { text-indent: 0; }
 
 /* Platform ring on the avatar — when on (with avatars), the colored ring IS
-   the platform cue, so the separate bar/dot/icon indicator is hidden. The ring
-   width lives in a var; the color is applied per-message inline in ChatMessage. */
-.chat-pfp-ring-on { --chat-pfp-ring: var(--chat-pfp-ring-w, 2px); }
+   the platform cue, so the separate bar/dot/icon indicator is hidden. The color
+   (--ring-c) is set per message inline in ChatMessage.
+   Drawn INSIDE the picture's own (whole-pixel) box — an outline inset by exactly
+   its width — so it shares the picture's centre at every size and takes no room.
+   An outer box-shadow here came out lopsided in Firefox: it snaps to device
+   pixels while the picture sits at its fractional place. The width is the
+   setting × the same Avatar-size slider as the picture, in whole pixels. */
+.chat-pfp-ring-on .chat-pfp-ring-el {
+  --avatar-ring-w: max(1px, round(calc(var(--chat-pfp-ring-w, 2px) * var(--chat-pfp-scale, 1)), 1px));
+  outline: var(--avatar-ring-w) solid var(--ring-c);
+  outline-offset: calc(-1 * var(--avatar-ring-w));
+}
 .chat-pfp-on.chat-pfp-ring-on .chat-pi-bar-el,
 .chat-pfp-on.chat-pfp-ring-on .chat-pi-dot-el,
 .chat-pfp-on.chat-pfp-ring-on .chat-pi-icon-el { display: none !important; }
@@ -1584,6 +1747,8 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
   text-decoration-line: none !important; text-decoration-style: solid !important; text-decoration-color: currentColor !important;
   text-decoration-thickness: auto !important; text-underline-offset: auto !important;
 }
+.chat-namestyles-off .chat-un-style::before,
+.chat-namestyles-off .chat-un-style::after { content: none !important; }
 .chat-badges-off .chat-badges { display: none !important; }
 
 /* ── Highlight card (paid /highlight + streamer spotlight) ──────────────────
@@ -1792,6 +1957,8 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
 /* Send button toggle — shown when chat-send-btn-on is on <html> */
 .chat-send-btn { display: none !important; }
 .chat-send-btn-on .chat-send-btn { display: flex !important; }
+/* The community composer with Return = new line needs its arrow whatever that setting says. */
+.chat-send-btn[data-send-button="always"] { display: flex !important; }
 
 /* Hairline-shimmer mitigation. At FRACTIONAL
    device-pixel positions a 1px `--color-edge` border rasterizes inconsistently
@@ -1831,6 +1998,10 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
 .chat-tabbar-hidden .pin-row {
   padding-right: calc(var(--folded-ctl-w, 0px) + 0.5rem);
 }
+
+/* The community's banner (ChannelColumn): the name sits on the picture, as on a Discord server
+   banner, so the header's hairline would cut the picture in two. The seam shade is off by prop. */
+[data-space-banner] [data-bar="mx-header"] { box-shadow: none; }
 
 /* Hidden scrollbar — scrolling stays fully functional */
 .no-scrollbar {
@@ -2262,6 +2433,8 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
   .un-anim {
     animation: none !important;
   }
+  .un-pulse::before,
+  .un-pulse::after { animation: none; }
 }
 
 /* "Animate name styles" toggle (settingsRegistry `unAnim`, default on) —
@@ -2270,14 +2443,58 @@ html.panels-square .bb-panel { border-radius: 0 !important; }
    !important for the same reason as the fence above: the animation shorthand
    is inline. */
 .un-noanim .un-anim { animation: none !important; }
+.un-noanim .un-pulse::before,
+.un-noanim .un-pulse::after { animation: none; }
 
 /* Token-store username styles (usernameStyles.ts) — the inline style composes
    the `animation` list; only the keyframes live here. Colors ride custom
    properties (--un-c) or the inline background layers, so one set of keyframes
    serves every user's own color. */
-@keyframes un-pulse {
-  0%, 100% { text-shadow: 0 0 3px var(--un-c); }
-  50%      { text-shadow: 0 0 6px var(--un-c), 0 0 12px color-mix(in srgb, var(--un-c) 40%, transparent); }
+/* Pulse: the halo is drawn ONCE, on two layers behind the name — its resting glow (::before) and
+   its bloom (::after) — and the two are crossfaded. Only opacity moves, which the compositor runs
+   without repainting the glyphs (an animated text-shadow re-rasterized them every frame:
+   glowKeyframes.test.ts). At rest (every animation off) the name shows the first frame.
+   The layers draw the name's own text from --un-text (usernameStyleCSS), inheriting its face and
+   size: left 0 plus the name's own start padding puts them on its first glyph (::after's static
+   place is the END of the name), and the static top keeps them on its baseline. The name
+   isolates so z-index -1 lands behind its own glyphs and never behind the row. */
+.un-pulse { position: relative; isolation: isolate; }
+.un-pulse::before,
+.un-pulse::after {
+  content: var(--un-text);
+  position: absolute;
+  left: 0;
+  padding-inline-start: inherit;
+  z-index: -1;
+  white-space: pre;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  -webkit-text-stroke: 0;
+  pointer-events: none;
+  user-select: none;
+}
+/* The copies are decoration: empty alt text keeps a screen reader from reading the name thrice. */
+@supports (content: "x" / "") {
+  .un-pulse::before,
+  .un-pulse::after { content: var(--un-text) / ""; }
+}
+.un-pulse::before {
+  text-shadow: 0 0 3px var(--un-c);
+  opacity: 1;
+  animation: un-pulse-rest 1.8s ease-in-out infinite;
+}
+.un-pulse::after {
+  text-shadow: 0 0 6px var(--un-c), 0 0 12px color-mix(in srgb, var(--un-c) 40%, transparent);
+  opacity: 0;
+  animation: un-pulse-bloom 1.8s ease-in-out infinite;
+}
+@keyframes un-pulse-rest {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+@keyframes un-pulse-bloom {
+  0%, 100% { opacity: 0; }
+  50%      { opacity: 1; }
 }
 @keyframes un-shimmer {
   /* Layer 1 = the white gleam band, layer 2 = the (static) fill. */

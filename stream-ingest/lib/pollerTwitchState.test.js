@@ -45,7 +45,7 @@ function restore() { global.fetch = realFetch; }
 test('an empty Helix data array is a genuine offline', async () => {
   stub(async () => ({ ok: true, status: 200, json: async () => ({ data: [] }) }));
   try {
-    assert.deepEqual(await twitchStatus(), { state: 'offline', viewers: 0 });
+    assert.deepEqual(await twitchStatus(), { state: 'offline', viewers: 0, key: '', evidence: 'helix-empty' });
   } finally { restore(); }
 });
 
@@ -53,16 +53,23 @@ test('a bot token is preferred over the app pair: its token and its client id as
   let seen = null;
   stub(async (_u, init) => { seen = init.headers; return { ok: true, status: 200, json: async () => ({ data: [] }) }; });
   try {
-    assert.deepEqual(await twitchStatus(), { state: 'offline', viewers: 0 });
+    assert.deepEqual(await twitchStatus(), { state: 'offline', viewers: 0, key: '', evidence: 'helix-empty' });
     assert.equal(seen.Authorization, 'Bearer test-access-token');
     assert.equal(seen['Client-Id'], 'test-client-id', 'the bot token\'s own client id (validate), not the app\'s');
   } finally { restore(); }
 });
 
-test('a live stream reports live plus the viewer count', async () => {
-  stub(async () => ({ ok: true, status: 200, json: async () => ({ data: [{ viewer_count: 137 }] }) }));
+test('a live stream reports live plus the viewer count, keyed by the Helix stream id', async () => {
+  stub(async () => ({ ok: true, status: 200, json: async () => ({ data: [{ id: '40001', type: 'live', viewer_count: 137 }] }) }));
   try {
-    assert.deepEqual(await twitchStatus(), { state: 'live', viewers: 137 });
+    assert.deepEqual(await twitchStatus(), { state: 'live', viewers: 137, key: '40001', evidence: 'helix-live' });
+  } finally { restore(); }
+});
+
+test('a stream whose type is "" (Helix\'s error shape) is unknown, not live (web\'s twitchLive.ts agrees)', async () => {
+  stub(async () => ({ ok: true, status: 200, json: async () => ({ data: [{ id: '40001', type: '', viewer_count: 0 }] }) }));
+  try {
+    assert.deepEqual(await twitchStatus(), { state: 'unknown', viewers: 0, key: '', evidence: 'helix-type-empty' });
   } finally { restore(); }
 });
 
@@ -71,13 +78,14 @@ test('a network error reports unknown, not offline', async () => {
   try {
     assert.equal((await twitchStatus()).state, 'unknown',
       'a failed request must never read the same as Helix answering "not streaming"');
+    assert.equal((await twitchStatus()).evidence, 'helix-error');
   } finally { restore(); }
 });
 
 test('an HTTP 5xx reports unknown, not offline', async () => {
   stub(async () => ({ ok: false, status: 503, json: async () => ({}) }));
   try {
-    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.deepEqual(await twitchStatus(), { state: 'unknown', viewers: 0, key: '', evidence: 'helix-error' });
   } finally { restore(); }
 });
 
@@ -91,7 +99,7 @@ test('a 401 that survives the token refresh reports unknown, not offline', async
     json: async () => ({ error: 'Unauthorized', status: 401, message: 'Invalid OAuth token' }),
   }));
   try {
-    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.deepEqual(await twitchStatus(), { state: 'unknown', viewers: 0, key: '', evidence: 'helix-error' });
   } finally { restore(); }
 });
 
@@ -100,6 +108,6 @@ test('a 200 whose body carries no data array reports unknown, not offline', asyn
   // is not evidence that the stream ended.
   stub(async () => ({ ok: true, status: 200, json: async () => ({ message: 'something else entirely' }) }));
   try {
-    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.deepEqual(await twitchStatus(), { state: 'unknown', viewers: 0, key: '', evidence: 'helix-error' });
   } finally { restore(); }
 });

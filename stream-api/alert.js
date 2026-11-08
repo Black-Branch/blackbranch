@@ -120,8 +120,8 @@ function buildSystemCard(p) {
 // Ephemeral celebratory card for NATIVE Stripe events posted via /chat/event
 // (gift / donation / sub). Distinct from buildSystemCard, which is the
 // external-platform alert card. Pure: the route supplies `base` (id/ts/system)
-// and a blacklist-mask fn; returns null for a gift with no recipients (the route
-// then skips). Exported for unit tests.
+// and a blacklist-mask fn; returns null for a gift that names nobody and is not a
+// community gift with slots bought (the route then skips). Exported for unit tests.
 function buildEventCard(kind, body, base, maskFn = (s) => s) {
   if (kind === 'gift') {
     const { gifter, gifterColor, gifterMatrixId, anonymous, giftKind, months, recipients, usernameStyle } = body;
@@ -129,7 +129,12 @@ function buildEventCard(kind, body, base, maskFn = (s) => s) {
       name: String(r?.name ?? '').slice(0, 80),
       matrixId: r?.matrixId ? String(r.matrixId) : null,
     }));
-    if (list.length === 0) return null;
+    const community = giftKind === 'community';
+    // The subs BOUGHT (a community gift's slots), whoever holds them yet: a community gift with
+    // every slot parked for future sign-ups (no eligible user at purchase) is still a purchase —
+    // its card credits the money now. An older caller without `count` keeps the recipient count.
+    const bought = community ? Math.min(Math.max(parseInt(body.count, 10) || 0, 0), 100) : 0;
+    if (list.length === 0 && bought === 0) return null;
     const name = anonymous ? 'Anonymous' : (gifter || 'Someone');
     return {
       ...base,
@@ -144,8 +149,13 @@ function buildEventCard(kind, body, base, maskFn = (s) => s) {
       usernameColor:  anonymous ? null : (gifterColor || null),
       usernameStyle:  anonymous ? null : (usernameStyle || null),
       anonymous:      !!anonymous,
-      giftKind:       giftKind === 'community' ? 'community' : 'direct',
-      count:          list.length,
+      giftKind:       community ? 'community' : 'direct',
+      count:          Math.max(list.length, bought),
+      // Every slot parked: "waiting for the next sign-ups".
+      waiting:        community && list.length === 0,
+      // A direct gift queued behind its recipient's subscription (web giftQueue.ts). This card is
+      // PUBLIC: it says only that the gift waits — never WHEN, which is the recipient's renewal date.
+      queued:         !community && body.queued === true,
       months:         Math.max(1, parseInt(months, 10) || 1),
       recipients:     list,
       message:        '',
@@ -272,21 +282,36 @@ function buildEventCard(kind, body, base, maskFn = (s) => s) {
       message:            message ? maskFn(String(message)).slice(0, 500) : '',
     };
   }
-  // donation
+  // donation. The card wears the account only when the web sent it as donorMatrixId — the web
+  // decides (web/app/lib/tipCardIdentity.ts: the shown name is the account's own). A tip under a
+  // typed name arrives with donorMatrixId null and its payer in payerMatrixId, which never goes on
+  // the card (see donationPayer). `tipIdentity` records the choice so a read-back can honour it.
   const { donor, donorMatrixId, anonymous, amount, currency, message, usernameColor, usernameStyle } = body;
   const name = anonymous ? 'Anonymous' : (donor || 'Anonymous');
+  const wears = !anonymous && typeof donorMatrixId === 'string' && donorMatrixId !== '';
   return {
     ...base,
     username:      name,
-    donorMatrixId: anonymous ? null : (donorMatrixId || null),
-    matrixId:      anonymous ? null : (donorMatrixId || null),
+    donorMatrixId: wears ? donorMatrixId : null,
+    matrixId:      wears ? donorMatrixId : null,
     anonymous:     !!anonymous,
+    tipIdentity:   wears ? 'account' : 'plain',
     amount:        Math.max(0, parseInt(amount, 10) || 0), // cents
     currency:      String(currency || 'usd').toLowerCase().slice(0, 8),
-    usernameColor: anonymous ? null : (usernameColor || null),
-    usernameStyle: anonymous ? null : (usernameStyle || null),
+    usernameColor: wears ? (usernameColor || null) : null,
+    usernameStyle: wears ? (usernameStyle || null) : null,
     message:       message ? maskFn(String(message)).slice(0, 500) : '',
   };
+}
+
+/** Who paid for a donation card: the account the card wears, else — for a plain tip only — the
+ *  payer the web sent beside it. The money record (ledger userId, the row's matrix_id) keys on
+ *  this; the public card never carries it. Anonymous stays unattributed. */
+function donationPayer(card, body) {
+  if (card.anonymous) return null;
+  if (card.donorMatrixId) return card.donorMatrixId;
+  const payer = body && body.tipIdentity === 'plain' ? body.payerMatrixId : null;
+  return typeof payer === 'string' && payer ? payer : null;
 }
 
 function createAlert({ broadcast, bufferPush, supportBar, obs, tts, lights, logSupport, logUnpriced, persistCard, maskBlacklist, timerLocked,
@@ -659,4 +684,4 @@ function createAlert({ broadcast, bufferPush, supportBar, obs, tts, lights, logS
   return { dispatch, fireStreamEffects, buildEventCard };
 }
 
-module.exports = { createAlert, cleanForTTS, buildShowAlert, buildSystemCard, buildEventCard, ledgerEventId, isTransientDbError, LedgerWriteError };
+module.exports = { createAlert, cleanForTTS, buildShowAlert, buildSystemCard, buildEventCard, donationPayer, ledgerEventId, isTransientDbError, LedgerWriteError };

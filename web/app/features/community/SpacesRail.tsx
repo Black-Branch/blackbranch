@@ -8,19 +8,24 @@ import { currentAvatarVersion } from "@/app/lib/profileCardPrefetch";
 import { lsGetJSON, lsSetJSON } from "@/app/lib/safeLocalStorage";
 import type { Room } from "matrix-js-sdk";
 import { mxcToHttp } from "@/app/lib/matrixMedia";
+import { useImgFallback } from "@/app/lib/useImgFallback";
 import { Avatar } from "@/app/components/Avatar";
-import { UnreadDot } from "./parts";
+import { avatarStyle } from "@/app/lib/avatarSize";
+import { UnreadDot, useUnreadMode } from "./parts";
+import type { UnreadMode } from "@/app/lib/settingsRegistry";
 import { serverChannels, aggregateUnreads, roomLabel, type RailServer } from "@/app/lib/matrixRooms";
 import { listThreads } from "@/app/lib/matrixThreads";
 import { GearSix, Chats, House } from "@phosphor-icons/react/dist/ssr";
+import type { DmConversation } from "@/app/lib/dmConversations";
+import { DmRailChips } from "./DmRailChips";
 
 // Square space icon that fills the squircle tile (object-cover), not a circle
 // avatar — so space images sit flush like Discord servers.
 function RailIcon({ room, name }: { room: Room | null; name: string }) {
-  const [err, setErr] = useState(false);
   const url = mxcToHttp(room?.getMxcAvatarUrl(), 96);
-  if (url && !err) {
-    return <img src={url} alt={name} draggable={false} onError={() => setErr(true)} className="w-full h-full object-cover" />;
+  const { ok: picOk, ref: picRef, onError: onPicError } = useImgFallback(url);
+  if (url && picOk) {
+    return <img src={url} alt={name} draggable={false} ref={picRef} onError={onPicError} className="w-full h-full object-cover" />;
   }
   return <span className="font-bold text-lg" style={{ color: "var(--accent)" }}>{name.slice(0, 1).toUpperCase()}</span>;
 }
@@ -43,28 +48,33 @@ function Pill({ active, unread }: { active: boolean; unread: boolean }) {
 // Bottom-of-rail user button (Discord-style): the user's avatar with the crypto
 // traffic-light dot, opening the universal profile card. The dot is the shared
 // cross-signing derivation (useEncryptionStatus — same as the chat avatar
-// button); the thumbnail refreshes via the hub's avatar-changed entry.
+// button); the thumbnail refreshes via the hub's avatar-changed entry. Its size is the
+// rail's tile on the avatar scale (lg), the same as the DM chips above it.
+const RAIL_PIC = avatarStyle("lg");
 function RailUserButton({ onOpenSettings }: { onOpenSettings: () => void }) {
   // Shared monotonic cache-buster (profileCardPrefetch) — the card bumps it
   // before announcing a change, so re-reading always lands the fresh URL.
   const [ver, setVer] = useState(currentAvatarVersion);
-  const [ok, setOk] = useState(true);
+  // A failure belongs to one version: a new avatar is tried again.
+  const { ok: picOk, ref: picRef, onError: onPicError } = useImgFallback(ver);
   const { dotClass } = useEncryptionStatus();
 
-  useUserMenuEvents({ onAvatarChanged: () => { setOk(true); setVer(currentAvatarVersion()); } });
+  useUserMenuEvents({ onAvatarChanged: () => { setVer(currentAvatarVersion()); } });
 
   return (
     <button
       type="button"
       onClick={onOpenSettings}
       title="Your profile"
-      className="relative w-9 h-9 rounded-full overflow-hidden ring-1 ring-edge hover:ring-edge-bright transition-all shrink-0"
+      className="avatar relative overflow-hidden ring-1 ring-edge hover:ring-edge-bright transition-all"
+      style={RAIL_PIC}
     >
-      {ok ? (
+      {picOk ? (
         <img
           src={`/api/avatar/me?v=${ver}`}
           alt="Your profile"
-          onError={() => setOk(false)}
+          ref={picRef}
+          onError={onPicError}
           className="w-full h-full object-cover"
         />
       ) : (
@@ -85,30 +95,38 @@ function Tile({
   onClick,
   title,
   unreads,
+  unreadMode,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   title: string;
   unreads: { total: number; highlight: number };
+  unreadMode: UnreadMode;
   children: React.ReactNode;
 }) {
+  // The button clips (overflow-hidden, for the picture's rounded corners), and its corner is where the
+  // mark sits: inside it, the dot showed only a sliver. So the dot and the number sit on a wrapper.
   return (
     <div className="group/r relative w-full flex justify-center">
       <Pill active={active} unread={unreads.total > 0} />
-      <button
-        type="button"
-        onClick={onClick}
-        title={title}
-        className={`relative w-10 h-10 flex items-center justify-center overflow-hidden transition-[border-radius,background] duration-(--anim-fast) ${
-          active
-            ? "rounded-2xl bg-accent/20 text-strong"
-            : "rounded-[1.4rem] group-hover/r:rounded-2xl bg-surface-2 text-body-dim group-hover/r:bg-accent/20 group-hover/r:text-strong"
-        }`}
-      >
-        {children}
-        <UnreadDot total={unreads.total} highlight={unreads.highlight} className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 border-2 border-[var(--bg-body-end,#111827)]" />
-      </button>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={onClick}
+          title={title}
+          className={`relative w-10 h-10 flex items-center justify-center overflow-hidden transition-[border-radius,background] duration-(--anim-fast) ${
+            active
+              ? "rounded-2xl bg-accent/20 text-strong"
+              : "rounded-[1.4rem] group-hover/r:rounded-2xl bg-surface-2 text-body-dim group-hover/r:bg-accent/20 group-hover/r:text-strong"
+          }`}
+        >
+          {children}
+        </button>
+        <UnreadDot total={unreads.total} highlight={unreads.highlight} mode={unreadMode}
+          className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 pointer-events-none border-2 border-[var(--bg-body-end,#111827)]"
+          pillClassName="absolute -bottom-1 -right-1 pointer-events-none ring-2 ring-[var(--bg-body-end,#111827)]" />
+      </div>
     </div>
   );
 }
@@ -172,7 +190,7 @@ function ThreadsActivity({
                   onClick={() => { onOpenRoomThreads(room); setOpen(false); }}
                   className="w-full text-left flex items-center gap-2 px-3 py-2 hover:bg-surface-2 transition-colors"
                 >
-                  <Avatar mxcUrl={room.getMxcAvatarUrl()} name={room.name || room.roomId} size={22} />
+                  <Avatar mxcUrl={room.getMxcAvatarUrl()} name={room.name || room.roomId} size="sm" />
                   <span className="flex-1 min-w-0 truncate text-body" style={{ fontSize: "var(--text-chat-md)" }}>
                     {roomLabel(room, myUserId, new Set())}
                   </span>
@@ -202,6 +220,8 @@ export function SpacesRail({
   onOpenRoomThreads,
   onOpenSettings,
   hideUserButton,
+  conversations = [],
+  onOpenConversation,
 }: {
   servers: RailServer[];
   activeId: string | "home";
@@ -216,7 +236,14 @@ export function SpacesRail({
   onOpenSettings: () => void;
   /** A UserMenu is mounted beside this rail (split view, signed in), so the bottom avatar would be its duplicate. The standalone/mobile paths keep it — it is their only door to the account card. */
   hideUserButton?: boolean;
+  /** The DM list: each unread conversation gets a chip under Home (DmRailChips). */
+  conversations?: DmConversation[];
+  onOpenConversation?: (c: DmConversation) => void;
 }) {
+  // A space adds up every channel in it, so the rail shows Discord's server-icon mark in both
+  // number modes: the mention count in rose, otherwise a dot (never a space-wide unread total).
+  const unreadMode = useUnreadMode();
+  const railMode: UnreadMode = unreadMode === "dots" ? "dots" : "mentions";
   // Persisted custom order of top-level spaces (drag to reorder). Saved ids sort
   // first in their saved order; any new/unsaved spaces fall in after, original order.
   const [order, setOrder] = useState<string[]>(() => {
@@ -342,9 +369,12 @@ export function SpacesRail({
           onClick={onSelectHome}
           title="Home — Direct Messages"
           unreads={homeUnreads}
+          unreadMode={railMode}
         >
           <House size={22} weight="bold" />
         </Tile>
+
+        {onOpenConversation && <DmRailChips conversations={conversations} onOpen={onOpenConversation} />}
 
         <span aria-hidden className="w-8 h-px bg-control/80 my-0.5 shrink-0" />
 
@@ -370,6 +400,7 @@ export function SpacesRail({
                   onClick={() => onSelectServer(s.id)}
                   title={s.name}
                   unreads={unreads}
+                  unreadMode={railMode}
                 >
                   <RailIcon room={s.room} name={s.name} />
                 </Tile>
@@ -379,7 +410,7 @@ export function SpacesRail({
         </div>
 
         {canAddSpace && (
-          <Tile active={false} onClick={onAddSpace} title="Add a space" unreads={{ total: 0, highlight: 0 }}>
+          <Tile active={false} onClick={onAddSpace} title="Add a space" unreads={{ total: 0, highlight: 0 }} unreadMode={railMode}>
             <span className="text-2xl leading-none text-emerald-400 font-light">+</span>
           </Tile>
         )}

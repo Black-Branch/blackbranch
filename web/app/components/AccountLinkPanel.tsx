@@ -135,6 +135,12 @@ export default function AccountLinkPanel({ linked, configuredPlatforms, showLink
         setBanner({ type: "err", msg: `Couldn't unlink ${platformLabel(platform)} right now — nothing was changed. Try again in a moment.` });
         return;
       }
+      if (res.status === 409) {
+        // Refused in words (a site ban runs): nothing was changed.
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setBanner({ type: "err", msg: b.error || `Couldn't unlink ${platformLabel(platform)}.` });
+        return;
+      }
       if (!res.ok) throw new Error("unlink failed");
       setAccounts(prev => prev.filter(a => a.platform !== platform));
       setBanner({ type: "ok", msg: `${platformLabel(platform)} unlinked.` });

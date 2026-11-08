@@ -28,11 +28,39 @@ export function formatMxid(mxid: string): string {
   return server === matrixServerName() ? local : `${local}:${server}`;
 }
 
-/** A member's display name, falling back to the localpart of their user id. */
+// The shape of a Matrix user id. A name shaped like one is not a name.
+const MXID_SHAPE = /^@[^:]+:.+$/;
+
+/** The content a departed member had before their ban or leave event. That event carries no
+ *  displayname or avatar_url, so their last name and picture live only in its previous content.
+ *  Only a departure borrows: someone still here who cleared their name chose that. */
+function departedContent(member: RoomMember | null | undefined): { displayname?: unknown; avatar_url?: unknown } {
+  if (member?.membership !== "ban" && member?.membership !== "leave") return {};
+  return (member.events?.member?.getPrevContent?.() ?? {}) as { displayname?: unknown; avatar_url?: unknown };
+}
+
+const isName = (name: string, userId: string) => !!name && name !== userId && !MXID_SHAPE.test(name);
+
+/** A member's display name, falling back to a departed member's last name, then the localpart of
+ *  their user id. An id-shaped name counts as no name: the SDK sets rawDisplayName to the full id
+ *  for a member event without a displayname (a ban, a leave), and someone else's id would read as
+ *  that person. */
 export function memberName(member: RoomMember | null | undefined, userId: string): string {
   // A Matrix display name is attacker-chosen text; strip bidi overrides so it
   // cannot reverse the rendering of anything beside it. See lib/bidi.ts.
-  return stripBidiControls(member?.rawDisplayName || localpart(userId));
+  const name = stripBidiControls(member?.rawDisplayName ?? "");
+  if (isName(name, userId)) return name;
+  const prev = departedContent(member).displayname;
+  const last = typeof prev === "string" ? stripBidiControls(prev).trim() : "";
+  return isName(last, userId) ? last : stripBidiControls(localpart(userId));
+}
+
+/** A member's picture (an mxc URL), falling back to a departed member's last one; null when none. */
+export function memberAvatar(member: RoomMember | null | undefined): string | null {
+  const now = member?.getMxcAvatarUrl?.();
+  if (now) return now;
+  const prev = departedContent(member).avatar_url;
+  return typeof prev === "string" && prev.startsWith("mxc://") ? prev : null;
 }
 
 /** Look the member up in `room` and return their display name (localpart fallback). */

@@ -27,10 +27,11 @@ import pool from "../../lib/db.ts";
 import { getStripe } from "./stripe.ts";
 import { streamApiFetch } from "./streamApi.ts";
 import { captureIdFromRefund, captureIdFromDispute, parsePositiveCents } from "./paypalWebhookHandlers.ts";
+import { endRefundedGift, restoreRefundedGift } from "./giftServer.ts";
 
 type Kind = "donation" | "gift" | "sub";
 /** The /chat/event spendId the original credit carried, and the payment's gross in its own minor units. */
-type Origin = { kind: Kind; spendId: string; gross: number | null };
+type Origin = { kind: Kind; spendId: string; gross: number | null; slots?: number | null };
 
 function idOf(v: string | { id: string } | null | undefined): string | null {
   if (v == null) return null;
@@ -43,6 +44,10 @@ export function createSupportReversals(deps: {
   pool: Pick<Pool, "query">;
   stripe: () => Stripe;
   post: (path: string, body: unknown) => Promise<Response>;
+  /** A refunded or disputed gift stops entitling at once (giftServer.ts endGift, A1-09). */
+  endGift?: (g: { sessionId: string; ref: string; reason: "refund" | "dispute"; amount: number | null; gross: number | null; slots: number | null }) => Promise<unknown>;
+  /** A failed refund / won dispute / harmless inquiry gives the gift back (giftServer.ts restoreGift, review R3). */
+  restoreGift?: (ref: string) => Promise<unknown>;
 }) {
   /** Which support credit a Stripe payment intent paid for, or null (a points purchase, or unknown). */
   async function stripeOrigin(paymentIntent: string): Promise<Origin | null> {
@@ -55,7 +60,11 @@ export function createSupportReversals(deps: {
         return sub ? { kind: "sub", spendId: `sub:${sub}`, gross } : null;
       }
       if (cs.metadata?.kind === "coin_purchase") return null;
-      if (cs.metadata?.kind === "gift") return { kind: "gift", spendId: `gift:${cs.id}`, gross };
+      if (cs.metadata?.kind === "gift") {
+        // The purchase's own slot count: 1 for a direct gift, the bought count for a community one.
+        const n = cs.metadata.gift_type === "community" ? parseInt(cs.metadata.count ?? "", 10) : 1;
+        return { kind: "gift", spendId: `gift:${cs.id}`, gross, slots: Number.isInteger(n) && n > 0 ? n : null };
+      }
       return { kind: "donation", spendId: `donation:${cs.id}`, gross };
     }
     // A renewal has no Checkout session: its invoice names the subscription.
@@ -90,6 +99,10 @@ export function createSupportReversals(deps: {
   async function reverse(origin: Origin | null, a: { ref: string; reason: "refund" | "dispute"; amount: number | null }): Promise<void> {
     if (!origin) return;
     if (await settledAsCancelled(a.ref)) return; // its outcome (failed / won) came first
+    // A gift refunded or disputed: its entitlement ends now (what the amount covers — giftServer.ts).
+    if (origin.kind === "gift" && deps.endGift) {
+      await deps.endGift({ sessionId: origin.spendId.slice("gift:".length), ref: a.ref, reason: a.reason, amount: a.amount, gross: origin.gross, slots: origin.slots ?? null });
+    }
     await call({ kind: origin.kind, spendId: origin.spendId, ref: a.ref, reason: a.reason,
       ...(a.amount != null && origin.gross != null ? { refunded: a.amount, gross: origin.gross } : {}) });
   }
@@ -97,6 +110,8 @@ export function createSupportReversals(deps: {
   /** The refund failed / was cancelled, or the dispute was won: the money stayed. */
   async function restore(origin: Origin | null, ref: string): Promise<void> {
     if (!origin) return;
+    // The money stayed: so does the gift (review R3).
+    if (origin.kind === "gift" && deps.restoreGift) await deps.restoreGift(ref);
     await call({ kind: origin.kind, spendId: origin.spendId, ref, reason: "restore" });
   }
 
@@ -167,6 +182,8 @@ const bound = createSupportReversals({
   pool,
   stripe: getStripe,
   post: (path, body) => streamApiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  endGift: endRefundedGift,
+  restoreGift: restoreRefundedGift,
 });
 /** Stripe webhook: refund.* / charge.dispute.* → the support ledger. */
 export const reverseStripeSupport = bound.onStripeEvent;

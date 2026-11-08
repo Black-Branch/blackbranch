@@ -91,7 +91,7 @@ test("the effect halos were actually measured", () => {
   );
   assert.ok(
     fromCss.length >= 2,
-    `expected the un-pulse keyframes to carry shadows, measured ${fromCss.length}`
+    `expected the Pulse bloom layer to carry shadows, measured ${fromCss.length}`
   );
   // The glow bloom is the widest layer and the reason the margin is what it is.
   // Named explicitly so shrinking it is a decision someone makes here, rather
@@ -103,7 +103,7 @@ test("the effect halos were actually measured", () => {
 });
 
 /**
- * The pulse effect's halo, from its keyframes.
+ * The pulse effect's halo, from its bloom layer (`.un-pulse::after`, the old 50% keyframe).
  *
  * `--chat-shadow` is NOT read here, on purpose. Its wide layer follows the
  * user's blur slider (12px default, up to 36px — `shadowSpec` in
@@ -113,8 +113,8 @@ test("the effect halos were actually measured", () => {
  */
 function pulseShadows(): number[] {
   const css = stripCssComments(readFileSync(CSS, "utf8"));
-  const pulse = /@keyframes un-pulse\s*\{([\s\S]*?)\n\}/.exec(css);
-  assert.ok(pulse, "globals.css no longer defines the un-pulse keyframes");
+  const pulse = /\}\s*\.un-pulse::after\s*\{([^}]*)\}/.exec(css);
+  assert.ok(pulse, "globals.css no longer defines the Pulse bloom layer");
   return blurRadii(pulse[1]!);
 }
 

@@ -46,7 +46,7 @@ function Fold({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-function PasteLine({ label, value, copy }: { label: string; value: string; copy: boolean }) {
+export function PasteLine({ label, value, copy }: { label: string; value: string; copy: boolean }) {
   return (
     <div className="space-y-0.5">
       <p className={hint}>{label}</p>

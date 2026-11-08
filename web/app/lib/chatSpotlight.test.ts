@@ -81,10 +81,10 @@ test("the hook keeps the pick and exposes it as a key; every consumer marks the 
   assert.match(hook, /const spotlightKey = spotlightKeyOf\(spotlight\);/);
   const sb = read("features/chat/ChatSidebar.tsx", /\);\s*}\s*$/);
   assert.match(sb, /spotlight=\{spotlightKey !== null && spotlightKey === chatKey\(msg\)\}/);
-  assert.match(sb, /onSpotlight=\{isAdmin \? handleSpotlight : undefined\}/, "the site column: the admin only");
+  assert.match(sb, /const canSpotlight = useSpotlightSwitch\(isAdmin\);[\s\S]*onSpotlight=\{canSpotlight \? handleSpotlight : undefined\}/, "the site column: the admin only, while the streamer's switch leaves it on (#250)");
   const cw = read("features/chat/ChatWindow.tsx", /\);\s*}\s*$/);
   assert.match(cw, /spotlight=\{spotlightKey !== null && spotlightKey === chatKey\(msg\)\}/);
-  assert.match(cw, /onSpotlight=\{me\.isAdmin \? handleSpotlight : undefined\}/, "the window: the admin only");
+  assert.match(cw, /const canSpotlight = useSpotlightSwitch\(me\.isAdmin\);[\s\S]*onSpotlight=\{canSpotlight \? handleSpotlight : undefined\}/, "the window: the admin only, while the switch leaves it on");
   const ov = read("features/chat/ChatOverlay.tsx", /\);\s*}\s*$/);
   assert.match(ov, /data\.type === "spotlight"\) \{\s*setSpotlight\(data\.spotlight\);/, "the OBS source shows it too");
   assert.match(ov, /spotlight=\{spotlightKey !== null && spotlightKey === `\$\{msg\.platform\}:\$\{msg\.id\}`\}/);
@@ -105,7 +105,7 @@ test("the admin flag reaches the site column from the server render (StreamView,
 });
 
 test("the toggle: a click on the picked row clears, on another row picks it", () => {
-  const src = read("lib/useChatSpotlight.ts", /\}, \[current\]\);\s*}\s*$/);
+  const src = read("lib/useChatSpotlight.ts", /\}\s*$/);
   assert.match(src, /spotlight: current !== null && current === spotlightKeyOf\(\{ platform: msg\.platform, messageId: msg\.id \}\)\s*\? null\s*: \{ platform: msg\.platform, messageId: msg\.id \}/);
   assert.match(src, /postJson\("\/api\/chat\/spotlight"/);
 });

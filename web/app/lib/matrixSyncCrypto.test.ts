@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripComments } from "./testSource.ts";
-import { installSyncCryptoDoor, refusedKeyUploadFetch, REFRESH_MS, type SyncChanges } from "./matrixSyncCrypto.ts";
+import { installSyncCryptoDoor, markTrackedDevicesStale, refusedKeyUploadFetch, REFRESH_MS, type SyncChanges } from "./matrixSyncCrypto.ts";
 
 const counts = (n: number) => new Map([["signed_curve25519", n]]);
 
@@ -209,4 +209,37 @@ test("wiring: setupCrypto installs the door right after initRustCrypto, before t
   const door = ctx.indexOf("installSyncCryptoDoor(mxClient.getCrypto())");
   const start = ctx.indexOf("await mxClient.startClient(");
   assert.ok(init > 0 && door > init && start > door, "the door must be in place before startClient's first sync");
+});
+
+// ── The device-list door (markTrackedDevicesStale, audit finding C) ─────────────────────────
+
+test("the device-list door calls the engine's markAllTrackedUsersAsDirty once, and reports a backend without it", async () => {
+  let calls = 0;
+  assert.equal(await markTrackedDevicesStale({ markAllTrackedUsersAsDirty: async () => { calls++; } }), true);
+  assert.equal(calls, 1);
+  assert.equal(await markTrackedDevicesStale({}), false);
+  assert.equal(await markTrackedDevicesStale(null), false);
+});
+
+test("SDK: RustCrypto still has markAllTrackedUsersAsDirty() and it reaches the engine's", () => {
+  const rc = sdk("rust-crypto/rust-crypto.js");
+  assert.match(method(rc, "async markAllTrackedUsersAsDirty("), /await this\.olmMachine\.markAllTrackedUsersAsDirty\(\)/);
+  const engine = readFileSync(join(process.cwd(), "node_modules/@matrix-org/matrix-sdk-crypto-wasm/pkg/matrix_sdk_crypto_wasm.d.ts"), "utf8");
+  assert.match(engine, /markAllTrackedUsersAsDirty\(\): Promise<void>;/);
+  // Not on the public CryptoApi: the door is the one way the site reaches it.
+  assert.doesNotMatch(readFileSync(join(process.cwd(), "node_modules/matrix-js-sdk/lib/crypto-api/index.d.ts"), "utf8"), /markAllTrackedUsersAsDirty/);
+});
+
+test("wiring: markAllTrackedUsersAsDirty is called once, after the first PREPARED", () => {
+  const ctx = stripComments(readFileSync(join(process.cwd(), "app/lib/MatrixClientContext.tsx"), "utf8"));
+  const calls = [...ctx.matchAll(/markTrackedDevicesStale\(mxClient\.getCrypto\(\)\)/g)];
+  assert.equal(calls.length, 1, "one call site");
+  const latch = ctx.indexOf("if (!prepared) {");
+  const flip = ctx.indexOf("prepared = true;", latch);
+  const close = ctx.indexOf("matrixReadiness.advance(\"sync\", \"done\")", latch);
+  assert.ok(latch > ctx.indexOf("ClientEvent.Sync") && flip > latch && close > flip, "vacuity: the first-PREPARED latch is where it was");
+  const at = calls[0]!.index!;
+  assert.ok(at > flip && at < close, "inside the once-per-start latch, after it flips");
+  // End anchor (the count above needs the whole file read).
+  assert.match(ctx.slice(-400), /<\/Ctx\.Provider>\s*\);\s*\}\s*$/);
 });

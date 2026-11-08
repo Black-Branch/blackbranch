@@ -525,8 +525,11 @@ export function LegalDocument({ facts }: { facts: LegalFacts }) {
           We keep data for as long as your account is active or as needed to provide the
           Service, meet legal obligations, resolve disputes, and enforce our agreements.
           Public chat history may persist as part of the community record.
-          {facts.homeserverRetention &&
-            ` On our Matrix server, messages in a room without its own setting — every direct message among them — are deleted after ${facts.homeserverRetention.dms} days, and messages in #general after ${facts.homeserverRetention.general} days.`}
+          {facts.homeserverRetention && (facts.homeserverRetention.dms !== null
+            ? ` On our Matrix server, messages in a room without its own setting — every direct message among them — are deleted after ${facts.homeserverRetention.dms} days, and messages in #general ${facts.homeserverRetention.general === null ? "are kept until they are deleted" : `after ${facts.homeserverRetention.general} days`}.`
+            : ` On our Matrix server, messages in a room without its own setting — every direct message among them — are kept until they are deleted; messages in #general ${facts.homeserverRetention.general === null ? "too" : `are deleted after ${facts.homeserverRetention.general} days`}.`)}
+          {facts.homeserverRetention?.pending &&
+            ` This setting was changed to ${facts.homeserverRetention.pending.dms === null ? "no limit" : `${facts.homeserverRetention.pending.dms} days`}; the server still applies the period above until its next start.`}
         </P>
 
         <H3>Your rights</H3>
@@ -547,7 +550,10 @@ export function LegalDocument({ facts }: { facts: LegalFacts }) {
           have an open case about you (a report, a held message, a mark or a ban) the words of your
           messages stay, visible to moderators only and without your profile. A message held for review
           keeps its words with that moderation record until {AUTOMOD_HELD_RETENTION_DAYS} days after it was
-          held, whether or not the case is still open; then the record is deleted. If you keep chatting
+          held, whether or not the case is still open; then the record is deleted. Copies of a deleted
+          account stay in the site&apos;s backups until those backups are replaced by newer ones; if the
+          site is ever restored from one of them, the account comes back with it until it is deleted
+          again. If you keep chatting
           in a platform&apos;s public chat after deleting your account, those messages are processed
           like anyone else&apos;s platform chat{ai.memory ? " (an AI-memory opt-out you had stays in force)" : ""}, and
           moderation records about you are kept. People who chat only

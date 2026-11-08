@@ -27,6 +27,6 @@ export { default as SupportBarControls } from "./sections/BarSection";
 export { default as EffectsControls } from "./sections/EffectsSection";
 export { default as BadgesAdmin } from "./sections/BadgesSection";
 export { default as SupportTickets } from "./sections/SupportSection";
-export { default as ModeratorList } from "./sections/ModeratorList";
+export { default as ModeratorList, StaffList, AdminList } from "./sections/ModeratorList";
 // The Chat history's own pop-out: /mod/chat renders it.
 export { default as ChatHistoryWindow } from "./ChatHistoryWindow";

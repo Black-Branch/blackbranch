@@ -60,3 +60,6 @@ export function useRoomActions(client: MatrixClient | null | undefined, room: Ro
 
 /** Freeze-boundary identity for the scroll engine; matches the row key. */
 export const eventKey = (ev: MatrixEvent) => ev.getId() ?? "";
+
+/** A rendered Matrix row (MatrixMessageRow's root): what the scroll engine holds in place while paused. */
+export const MATRIX_ROWS = "[data-event-id]";

@@ -2,12 +2,14 @@ import pool from "@/lib/db";
 import { requireAdmin } from "@/app/lib/admin";
 import { appendModLog } from "@/app/lib/modlog";
 import { applyModRole } from "@/app/lib/modRole";
+import { requestReconcile } from "@/app/lib/community/reconcileRequest";
 import { NextRequest } from "next/server";
 
 // The moderator role, admin only: `/mod` and `/unmod`, the user card's Make / Remove moderator,
-// and the Admin Panel's moderator list. Every change is logged (mod_granted / mod_revoked); the
-// owner's client reads the newest of those to give or take community room powers
-// (useModPowerSync).
+// and the Admin Panel's moderator list. Every change is logged (mod_granted / mod_revoked). Room
+// powers follow from the role: with the community reconciler on, a change asks the host for a run at
+// once (the browser sync, useModPowerSync, stands down then); off, the owner's client reads the newest
+// log entry and gives or takes them.
 
 // GET → { moderators: [{ matrixId, displayName, since }] } — the accounts holding the mod role.
 export async function GET() {
@@ -47,6 +49,8 @@ export async function POST(req: NextRequest) {
   if (result === "not_found") return new Response("User not found", { status: 404 });
   if (result === "changed") {
     await appendModLog({ action: grant ? "mod_granted" : "mod_revoked", target: targetId, by: admin });
+    // The rooms' moderator rung now, not at the next timer run (best effort; off, nothing is asked).
+    await requestReconcile();
   }
   return Response.json({ ok: true, changed: result === "changed" });
 }

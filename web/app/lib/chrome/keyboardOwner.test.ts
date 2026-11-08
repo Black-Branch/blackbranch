@@ -1,6 +1,6 @@
-// Who owns the phone's keyboard — a top TASK window with focus inside it while the
-// keyboard is up takes the whole visible pane (and its pull reaches it); and while the keyboard is
-// up under a top window, the chat column's bar-reveal stands down.
+// While the phone's keyboard is up under a top window, the chat column's bar-reveal stands down.
+// (A top task you type in takes the whole visible pane by chrome.css alone; every top pull reaches
+// the whole pane since #234, so the pull no longer asks who owns the keyboard.)
 //
 // Run: node --test app/lib/chrome/keyboardOwner.test.ts
 import test from "node:test";
@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { dom } from "../testDom.ts";
 import "../testTsx.ts";
 
-const { ownsKeyboard, topWindowUnderKeyboard } = await import("./keyboardOwner.ts");
+const { topWindowUnderKeyboard } = await import("./keyboardOwner.ts");
 const doc = dom.window.document;
 
 function panelIn(root: HTMLElement, attrs: Record<string, string>) {
@@ -20,29 +20,6 @@ function panelIn(root: HTMLElement, attrs: Record<string, string>) {
   root.appendChild(p);
   return { p, input };
 }
-
-test("a top task window owns the keyboard only with the keyboard up AND focus inside it", () => {
-  const root = doc.createElement("div");
-  doc.body.appendChild(root);
-  const { p, input } = panelIn(root, { "data-from": "top", "data-kind": "task" });
-  const chatBox = doc.createElement("textarea");
-  root.appendChild(chatBox);
-  input.focus();
-  assert.equal(ownsKeyboard(p), false, "no keyboard: the usual half");
-  doc.documentElement.classList.add("kb-open");
-  assert.equal(ownsKeyboard(p), true, "keyboard up, typing in it: the whole pane");
-  chatBox.focus();
-  assert.equal(ownsKeyboard(p), false, "typing in the chat box: the chat shows under it again");
-  const card = panelIn(root, { "data-from": "top", "data-kind": "peek" });
-  card.input.focus();
-  assert.equal(ownsKeyboard(card.p), false, "a card is content-fit — not this rule");
-  const bottom = panelIn(root, { "data-kind": "task" });
-  bottom.input.focus();
-  assert.equal(ownsKeyboard(bottom.p), false, "a bottom window already reaches the ceiling");
-  assert.equal(ownsKeyboard(null), false);
-  doc.documentElement.classList.remove("kb-open");
-  root.remove();
-});
 
 test("the bar-reveal stands down only with the keyboard up and a top window open in the column", () => {
   const col = doc.createElement("aside");

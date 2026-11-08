@@ -1,12 +1,12 @@
 // hls.js configuration for the in-house player's compatibility mode —
-// ONE literal, exported so the test can CONSTRUCT it. hls.js validates
+// reached through hlsConfigFor so the tests can CONSTRUCT what the player gets. hls.js validates
 // the user-supplied config (not the merged defaults) and throws when
 // liveMaxLatencyDurationCount is given without liveSyncDurationCount,
 // which a source scan of the component can never see: such a config is green
 // in every scan and fails instantly for every non-Safari viewer.
 import type { HlsConfig } from "hls.js";
 
-export const HLS_CONFIG: Partial<HlsConfig> = {
+const HLS_CONFIG: Partial<HlsConfig> = {
   // The default, stated because the catch-up below is gated on it.
   lowLatencyMode: true,
   // hls.js's own default, restated because its validator rejects
@@ -27,3 +27,23 @@ export const HLS_CONFIG: Partial<HlsConfig> = {
   // stream.place serves one 1080p60 level — and right the day it ships a ladder.
   capLevelToPlayerSize: true,
 };
+
+// "Smoother playback (adds delay)" — the viewer's switch (settingsRegistry
+// playerSmooth, off by default): hold twice as much of the stream before the
+// picture, so a lossy network stalls less, at the cost of a few more seconds
+// behind live. The max latency stays above the sync count, as hls.js requires.
+const HLS_SMOOTH_CONFIG: Partial<HlsConfig> = {
+  ...HLS_CONFIG,
+  liveSyncDurationCount: 6,
+  liveMaxLatencyDurationCount: 12,
+};
+
+/** The config the player constructs Hls with. */
+export function hlsConfigFor(smooth: boolean): Partial<HlsConfig> {
+  return smooth ? HLS_SMOOTH_CONFIG : HLS_CONFIG;
+}
+
+/** The same switch on the low-latency (WebRTC) player: the receive buffer the
+ *  browser aims for, in ms (RTCRtpReceiver.jitterBufferTarget; browsers accept
+ *  0–4000, and one without the property ignores it). */
+export const SMOOTH_JITTER_BUFFER_MS = 1000;

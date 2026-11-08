@@ -269,14 +269,17 @@ export function termRegex(term: string, flags: string): RegExp | null {
   // Plural forms are the same slur: without a plural tail the trailing
   // [a-zA-Z] lookaround treats the "s" as "inside a longer word" and lets the
   // plural through. Accept an optional plural tail —
-  // s / es, and ies for y-ending terms (tranny → trannies) — with the same
+  // s, es only after s / x / z / ch / sh / o (boxes, churches, heroes; every
+  // other stem takes a bare s, or "spic" would match "Spices", prod 2026-10-29),
+  // and ies for y-ending terms (tranny → trannies) — with the same
   // separator tolerance as the body. The tail is a fixed optional suffix of
   // literal letters, so the linearity argument above still holds.
   const sep = "[\\s._*\\-]*";
   const interleave = (s: string) => s.split("").map(escapeRegex).join(sep);
+  const tail = /(?:[sxzo]|ch|sh)$/i.test(letters) ? `${sep}e?${sep}s` : `${sep}s`;
   const body = letters.endsWith("y")
     ? `${interleave(letters.slice(0, -1))}${sep}(?:y(?:${sep}s)?|i${sep}e${sep}s)`
-    : `${interleave(letters)}(?:${sep}e?${sep}s)?`;
+    : `${interleave(letters)}(?:${tail})?`;
   return new RegExp(`(?<![a-zA-Z])${body}(?![a-zA-Z])`, flags);
 }
 

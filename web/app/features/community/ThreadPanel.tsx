@@ -10,6 +10,7 @@ import { useLocalStorageString } from "@/app/lib/useClientState";
 import { useSetting, useMinuteTick } from "@/app/lib/useSetting";
 import type { TsFormat } from "@/app/lib/chatTime";
 import { MatrixMessageRow } from "@/app/components/MatrixMessageRow";
+import { rowRedacted } from "@/app/lib/timelineRows";
 import { PausedPill } from "@/app/components/PausedPill";
 import { useAnchoredChat } from "@/app/lib/useAnchoredChat";
 import { useReadReceipts } from "@/app/lib/readReceipts";
@@ -17,7 +18,9 @@ import { useOgData } from "@/app/components/LinkPreview";
 import { aggregateReactions, EMPTY_REACTIONS, type ReactionsMap } from "@/app/lib/matrixReactions";
 import { aggregateEdits, type EditsMap } from "@/app/lib/matrixEdits";
 import { mentionsMe } from "@/app/lib/matrixMentions";
-import { useRoomActions, eventKey } from "@/app/lib/useRoomActions";
+import { useRoomActions, eventKey, MATRIX_ROWS } from "@/app/lib/useRoomActions";
+import { useEchoActions } from "@/app/lib/useEchoActions";
+import { echoState, localEchoOf } from "@/app/lib/localEcho";
 import { subscribeRoomRefresh } from "@/app/lib/matrixRoomEvents";
 import { isContinuation, startsNewDay } from "@/app/lib/messageGrouping";
 import { stripes, groupEnds } from "@/app/lib/mxRows";
@@ -25,17 +28,19 @@ import { useUserLooks } from "@/app/lib/useUserLooks";
 import { DayDivider } from "@/app/components/DayDivider";
 import { threadReplies, threadRelation } from "@/app/lib/matrixThreads";
 import { MatrixInput } from "@/app/components/MatrixInput";
-import { Bar } from "@/app/components/chrome";
+import { Bar, BarButton } from "@/app/components/chrome";
 import { useEmotes } from "@/app/lib/useEmotes";
 import { useUserColors } from "@/app/lib/useUserColors";
 import { buildMatrixMessage } from "@/app/lib/buildMatrixMessage";
 import { roomLabel, getDmRoomIds, isForumRoom } from "@/app/lib/matrixRooms";
 import { useMatrixEditComposer } from "./useMatrixEditComposer";
-import { useTypingSender } from "./useTyping";
+import { useTypingSender } from "@/app/lib/useTyping";
 import { getMemberDisplayName } from "@/app/lib/matrixDisplay";
 import { senderLabel } from "@/app/lib/discordSender";
 import { postTitle, postTags, postPreview } from "@/app/lib/matrixForum";
 import { useForumVotes } from "@/app/lib/useForumVotes";
+import { lockCopy } from "@/app/lib/keyWait";
+import type { AvatarStep } from "@/app/lib/avatarSize";
 
 // Right-panel thread view: the root message, its m.thread replies, and a
 // thread-scoped composer. Scrolling uses the same anchored-scroll engine as the
@@ -75,7 +80,9 @@ export function ThreadPanel({
   // ⑥ Community settings — the same list-level reads as Timeline.tsx.
   const looks = useUserLooks();
   const showEdited = useSetting("chatStyle_mxEditedTag") !== "0";
-  const avatarSize = useSetting("chatStyle_mxLayout") === "compact" ? 12 : 14;
+  const mxLayout = useSetting("chatStyle_mxLayout");
+  const avatarStep: AvatarStep = mxLayout === "compact" ? "xs" : "line";
+  const gutterAvatar = mxLayout !== "compact" && mxLayout !== "bubbles";
 
   const [replies, setReplies] = useState<MatrixEvent[]>([]);
   const [reactions, setReactions] = useState<ReactionsMap>(() => new Map());
@@ -97,7 +104,7 @@ export function ThreadPanel({
     queued,
     anchorToBottom,
     onScroll,
-  } = useAnchoredChat({ items: replies, getKey: eventKey });
+  } = useAnchoredChat({ items: replies, getKey: eventKey, anchorRows: MATRIX_ROWS });
 
   // Forum posts + comments are votable (threads in non-forum rooms are not).
   const isForum = isForumRoom(room);
@@ -128,6 +135,7 @@ export function ThreadPanel({
   }, [rootId, anchorToBottom]);
 
   const { handleReact, handleUnreact, handleDelete } = useRoomActions(client, room);
+  const { handleRetry, handleDrop } = useEchoActions(client, room);
 
   // The open thread's newest reply is read the same way — threaded receipt.
   // An empty thread has nothing threaded to mark; the main timeline is
@@ -169,15 +177,15 @@ export function ThreadPanel({
     // New thread reply: tie it to the root, falling back as an m.in_reply_to to
     // the latest event in the thread (root if there are none yet) so plain
     // clients still render it as a reply in context.
+    const txnId = client.makeTxnId();
     try {
-      // Captured before the send, and only cleared once it succeeds — a failed
-      // send restores the input (below) and must keep its pills too.
       const mentions = peekMentions();
       const content = buildMatrixMessage(body, emotes, undefined, mentions) as Record<string, unknown>;
       const latestId = replies[replies.length - 1]?.getId() ?? rootId;
       content["m.relates_to"] = threadRelation(rootId, latestId);
-      const res = await client.sendEvent(room.roomId, EventType.RoomMessage, content as unknown as TimelineEvents[EventType.RoomMessage]);
+      // The reply carries its pills from here on, sent or not.
       clearMentions();
+      const res = await client.sendEvent(room.roomId, EventType.RoomMessage, content as unknown as TimelineEvents[EventType.RoomMessage], txnId);
       // Sending your own reply always snaps the view back to the bottom.
       anchorToBottom();
       // Reddit-style: your own comment starts auto-upvoted (+1, immutable).
@@ -189,10 +197,24 @@ export function ThreadPanel({
         }
       }
     } catch (err) {
+      // The box stays empty when the echo exists: it stays in the thread as a
+      // "Not sent" row with Retry (echoState), so putting the text back too would
+      // let a second press send it twice — the community timeline's rule. When no
+      // line was made at all, the text goes back in the box (nothing else holds it).
       console.error("thread reply failed", err);
-      setInput(body);
+      if (!localEchoOf(room, txnId)) setInput(body);
     } finally {
       setSending(false);
+    }
+  }
+
+  // A file reply lands like a typed one: back to the bottom, and in a forum your
+  // own comment starts auto-upvoted.
+  function onFileSent(eventId: string) {
+    anchorToBottom();
+    if (isForum) {
+      postJson("/api/forum/vote", { roomId: room.roomId, eventId, vote: 1 })
+        .then(() => reloadVotes()).catch(() => {});
     }
   }
 
@@ -223,7 +245,8 @@ export function ThreadPanel({
     tick,
     looks,
     showEdited,
-    avatarSize,
+    avatarStep,
+    gutterAvatar,
   };
   // The replies' group ends and stripes (mxRows.ts); the root stands alone.
   const replyGrouped = renderedReplies.map((ev, i) => isContinuation(renderedReplies[i - 1], ev));
@@ -231,13 +254,13 @@ export function ThreadPanel({
   const replyAlt = stripes(renderedReplies);
 
   return (
-    <div className="flex flex-col min-h-0 h-full">
+    // Always a narrow pane: a 260–560px slide-in in modes 2/3 (panelLayout.tsx), the whole
+    // phone in mode 1 — the Cozy gutter's 32px picture and the head's short time.
+    <div data-mx-pane="narrow" className="flex flex-col min-h-0 h-full">
       <Bar slot="top" name="mx-header" center={
         <>
           {onBack ? (
-            <button onClick={onBack} className="text-secondary hover:text-strong text-sm px-1 shrink-0" title="Back to threads">
-              ←
-            </button>
+            <BarButton size="touch" icon={<span className="text-sm">←</span>} label="Back to threads" onClick={onBack} />
           ) : (
             <span className="text-base">{isForum ? "📋" : "🧵"}</span>
           )}
@@ -247,9 +270,7 @@ export function ThreadPanel({
               <div className="text-2xs text-muted truncate leading-tight">{label}</div>
             )}
           </div>
-          <button onClick={onClose} className="text-muted hover:text-strong text-xs shrink-0" title="Close thread">
-            ✕
-          </button>
+          <BarButton size="touch" icon={<span className="text-xs">✕</span>} label="Close thread" onClick={onClose} />
         </>
       } />
 
@@ -273,7 +294,9 @@ export function ThreadPanel({
         // not. `overscroll-y-contain` keeps this
         // scroller's own vertical containment while freeing the horizontal
         // axis to chain out to the outer pager.
-        className={`flex-1 overflow-y-auto overscroll-y-contain py-1 no-scrollbar ${
+        // mx-scroll: its top padding is the head row's hover-bar reach (globals.css) —
+        // the root message is this scroller's first row.
+        className={`flex-1 overflow-y-auto overscroll-y-contain mx-scroll pb-1 no-scrollbar ${
           anchored ? "[overflow-anchor:none]" : "[overflow-anchor:auto]"
         }`}
       >
@@ -301,6 +324,7 @@ export function ThreadPanel({
             row renders only the description (with links + formatting). */}
         <MatrixMessageRow
           ev={rootEvent}
+          redacted={rowRedacted(rootEvent)}
           reactions={reactions.get(rootId) ?? EMPTY_REACTIONS}
           editedContent={edits.get(rootId) ?? null}
           voteScore={voteScores.get(rootId) ?? 0}
@@ -309,6 +333,7 @@ export function ThreadPanel({
           onMessageUser={onMessageUser}
           moderationScope={moderationScope}
           mentioned={mentionsMe(rootEvent.getContent() as Record<string, unknown>, edits.get(rootId) ?? null, myUserId)}
+          lock={lockCopy(rootEvent, false)}
           groupEnd
           {...rowProps}
         />
@@ -330,6 +355,7 @@ export function ThreadPanel({
               {startsNewDay(i === 0 ? rootEvent : prev, ev) && <DayDivider ts={ev.getTs()} />}
               <MatrixMessageRow
                 ev={ev}
+                redacted={rowRedacted(ev)}
                 reactions={reactions.get(ev.getId() ?? "") ?? EMPTY_REACTIONS}
                 editedContent={edits.get(ev.getId() ?? "") ?? null}
                 voteScore={voteScores.get(ev.getId() ?? "") ?? 0}
@@ -340,6 +366,10 @@ export function ThreadPanel({
                 onMessageUser={onMessageUser}
                 moderationScope={moderationScope}
                 mentioned={mentionsMe(ev.getContent() as Record<string, unknown>, edits.get(ev.getId() ?? "") ?? null, myUserId)}
+                echo={echoState(ev)}
+                onRetry={handleRetry}
+                onDrop={handleDrop}
+                lock={lockCopy(ev, false)}
                 {...rowProps}
               />
             </Fragment>
@@ -378,7 +408,11 @@ export function ThreadPanel({
               inputRef={inputRef}
               isSignedIn
               hideUserMenu={!isForum}
+              railBeside={!compact}
               room={room}
+              // A file sent from here is a thread reply too (same relation as send()).
+              thread={{ rootId, latestId: () => replies[replies.length - 1]?.getId() ?? rootId }}
+              onSent={onFileSent}
             />
           </form>
         }

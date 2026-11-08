@@ -3,14 +3,15 @@
 // running, still starting, failed (with the one-line reason) or off — from the ingest's own health
 // answer, relayed by GET /api/admin/stream/readers. A reader that failed to start shows here, not
 // only in a log. Asked when the tab opens, on Refresh, and every 30 s while the tab is open and
-// the page visible (a reader that is starting settles within two minutes).
+// the page visible (a reader that is starting settles within two minutes). Beside each platform,
+// its live detection: Live / Offline / Scheduled for <time> / Can't tell and why (ingestReaders.ts).
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { getJson } from "@/app/lib/http";
 import { agoLabel } from "@/app/lib/relativeTime";
 import { platformLabel } from "@/app/lib/platforms";
 import PlatformIcon from "@/app/components/PlatformIcon";
-import { readersView, type ReadersReply, type ReaderState } from "./ingestReaders";
+import { readersView, YOUTUBE_LIVE_NOTE, type LiveChip, type ReadersReply, type ReaderState } from "./ingestReaders";
 import { card, cardTitle } from "./StreamCharts";
 
 const POLL_MS = 30_000;
@@ -19,6 +20,12 @@ const WORD: Record<ReaderState, { label: string; tone: string }> = {
   starting: { label: "Starting", tone: "text-amber-300" },
   failed: { label: "Failed", tone: "text-red-400" },
   off: { label: "Off", tone: "text-muted" },
+};
+const LIVE_TONE: Record<LiveChip["state"], string> = {
+  live: "border-emerald-400/40 text-emerald-300",
+  offline: "border-edge text-muted",
+  upcoming: "border-sky-400/40 text-sky-300",
+  unknown: "border-amber-400/40 text-amber-300",
 };
 
 export function StreamReaders({ active }: { active: boolean }) {
@@ -57,13 +64,22 @@ export function StreamReaders({ active }: { active: boolean }) {
               <div className="flex min-h-6 items-center gap-2 text-xs">
                 <PlatformIcon platform={r.platform} size={14} />
                 <span className="text-body">{platformLabel(r.platform)}</span>
-                <span className={`ml-auto ${WORD[r.state].tone}`}>
-                  {WORD[r.state].label}
-                  {r.since && got && r.state !== "off" ? <span className="text-muted"> · {agoLabel(r.since, got.at)}</span> : null}
-                </span>
+                {r.state && (
+                  <span className={`ml-auto shrink-0 ${WORD[r.state].tone}`}>
+                    {WORD[r.state].label}
+                    {r.since && got && r.state !== "off" ? <span className="text-muted"> · {agoLabel(r.since, got.at)}</span> : null}
+                  </span>
+                )}
               </div>
               {r.state === "failed" && (
                 <p className="pl-6 text-2xs text-red-300 break-words" data-reader-error>{r.error ?? "No reason given."}</p>
+              )}
+              {r.live && (
+                <div className="pl-6 pt-1" data-live={r.live.state} data-stale={r.live.stale ? "" : undefined}>
+                  <span className={`inline-block max-w-full rounded border px-1.5 py-px text-2xs break-words ${LIVE_TONE[r.live.state]}`}>{r.live.words}</span>
+                  {r.live.note && <p className="text-2xs text-amber-300 break-words" data-live-note>{r.live.note}</p>}
+                  {r.platform === "youtube" && <p className="text-2xs text-faint break-words" data-youtube-note>{YOUTUBE_LIVE_NOTE}</p>}
+                </div>
               )}
             </li>
           ))}

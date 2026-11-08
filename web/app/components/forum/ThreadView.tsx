@@ -37,7 +37,7 @@ function Author({ sender, name, avatar, ts, userColors }: {
   const { label } = senderLabel(name, sender);
   return (
     <div className="flex items-center gap-1.5 min-w-0" style={{ fontSize: "var(--text-chat-sm)" }}>
-      <Avatar mxcUrl={avatar} name={label} size={18} />
+      <Avatar mxcUrl={avatar} name={label} size="sm" />
       <span className="font-medium truncate" style={{ color: userColors[sender] || usernameColor(label) }}>{label}</span>
       <span className="text-muted shrink-0">· {shortWhen(ts)}</span>
     </div>

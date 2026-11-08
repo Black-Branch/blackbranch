@@ -51,10 +51,9 @@ test("the borrowed-hit-area class exists, coarse-only, 44px, non-displacing", ()
     ".tap-hit-44 moved outside (or before) the coarse-pointer gate");
 });
 
-test("the two undersized controls wear it", () => {
+test("the undersized control wears it", () => {
   for (const [file, tail] of [
     ["app/components/PwaInstallNudge.tsx", /aria-label="Dismiss">\s*✕\s*<\/button>\s*<\/div>\s*<\/div>\s*\)\s*;\s*}\s*$/],
-    ["app/components/MatrixAppsHint.tsx", /<MatrixAppsList \/>\s*<\/div>\s*\)\s*}\s*<\/div>\s*<\/div>\s*\)\s*;\s*}\s*$/],
   ] as const) {
     const src = readWhole(file, tail, stripComments);
     assert.match(src, /aria-label="Dismiss"[\s\S]{0,40}✕|tap-hit-44[^"]*"[^>]*aria-label="Dismiss"/,

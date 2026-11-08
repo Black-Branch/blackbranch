@@ -149,12 +149,31 @@ test("mode 2 with only one side panel open changes nothing", () => {
   assert.deepEqual(resolveCapacityChange({ ...base, directoryOpen: false, membersOpen: true }), {});
 });
 
-test("mode 1 closes nothing — the flags survive so widening restores them", () => {
+// #240: re-pinned 2026-11-07. Mode 1 used to close nothing, so a room open beside the
+// channel list was SWAPPED for the list the moment a divider drag narrowed the pane past
+// 680 px — the timeline unmounted, and widening again reopened the room at its newest line
+// (measured on the pair: the line being read moved 2317 px). The open room is the anchor:
+// narrowing INTO mode 1 with a room open keeps the room on screen.
+test("narrowing INTO mode 1 with a room open closes the side panels — the room stays in view (#240)", () => {
   assert.deepEqual(
-    resolveCapacityChange({ mode: 1, prevMode: 2, directoryOpen: true, membersOpen: true, lastSide: "dir" }),
-    {},
-    "mode 1 shows one panel via resolveVisibility; the open flags must be preserved"
+    resolveCapacityChange({ mode: 1, prevMode: 2, directoryOpen: true, membersOpen: true, lastSide: "dir", hasSelected: true }),
+    { directoryOpen: false, membersOpen: false },
   );
+  assert.deepEqual(
+    resolveCapacityChange({ mode: 1, prevMode: 3, directoryOpen: true, membersOpen: false, lastSide: null, hasSelected: true }),
+    { directoryOpen: false, membersOpen: false },
+    "from mode 3 too",
+  );
+});
+
+test("mode 1 otherwise closes nothing: no room open, already in mode 1, or a first render there", () => {
+  for (const [prevMode, hasSelected] of [[2, false], [1, true], [0, true], [null, true]] as const) {
+    assert.deepEqual(
+      resolveCapacityChange({ mode: 1, prevMode, directoryOpen: true, membersOpen: true, lastSide: "dir", hasSelected }),
+      {},
+      `prevMode ${prevMode}, room open ${hasSelected}: the flags stay as the person left them`,
+    );
+  }
 });
 
 test("the patch is SPARSE — an absent key never means 'close it'", () => {

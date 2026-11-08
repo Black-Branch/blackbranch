@@ -13,6 +13,8 @@
 import { useEffect, useRef } from "react";
 import { modPowerPlan, modDemotePlan, MOD_POWER, type DemoteRoom } from "./modPowerPlan.ts";
 import { attemptWithRetry } from "./matrixModerate.ts";
+import { fetchCommunityAnswer } from "./communityAnswer.ts";
+import { reconcilerOn } from "./community/reconcilerOn.ts";
 
 // `undefined` removes the user's entry, so they fall back to the room's default level.
 type PowerClient = { setPowerLevel(roomId: string, userId: string[], level: number | undefined): Promise<unknown> };
@@ -57,18 +59,17 @@ export function useModPowerSync(
 ): void {
   const ran = useRef(false);
   useEffect(() => {
-    if (!client || ran.current || rooms.length === 0 || !myUserId) return;
+    // With the community reconciler the server writes every power level itself.
+    if (!client || ran.current || rooms.length === 0 || !myUserId || reconcilerOn()) return;
     ran.current = true;
     void (async () => {
       try {
-        const res = await fetch("/api/community/mods");
-        // 403 is the ordinary answer for everyone who is not an admin.
-        if (!res.ok) return;
-        const answer = (await res.json()) as { modIds?: string[]; keepIds?: unknown };
-        const modIds = answer.modIds;
-        const keepIds = Array.isArray(answer.keepIds) ? answer.keepIds.filter((id): id is string => typeof id === "string") : [];
+        // Only an admin's answer carries a mod list; everyone else's has none (modIds null).
+        const answer = await fetchCommunityAnswer();
+        const modIds = answer?.modIds;
+        const keepIds = answer?.keepIds ?? [];
         // No list, no reconcile: an empty or missing answer must never read as "nobody is a mod".
-        if (!Array.isArray(modIds) || modIds.length === 0) return;
+        if (!modIds || modIds.length === 0) return;
         await runModPowerPlan(client, modPowerPlan(rooms, modIds, myUserId));
         // Anyone else at mod level goes back to the room default (null: their entry is dropped) —
         // except the install's own accounts and the room's bridge bots (modDemotePlan).

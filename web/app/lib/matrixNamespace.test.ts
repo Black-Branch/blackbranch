@@ -17,13 +17,14 @@ const { loadConfig } = (await import(new URL("../../../tools/check-owner-literal
 // The unset case (a fresh install) is matrixNamespaceFresh.test.ts.
 process.env.INSTALL_VALUES = JSON.stringify({ "matrix.legacyNamespace": "net.prior" });
 const {
-  ROOM_TYPE, FORUM_TITLE, FORUM_TAGS, FORUM_BODY, USERNAME_COLOR, MUTE_RULE, HIDDEN_PEOPLE, IGNORED_BOTS, readFirst,
+  ROOM_TYPE, FORUM_TITLE, FORUM_TAGS, FORUM_BODY, USERNAME_COLOR, MUTE_RULE, HIDDEN_PEOPLE, IGNORED_BOTS, SPACE_KIND, DM_CLOSED, readFirst,
 } = await import("./matrixNamespace.ts");
 
 const NAMES: Array<[NamespacedName, string]> = [
   [ROOM_TYPE, "room_type"], [FORUM_TITLE, "forum.title"], [FORUM_TAGS, "forum.tags"],
   [FORUM_BODY, "forum.body"], [USERNAME_COLOR, "username_color"], [MUTE_RULE, "mute"],
-  [HIDDEN_PEOPLE, "hidden_people"], [IGNORED_BOTS, "ignored_bots"],
+  [HIDDEN_PEOPLE, "hidden_people"], [IGNORED_BOTS, "ignored_bots"], [SPACE_KIND, "space_kind"],
+  [DM_CLOSED, "dm_closed"],
 ];
 
 test("every name reads the product name first, then the legacy one", () => {
@@ -90,6 +91,6 @@ test("W7: CI boots the throwaway homeserver and runs the homeserver suite with H
   const job = ci.slice(at, end);
   assert.match(job, /throwaway\.sh services/);
   assert.match(job, /throwaway\.sh hs-test-env/);
-  assert.match(job, /HS_TEST_REQUIRED=1 node --test "app\/\*\*\/\*\.hs\.test\.ts"/);
+  assert.match(job, /HS_TEST_REQUIRED=1 node --test --test-force-exit "app\/\*\*\/\*\.hs\.test\.ts"/);
   assert.ok(readdirSync(dirname(fileURLToPath(import.meta.url))).some((f) => f.endsWith(".hs.test.ts")), "no homeserver suite to run");
 });

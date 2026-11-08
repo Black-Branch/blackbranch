@@ -12,7 +12,7 @@ import { installResizeObserverStub } from "./testTsx.ts";
 installResizeObserverStub();
 const { openReportDialog, reportOutcome } = await import("@/app/components/ReportDialog");
 const { default: ReportsSection } = await import("@/app/features/moderation/sections/ReportsSection");
-const { default: ModeratorList } = await import("@/app/features/moderation/sections/ModeratorList");
+const { default: ModeratorList, StaffList } = await import("@/app/features/moderation/sections/ModeratorList");
 const { helpText } = await import("./commands/parse.ts");
 const { createRoot } = await import("react-dom/client");
 
@@ -87,7 +87,7 @@ test("the Admin Panel's Moderators lists the role, adds by name and removes", as
   const { host, cleanup } = await mount(React.createElement(ModeratorList, { note: () => {} }));
   await tick();
   assert.match(host.textContent ?? "", /Rosalind/);
-  await act(async () => { type(host.querySelector('input[aria-label="Make a moderator"]') as HTMLInputElement, "@quinn:site.test"); });
+  await act(async () => { type(host.querySelector('input[aria-label="Who to make a moderator"]') as HTMLInputElement, "@quinn:site.test"); });
   await act(async () => { button(/^Make moderator$/)!.click(); });
   await tick();
   await act(async () => { button(/^Remove moderator$/)!.click(); });
@@ -96,6 +96,31 @@ test("the Admin Panel's Moderators lists the role, adds by name and removes", as
     { targetId: "@quinn:site.test", grant: true },
     { targetId: "@rosalind:site.test", grant: false },
   ]);
+  await cleanup();
+});
+
+test("Staff list renders: who holds Staff, Give Staff by name, Remove from Staff", async () => {
+  const calls = serve({ "/api/admin/staff": { staff: [{ matrixId: "@sam:site.test", displayName: "Sam", since: null }], ok: true, changed: true, requested: true } });
+  const notes: string[] = [];
+  const { host, cleanup } = await mount(React.createElement(StaffList, { note: (m: string) => { notes.push(m); } }));
+  await tick();
+  assert.equal(host.querySelector("h2")?.textContent, "Staff");
+  assert.match(host.textContent ?? "", /Sam/);
+  assert.doesNotMatch(host.textContent ?? "", /power level|Matrix|—/, "plain words");
+  // The field and the button each have their own name (a screen reader heard "Give Staff" twice).
+  const field = host.querySelector('input[aria-label="Who to give Staff"]') as HTMLInputElement;
+  assert.ok(field, "the field is named for what goes in it");
+  assert.notEqual(field.getAttribute("aria-label"), button(/^Give Staff$/)!.textContent);
+  await act(async () => { type(field, "@quinn:site.test"); });
+  await act(async () => { button(/^Give Staff$/)!.click(); });
+  await tick();
+  await act(async () => { button(/^Remove from Staff$/)!.click(); });
+  await tick();
+  assert.deepEqual(calls.filter((c) => c.method === "POST").map((c) => [c.url, c.body]), [
+    ["/api/admin/staff", { targetId: "@quinn:site.test", grant: true }],
+    ["/api/admin/staff", { targetId: "@sam:site.test", grant: false }],
+  ]);
+  assert.deepEqual(notes, ["quinn is now Staff.", "Sam is no longer Staff."]);
   await cleanup();
 });
 

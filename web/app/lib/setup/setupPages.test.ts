@@ -40,7 +40,7 @@ test("paste values are computed from this install's own addresses, and a hole is
 
 test("the product's own lists are released, and every value to paste is THIS install's", () => {
   const core = coreSetupLists();
-  assert.deepEqual(core.map((c) => c.id), ["twitch", "kick", "streamplace", "donations", "voice"]);
+  assert.deepEqual(core.map((c) => c.id), ["twitch", "kick", "streamplace", "donations", "voice", "discord"]);
   assert.ok(core.every((c) => !c.later && c.label && c.description));
   const bb = { origin: "https://bb.test", apiOrigin: "https://api.bb.test", matrixOrigin: "https://matrix.bb.test", serverName: "bb.test" };
   const pastes = (page: ReturnType<typeof coreSetupPage>) => (page?.steps ?? []).flatMap((s) => s.paste.map((p) => [p.label, p.value]));
@@ -67,6 +67,17 @@ test("the product's own lists are released, and every value to paste is THIS ins
   assert.equal(coreSetupPage("nope", bb), null);
   // An enum field carries its choices (PayPal's live / sandbox is a select, not free text).
   assert.deepEqual(moduleSetupPage("paypal", bb)!.steps[0]!.fields.find((f) => f.key === "paypal.env")?.values, ["live", "sandbox"]);
+});
+
+test("Discord's guide is the Discord side of the bot step: never a setup page, its docs page its own", () => {
+  const page = coreSetupPage("discord", addr)!;
+  assert.deepEqual(page.steps.map((s) => s.id), ["app", "token"]);
+  assert.deepEqual(page.steps.flatMap((s) => s.paste), [{ label: "Description (somewhere in it)", value: "Powered by OOYE" }]);
+  assert.deepEqual(page.steps.flatMap((s) => s.fields), [], "the token is kept by the server, never a settings key");
+  assert.equal(page.docs, "https://blackbranch.app/docs/platforms/discord/");
+  // Switched on on the server (the bundle's profile), so the setup pages never offer it.
+  assert.ok(!wizardLists().some((w) => w.id === "discord"));
+  assert.equal(wizardListPage("discord", addr), null);
 });
 
 test("the OBS guide is the rig page and the pause scene, on every install: the product has no OBS WebSocket steps", () => {

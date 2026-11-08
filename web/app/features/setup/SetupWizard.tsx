@@ -17,6 +17,7 @@ import { previousStep } from "@/app/lib/setup/setupFlow";
 import { formatProblem, docsUrl, SETUP_DOCS } from "@/app/lib/setup/setupExtras";
 import SetupStepGuide from "@/app/components/SetupStepGuide";
 import { PRODUCT_MARK } from "@/app/lib/siteIcons";
+import { STARTING_CHANNELS, type SetupChannel } from "@/app/lib/community/setupChannels";
 
 const card = "rounded-xl border border-edge bg-surface-1 p-4 space-y-3";
 // The buttons' backgrounds are OPAQUE: in a browser theme that makes pages see-through (Zen's
@@ -558,8 +559,50 @@ const JOIN_CHOICES = [
   { id: "closed", title: "Only accounts I make", blurb: "closed: nobody can make a new account here on their own — an admin makes them." },
 ] as const;
 
+const CHANNEL_KINDS: { id: SetupChannel["kind"]; label: string }[] = [
+  { id: "text", label: "Chat" }, { id: "announcement", label: "Announcements" }, { id: "forum", label: "Forum" },
+];
+
+/** The channels the community starts with: #general and #forum, made now, then the editable rest,
+ *  made by the server shortly after setup (spec 2026-10-23 §4.6). */
+function ChannelList({ channels, setChannels, locked }: { channels: SetupChannel[]; setChannels: (c: SetupChannel[]) => void; locked: boolean }) {
+  const set = (i: number, c: Partial<SetupChannel>) => setChannels(channels.map((x, j) => (j === i ? { ...x, ...c } : x)));
+  return (
+    <fieldset className="space-y-1 rounded-md border border-edge p-2">
+      <legend className="px-1 text-xs font-medium text-body">Channels</legend>
+      <ul className="space-y-1">
+        {STARTING_CHANNELS.map((c) => (
+          <li key={c.name} className="flex items-center gap-2 text-xs text-body">
+            <span className="min-w-0 flex-1 truncate">#{c.name}</span>
+            <span className={hint}>{c.kind === "forum" ? "Forum" : "Chat"} · made now</span>
+          </li>
+        ))}
+        {channels.map((c, i) => (
+          <li key={i} className="flex items-center gap-2">
+            <input className={input} value={c.name} maxLength={100} disabled={locked} aria-label={`Channel ${i + 1} name`}
+              onChange={(e) => set(i, { name: e.target.value })} />
+            <select className={`${FIELD} shrink-0 px-2 text-xs`} value={c.kind} disabled={locked} aria-label={`Channel ${i + 1} kind`}
+              onChange={(e) => set(i, { kind: e.target.value as SetupChannel["kind"] })}>
+              {CHANNEL_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+            </select>
+            {!locked && <button type="button" className={btn} aria-label={`Remove channel ${i + 1}`} onClick={() => setChannels(channels.filter((_, j) => j !== i))}>Remove</button>}
+          </li>
+        ))}
+      </ul>
+      {!locked && channels.length < 20 && (
+        <button type="button" className={btn} onClick={() => setChannels([...channels, { kind: "text", name: "" }])}>Add a channel</button>
+      )}
+      <p className={hint}>
+        {locked ? "The ones listed here are made after setup." : "#general and #forum are made with the community; the rest are made after setup."}
+        {" "}Everyone can see them. You can rename, add and remove channels later in the Admin Panel.
+      </p>
+    </fieldset>
+  );
+}
+
 function Community({ data, back, onBack, save }: { data: Json; back: boolean; onBack: () => void; save: (d: Json) => Promise<void> }) {
   const [federation, setFederation] = useState(!!data.federation);
+  const [channels, setChannels] = useState<SetupChannel[]>(Array.isArray(data.channels) ? (data.channels as SetupChannel[]) : []);
   const [registration, setRegistration] = useState<string | null>(typeof data.registration === "string" ? data.registration : null);
   const [rooms, setRooms] = useState<{ hub: string | null; general: string | null }>({ hub: (data.hub as string) ?? null, general: (data.general as string) ?? null });
   const [state, setState] = useState<"idle" | "working" | "done">(data.hub && data.general ? "done" : "idle");
@@ -570,7 +613,7 @@ function Community({ data, back, onBack, save }: { data: Json; back: boolean; on
   useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
   const make = async () => {
     setErr(null); setState("working");
-    const r = await call("/api/setup/community", { federation, registration });
+    const r = await call("/api/setup/community", { federation, registration, channels });
     if (!r.ok) { setErr(errorOf(r.json)); setState("idle"); return; }
     const asked = String(r.json.requestedAt);
     timer.current = setInterval(async () => {
@@ -611,6 +654,7 @@ function Community({ data, back, onBack, save }: { data: Json; back: boolean; on
         </div>
         <p className={hint}>Sign-up stays closed until setup is finished, then follows this. You can change it later in the Admin Panel.</p>
       </fieldset>
+      <ChannelList channels={channels} setChannels={setChannels} locked={state !== "idle"} />
       {state === "done" ? (
         <p className="text-xs text-body">✓ {made || "Made: your community's space and #general. They belong to your account, and you are in each."}</p>
       ) : (

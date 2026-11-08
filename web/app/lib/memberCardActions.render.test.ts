@@ -56,8 +56,10 @@ function fakeRoom(members: Record<string, { pl: number; membership?: string }>, 
   const room = {
     roomId: "!general:example.tv",
     name: "general",
+    getDMInviter: () => undefined,
     client: {
       getUser: () => null,
+      getAccountData: () => undefined,
       kick: (r: string) => act_(r), ban: (r: string) => act_(r), unban: (r: string) => act_(r),
     },
     currentState: { hasSufficientPowerLevelFor: (_a: string, pl: number) => pl >= 50 },
@@ -116,6 +118,33 @@ test("a moderator sees Kick and Ban", async () => {
   const { cleanup } = await renderCard({ target: fakeMember("@cleo:example.tv", 0), room, scope: [room] });
   assert.ok(buttonByText(/^Kick$/));
   assert.ok(buttonByText(/^Ban$/));
+  await cleanup();
+});
+
+test("a direct conversation offers no Kick, Ban or Unban, even to someone with power in it (client polish Task 11, ruling 2)", async () => {
+  // Both members of a DM hold power 100: the same card from a DM row (the DM window, the Community
+  // DM view) must not let either one throw the other out of the conversation.
+  for (const how of ["filed in m.direct", "a DM invite"] as const) {
+    const { room } = fakeRoom({ "@mod:example.tv": { pl: 100 }, "@cleo:example.tv": { pl: 100 }, "@gone:example.tv": { pl: 0, membership: "ban" } });
+    const dm = Object.assign(room, { roomId: "!dm:example.tv" });
+    if (how === "filed in m.direct") {
+      Object.assign(dm.client, { getAccountData: () => ({ getContent: () => ({ "@cleo:example.tv": ["!dm:example.tv"] }) }) });
+    } else {
+      Object.assign(dm, { getDMInviter: () => "@cleo:example.tv" });
+    }
+    for (const target of [fakeMember("@cleo:example.tv", 100), fakeMember("@gone:example.tv", 0, "ban")]) {
+      const { cleanup } = await renderCard({ target, room: dm, scope: [dm] });
+      assert.ok(buttonByText(/^Kick$/) === null, `${how}: no Kick`);
+      assert.ok(buttonByText(/^Ban$/) === null, `${how}: no Ban`);
+      assert.ok(buttonByText(/^Unban$/) === null, `${how}: no Unban`);
+      assert.ok(buttonByText(/^Copy user ID$/), "the card itself still renders");
+      await cleanup();
+    }
+  }
+  // The same power in a channel still moderates (the test above this one, with power 100).
+  const { room } = fakeRoom({ "@mod:example.tv": { pl: 100 }, "@cleo:example.tv": { pl: 0 } });
+  const { cleanup } = await renderCard({ target: fakeMember("@cleo:example.tv", 0), room, scope: [room] });
+  assert.ok(buttonByText(/^Kick$/) && buttonByText(/^Ban$/), "a channel keeps Kick and Ban");
   await cleanup();
 });
 

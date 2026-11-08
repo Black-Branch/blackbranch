@@ -2,6 +2,8 @@
 // caller hands in fetch. Read-only, like every provider check (one GET), and nothing a provider
 // answers is shown back except the fixed facts read from it.
 
+import { formatPrice } from "../moneyFormat.ts";
+
 export type CheckAnswer = { ok: boolean; detail: string };
 
 /** The supporter subscription's Stripe Price (stripe.supporterPriceId): it must exist under the
@@ -33,14 +35,8 @@ export async function checkStripePrice(priceId: string | null, secretKey: string
   return { ok: true, detail: `found: ${priceWords(p.unit_amount, p.currency)} a month (${mode})` };
 }
 
-/** An amount in the currency's minor units, in words ("$5.00"); the bare figure when Intl does not know the currency. */
+/** An amount in the currency's minor units, in words ("$5.00"), by the site's one money formatter. */
 function priceWords(amount: unknown, currency: unknown): string {
   if (typeof amount !== "number" || typeof currency !== "string") return "a price";
-  try {
-    const f = new Intl.NumberFormat("en", { style: "currency", currency: currency.toUpperCase() });
-    const digits = f.resolvedOptions().maximumFractionDigits ?? 2;
-    return f.format(amount / 10 ** digits);
-  } catch {
-    return `${amount} ${currency.toUpperCase()} (smallest units)`;
-  }
+  return formatPrice(amount, currency.toLowerCase(), "minor");
 }

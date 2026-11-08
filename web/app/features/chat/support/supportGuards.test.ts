@@ -66,8 +66,14 @@ test("the load-time effect is the ONLY auto-open path (reminders never interrupt
   const raw = readFileSync(join(here, "../ChatSidebar.tsx"), "utf8");
   const marker = raw.indexOf("load-time-only support opener");
   assert.ok(marker !== -1, "the marked opener effect is gone from ChatSidebar");
-  const effectEnd = raw.indexOf("}, [", marker);
-  assert.ok(effectEnd !== -1, "anchor lost — the opener effect's dependency close moved");
+  // The opener is two effects: the load-time fetch decides what to say, and the next one opens it
+  // once the greeting holds the first-run slot (nudgeSlot.ts). The span runs to the second's close.
+  const effectEnd = raw.indexOf("}, [greetHolds, greeting, convoOpen]);", marker);
+  assert.ok(effectEnd !== -1, "anchor lost — the slot-gated opener effect's dependency close moved");
+  assert.ok(raw.indexOf("useEffect(", marker) < raw.indexOf('useNudgeSlot("help-desk"', marker)
+    && raw.indexOf('useNudgeSlot("help-desk"', marker) < effectEnd, "the opener span holds more than the fetch and the slot-gated effect");
+  const effectsInSpan = [...raw.slice(marker, effectEnd).matchAll(/useEffect\(/g)].length;
+  assert.equal(effectsInSpan, 2, "the opener span is exactly the fetch effect and the slot-gated effect");
   const enters = [...raw.matchAll(/supportCtl\.current\?\.enter\(\)/g)].map((m) => m.index);
   assert.ok(enters.length >= 1, "the opener effect no longer arms support mode");
   for (const idx of enters) {

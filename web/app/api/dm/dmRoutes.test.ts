@@ -44,10 +44,15 @@ test("/api/dm/ping GET: a signed-in page learns its own nudges — and only its 
   assert.doesNotMatch(get, /searchParams|req\./, "takes no input");
 });
 
-test("/api/dm/resolve: signed in; never yourself, a bot or a deleted account; an exact username wins outright", () => {
+// What the lookup finds and in what order (every account, anywhere in the name, ranked; never
+// yourself, a bot, a deleted or an install account) is pinned on a real Postgres:
+// app/lib/dm/resolvePeople.db.test.ts. Here: the route is the shell around it.
+test("/api/dm/resolve: signed in; the lookup is resolvePeople, with the install's own accounts hidden", () => {
   assert.match(RESOLVE, /if \(!me\) return Response\.json\(\{ error: "Sign in first\." \}, \{ status: 401 \}\);/);
-  assert.match(RESOLVE, /WHERE deleted_at IS NULL AND NOT is_bot AND matrix_id <> \$3/);
-  assert.match(RESOLVE, /best <= 1 \? rows\.slice\(0, 1\)/);
-  assert.match(RESOLVE, /ESCAPE '\\\\'/, "a typed % or _ is a character, not a wildcard");
-  assert.match(RESOLVE, /displayName: r\.display_name,\s*\}\)\),\s*\}\);\s*\}\s*$/, "vacuity anchor");
+  assert.match(RESOLVE, /await resolvePeople\(query, req\.nextUrl\.searchParams\.get\("q"\) \?\? "", me, installAccounts\(\), matrixServerName\(\)\)/);
+  assert.match(RESOLVE, /const perUser = createSlidingWindowLimiter\(60_000, 60\);/);
+  assert.match(RESOLVE, /if \(ban\.length\) return [^\n]*\n\s*if \(perUser\(me\)\) return Response\.json\(\{ error: "slow down" \}, \{ status: 429 \}\);\s*const query/,
+    "every lookup counts against the caller, after sign-in and the ban check, before the query");
+  assert.match(RESOLVE, /return \[env\.serviceUserId, \.\.\.\(env\.readerUserId \? \[env\.readerUserId\] : \[\]\)\];/);
+  assert.match(RESOLVE, /return Response\.json\(answer\);\s*\}\s*$/, "vacuity anchor");
 });

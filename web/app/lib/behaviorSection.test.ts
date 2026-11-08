@@ -17,7 +17,9 @@ const menu = read("app", "lib", "settingsMenu.ts");
 
 const BEHAVIOR_KEYS = ["mentionSound", "mentionHl", "upvoteHl", "eventHl", "spotlightOn", "ownTint", "firstMark", "profanityFilter", "hideBots", "unreadDots", "histLength", "winDock", "winFrom", "termButton",
   // ⑥ Community: what shows + privacy (its four LOOK keys are not Behavior).
-  "mxDeleted", "mxEditedTag", "mxUnread", "mxHideMuted", "mxReceipts", "mxTyping"];
+  "mxDeleted", "mxEditedTag", "mxUnread", "mxHideMuted", "mxReceipts", "mxTyping",
+  // Task 17: the community Return key is behaviour (listed under Community › Composer since #242).
+  "communityReturnKey"];
 
 const behaviorSections = () => [...menu.matchAll(/\{ title: "([^"]+)", tab: "behavior", items: \[([^\]]*)\]/g)];
 

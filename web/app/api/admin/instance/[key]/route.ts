@@ -1,7 +1,11 @@
 import { type NextRequest } from "next/server";
 import { requireAdminMutation, writeInstanceValue, clearInstanceValue, refindDerivedIds } from "@/app/lib/instanceAdminServer";
-import { reloadInstanceConfig } from "@/app/lib/instanceConfigServer";
+import { instanceBool, reloadInstanceConfig } from "@/app/lib/instanceConfigServer";
 import { requestRenderFor } from "@/app/lib/hostRequests";
+import pool from "@/lib/db";
+import { paymentConfirmParam, paymentSwitchClear, paymentSwitchOff, paymentSwitchRefusal } from "@/app/lib/paymentSwitch";
+import { entitledCountFor } from "@/app/lib/subscriptions/entitlement";
+import { afterSpotlightSave } from "@/app/lib/spotlightServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,12 +23,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ key:
   const admin = await requireAdminMutation(req);
   if (admin instanceof Response) return admin;
   const name = decodeURIComponent((await params).key);
-  const body = (await req.json().catch(() => null)) as { value?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as { value?: unknown; confirm?: unknown } | null;
   if (!body || !("value" in body)) return Response.json({ error: "value is required" }, { status: 400 });
+  // Switching a payment provider off ends its subscribers' perks while it keeps charging them:
+  // refused until the request confirms the count the panel showed (paymentSwitch.ts).
+  const off = paymentSwitchOff(name, body.value);
+  if (off) {
+    const refusal = paymentSwitchRefusal(off, await entitledCountFor(pool, off), body.confirm);
+    if (refusal) return Response.json(refusal, { status: 409, headers: { "Cache-Control": "no-store" } });
+  }
   const r = await writeInstanceValue(name, body.value, admin);
   if (r.status !== 200) return Response.json(r.body, { status: r.status, headers: { "Cache-Control": "no-store" } });
   await reloadInstanceConfig();
   await requestRenderFor(name);
+  await afterSpotlightSave(name);
   // A channel (or the app keys that let the site ask) changed: the platform id behind it is found
   // again and saved, so the panel never asks anyone to type a numeric id.
   const found = await refindDerivedIds(name, admin);
@@ -37,7 +49,14 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ k
   const admin = await requireAdminMutation(req);
   if (admin instanceof Response) return admin;
   const name = decodeURIComponent((await params).key);
+  // "Clear saved" on a payment switch that is on can switch it off (the default is off on a new
+  // install): the same confirm as switching it off, the count carried as ?confirm=N.
+  const off = paymentSwitchClear(name, instanceBool(name));
+  if (off) {
+    const refusal = paymentSwitchRefusal(off, await entitledCountFor(pool, off), paymentConfirmParam(req.nextUrl));
+    if (refusal) return Response.json(refusal, { status: 409, headers: { "Cache-Control": "no-store" } });
+  }
   const r = await clearInstanceValue(name, admin);
-  if (r.status === 200) { await reloadInstanceConfig(); await requestRenderFor(name); }
+  if (r.status === 200) { await reloadInstanceConfig(); await requestRenderFor(name); await afterSpotlightSave(name); }
   return Response.json(r.body, { status: r.status, headers: { "Cache-Control": "no-store" } });
 }

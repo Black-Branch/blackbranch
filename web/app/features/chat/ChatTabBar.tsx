@@ -92,7 +92,7 @@ export function ChatTabBar({
   standDown = false,
 }: ChatTabBarProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
-  const plusRef = useRef<HTMLSpanElement>(null);
+  const plusRef = useRef<HTMLButtonElement>(null);
   // While typing, the whole chat panel rises by K and this bar
   // slides BEHIND the video column — occlusion hides it, so it keeps its
   // geometry (no fold: a margin pull inside the moving panel would shift the
@@ -115,8 +115,7 @@ export function ChatTabBar({
   // leave an empty `.chrome-bar-trail` plus the bar's own .5rem gap sitting at
   // the right edge. The conditions have to be summed HERE, where the slot is
   // decided, not inside it.
-  const hasTrailing =
-    (!split && narrow && unarmedTabs.length > 0) || (!split && splitAvailable) || !!onToggleFull || !!onFoldChat || termButton;
+  const hasTrailing = (!split && splitAvailable) || !!onToggleFull || !!onFoldChat || termButton;
 
   // Leading tabs (Home) go BEFORE the pinned pair, the rest after it — the
   // same split ChatSidebar builds `paneKeys` from, so index agrees.
@@ -186,7 +185,7 @@ export function ChatTabBar({
         // back. Hides the video bars; on desktop this bar goes with them as a
         // hover-revealed overlay, on mobile it stays put.
         onToggleCompact && (
-          <BarButton
+          <BarButton size="touch"
             icon={compactIcon}
             label={compact ? "Show bars" : "Compact view — hide bars"}
             active={compact}
@@ -218,23 +217,20 @@ export function ChatTabBar({
             progress={progress}
             label="Chat sections"
             onClose={(k) => { if (k !== "live" && k !== "matrix") onCloseContentTab(k); }}
-          />
-        )
-      }
-      trailing={
-        hasTrailing && (
-          <>
-            {!split && narrow && unarmedTabs.length > 0 && (
-              <span ref={plusRef} className="shrink-0 self-center">
-                <button
+            // The + scrolls WITH the tabs as their last item (a browser's tab
+            // strip), not as a fixed button: on a 390px phone the strip then
+            // has 274px, and Home, Live and Matrix (198px) sit whole before the
+            // "›" box (the derivation: stripOverflow.test.ts). Its own 40×36
+            // touch box; its old borrowed 44px area reached over the "›".
+            trail={narrow && unarmedTabs.length > 0 ? (
+              <>
+                <BarButton size="touch"
+                  ref={plusRef}
+                  icon={<Plus size={12} weight="bold" />}
+                  label="Add a tab"
+                  expanded={pickerOpen}
                   onClick={() => setPickerOpen((v) => !v)}
-                  title="Add a tab"
-                  aria-label="Add a tab"
-                  aria-expanded={pickerOpen}
-                  className="px-2 py-1 text-muted hover:text-strong transition-colors"
-                >
-                  <Plus size={12} weight="bold" />
-                </button>
+                />
                 {/* A PORTAL (FloatingPicker), not an absolute child — the bar's
                     clipping/stacking context would swallow an inline menu, so
                     the + would read as dead (same fix as the dock). */}
@@ -246,10 +242,16 @@ export function ChatTabBar({
                   onPick={onArmTab}
                   align="right"
                 />
-              </span>
-            )}
+              </>
+            ) : undefined}
+          />
+        )
+      }
+      trailing={
+        hasTrailing && (
+          <>
             {!split && splitAvailable && (
-              <BarButton
+              <BarButton size="touch"
                 icon={<Columns size={13} weight="bold" />}
                 label="Split view — live chat + Matrix"
                 onClick={() => setSplitPref(true)}
@@ -263,15 +265,15 @@ export function ChatTabBar({
                 FoldedTabControl renders the same control in its floating pill
                 and must never spell this out separately. */}
             {termButton && CHAT_CONSOLE && (
-              <BarButton icon={<CHAT_CONSOLE.button.Icon size={13} weight="bold" />} label={CHAT_CONSOLE.button.label} onClick={CHAT_CONSOLE.toggle} />
+              <BarButton size="touch" icon={<CHAT_CONSOLE.button.Icon size={13} weight="bold" />} label={CHAT_CONSOLE.button.label} onClick={CHAT_CONSOLE.toggle} />
             )}
             {onFoldChat && (
-              <BarButton icon={<CaretDoubleRight size={13} weight="bold" />} label="Fold chat" onClick={onFoldChat} />
+              <BarButton size="touch" icon={<CaretDoubleRight size={13} weight="bold" />} label="Fold chat" onClick={onFoldChat} />
             )}
             {onToggleFull && (() => {
               const { label, Icon } = fullToggleLabel(fullKind, isFull);
               return (
-                <BarButton
+                <BarButton size="touch"
                   icon={<Icon size={13} weight="bold" />}
                   label={label}
                   active={isFull}

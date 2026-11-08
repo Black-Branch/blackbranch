@@ -13,9 +13,12 @@
 // with every release). install/restart-settings.test.mjs fails when either copy drifts.
 //
 // Where each setting is changed decides what the operator does after:
-//   panel      Admin Panel (an instance or secret setting): restart the services named.
+//   panel      Admin Panel (an instance or secret setting): restart the services named. Never the
+//              website (it reads these live); a host-rendered one (`hostRendered`) is left out: the
+//              host re-renders it on every save.
 //   set        .env, a display value `blackbranch set` changes: it restarts what reads it itself.
 //   permanent  .env, the install's identity (its addresses, its chat server's name): never changes.
+// A key with a command of its own (OWN_COMMAND below) is left out too: that command applies it.
 // An install-tier key this bundle's .env never holds (install/.env.example) is left out: an operator
 // of this bundle cannot set it (the legacy keys of the first install, the Discord bridge's templates
 // until the bridge ships, OBS's and Home Assistant's addresses, the derived federation address).
@@ -32,6 +35,10 @@ export const DOC_END = "<!-- /restart-settings -->";
 const GROUPS = ["panel", "set", "permanent"];
 
 const envKeys = (text) => new Set([...text.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]));
+// .env keys with a command of their own, which applies them (restarting what reads them): neither
+// "set" nor "permanent" would send the operator the right way. COMMUNITY_RECONCILER: `blackbranch
+// community on|off` (it also starts or stops the reconciler's timer).
+const OWN_COMMAND = new Set(["COMMUNITY_RECONCILER"]);
 function settableKeys() {
   const m = readFileSync(path.join(here, "blackbranch"), "utf8").match(/\nSETTABLE_KEYS=\(\n?([\s\S]*?)\n?\)/);
   if (!m) throw new Error("restart-settings: SETTABLE_KEYS not found in install/blackbranch");
@@ -46,10 +53,16 @@ export function restartSettings(keys = INSTANCE_KEYS) {
   for (const k of keys) {
     if (k.reload !== "restart") continue;
     let group;
-    if (k.tier === "instance" || k.tier === "secret") group = "panel";
+    let services = [...k.packages];
+    if (k.tier === "instance" || k.tier === "secret") {
+      services = services.filter((p) => p !== "web");
+      if (k.hostRendered || !services.length) continue;
+      group = "panel";
+    }
+    else if (OWN_COMMAND.has(k.env[0])) continue;
     else if (inEnv.has(k.env[0])) group = settable.has(k.env[0]) ? "set" : "permanent";
     else continue;
-    rows.push({ key: k.key, group, env: group === "panel" ? "" : k.env[0], services: [...k.packages], label: k.label });
+    rows.push({ key: k.key, group, env: group === "panel" ? "" : k.env[0], services, label: k.label });
   }
   // By group, then by the name the operator reads: the setting's key in the Admin Panel, its .env key otherwise.
   const name = (r) => r.env || r.key;

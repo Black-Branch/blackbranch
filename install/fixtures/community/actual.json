@@ -1,0 +1,640 @@
+{
+  "hub": {
+    "roomId": "!hub:example.test",
+    "children": [
+      {
+        "roomId": "!talk:example.test",
+        "order": "a1",
+        "via": [
+          "example.test"
+        ]
+      }
+    ]
+  },
+  "rooms": {
+    "!hub:example.test": {
+      "name": "Example Community",
+      "topic": null,
+      "avatar": null,
+      "joinRule": "public",
+      "allow": [],
+      "history": "shared",
+      "retention": null,
+      "encrypted": false,
+      "published": true,
+      "powerLevels": {
+        "users": {
+          "@tim:example.test": -1
+        },
+        "events_default": 0
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@staffer:example.test": "join",
+        "@moddy:example.test": "join",
+        "@botty:example.test": "join",
+        "@alice:example.test": "join",
+        "@bob:example.test": "join",
+        "@tim:example.test": "join",
+        "@mallory:example.test": "ban"
+      },
+      "tombstone": null,
+      "creators": [
+        "@streamer:example.test"
+      ],
+      "type": "m.space",
+      "children": [
+        {
+          "roomId": "!talk:example.test",
+          "order": "a1",
+          "via": [
+            "example.test"
+          ]
+        }
+      ],
+      "spaceKind": "hub",
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    },
+    "!talk:example.test": {
+      "name": "Talk",
+      "topic": null,
+      "avatar": null,
+      "joinRule": "restricted",
+      "allow": [
+        {
+          "type": "m.room_membership",
+          "room_id": "!hub:example.test"
+        }
+      ],
+      "history": "shared",
+      "retention": null,
+      "encrypted": false,
+      "published": false,
+      "powerLevels": {
+        "users_default": 0,
+        "events_default": 50,
+        "state_default": 50,
+        "ban": 50,
+        "kick": 50,
+        "redact": 50,
+        "invite": 50,
+        "notifications": {
+          "room": 50
+        },
+        "events": {
+          "m.room.power_levels": 100,
+          "m.room.join_rules": 100,
+          "m.room.history_visibility": 100,
+          "m.room.encryption": 100,
+          "m.room.server_acl": 100,
+          "m.room.retention": 100,
+          "m.room.guest_access": 100,
+          "m.room.tombstone": 150,
+          "m.room.name": 75,
+          "m.room.topic": 75,
+          "m.room.avatar": 75,
+          "m.room.canonical_alias": 75,
+          "m.space.child": 75,
+          "m.space.parent": 75,
+          "m.room.pinned_events": 50,
+          "app.blackbranch.forum.tags_available": 50
+        },
+        "users": {
+          "@streamer:example.test": 100,
+          "@staffer:example.test": 75,
+          "@moddy:example.test": 50,
+          "@botty:example.test": 50,
+          "@tim:example.test": -1
+        }
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@staffer:example.test": "join",
+        "@moddy:example.test": "join",
+        "@botty:example.test": "join",
+        "@mallory:example.test": "ban"
+      },
+      "tombstone": null,
+      "creators": [
+        "@community:example.test"
+      ],
+      "type": "m.space",
+      "children": [
+        {
+          "roomId": "!general:example.test",
+          "order": "a0",
+          "via": [
+            "example.test"
+          ]
+        },
+        {
+          "roomId": "!news:example.test",
+          "order": "a1",
+          "via": [
+            "example.test"
+          ]
+        },
+        {
+          "roomId": "!lounge:example.test",
+          "order": "a2",
+          "via": [
+            "example.test"
+          ]
+        },
+        {
+          "roomId": "!mods:example.test",
+          "order": "a3",
+          "via": [
+            "example.test"
+          ]
+        },
+        {
+          "roomId": "!vip:example.test",
+          "order": "a4",
+          "via": [
+            "example.test"
+          ]
+        },
+        {
+          "roomId": "!staff:example.test",
+          "order": "a5",
+          "via": [
+            "example.test"
+          ]
+        }
+      ],
+      "spaceKind": "category",
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    },
+    "!gate:example.test": {
+      "name": "Supporters",
+      "topic": null,
+      "avatar": null,
+      "joinRule": "invite",
+      "allow": [],
+      "history": "shared",
+      "retention": null,
+      "encrypted": false,
+      "published": false,
+      "powerLevels": {
+        "users_default": 0,
+        "events_default": 50,
+        "state_default": 50,
+        "ban": 50,
+        "kick": 50,
+        "redact": 50,
+        "invite": 50,
+        "notifications": {
+          "room": 50
+        },
+        "events": {
+          "m.room.power_levels": 100,
+          "m.room.join_rules": 100,
+          "m.room.history_visibility": 100,
+          "m.room.encryption": 100,
+          "m.room.server_acl": 100,
+          "m.room.retention": 100,
+          "m.room.guest_access": 100,
+          "m.room.tombstone": 150,
+          "m.room.name": 75,
+          "m.room.topic": 75,
+          "m.room.avatar": 75,
+          "m.room.canonical_alias": 75,
+          "m.space.child": 75,
+          "m.space.parent": 75,
+          "m.room.pinned_events": 50,
+          "app.blackbranch.forum.tags_available": 50
+        },
+        "users": {
+          "@streamer:example.test": 100,
+          "@staffer:example.test": 75,
+          "@moddy:example.test": 50,
+          "@botty:example.test": 50,
+          "@tim:example.test": -1
+        }
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@staffer:example.test": "join",
+        "@moddy:example.test": "join",
+        "@botty:example.test": "join",
+        "@alice:example.test": "join",
+        "@mallory:example.test": "ban"
+      },
+      "tombstone": null,
+      "creators": [
+        "@community:example.test"
+      ],
+      "type": "m.space",
+      "children": [],
+      "spaceKind": "gate",
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    },
+    "!general:example.test": {
+      "name": "general",
+      "topic": "Say hello",
+      "avatar": null,
+      "joinRule": "restricted",
+      "allow": [
+        {
+          "type": "m.room_membership",
+          "room_id": "!hub:example.test"
+        }
+      ],
+      "history": "shared",
+      "retention": 2592000000,
+      "encrypted": false,
+      "published": true,
+      "powerLevels": {
+        "users_default": 0,
+        "events_default": 0,
+        "state_default": 50,
+        "ban": 50,
+        "kick": 50,
+        "redact": 50,
+        "invite": 50,
+        "notifications": {
+          "room": 50
+        },
+        "events": {
+          "m.room.power_levels": 100,
+          "m.room.join_rules": 100,
+          "m.room.history_visibility": 100,
+          "m.room.encryption": 100,
+          "m.room.server_acl": 100,
+          "m.room.retention": 100,
+          "m.room.guest_access": 100,
+          "m.room.tombstone": 150,
+          "m.room.name": 75,
+          "m.room.topic": 75,
+          "m.room.avatar": 75,
+          "m.room.canonical_alias": 75,
+          "m.space.child": 75,
+          "m.space.parent": 75,
+          "m.room.pinned_events": 50,
+          "app.blackbranch.forum.tags_available": 50
+        },
+        "users": {
+          "@streamer:example.test": 100,
+          "@staffer:example.test": 75,
+          "@moddy:example.test": 50,
+          "@botty:example.test": 50,
+          "@tim:example.test": -1
+        }
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@staffer:example.test": "join",
+        "@moddy:example.test": "join",
+        "@botty:example.test": "join",
+        "@bob:example.test": "join",
+        "@tim:example.test": "join",
+        "@mallory:example.test": "ban",
+        "@reader:example.test": "join"
+      },
+      "tombstone": null,
+      "creators": [
+        "@community:example.test"
+      ],
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    },
+    "!news:example.test": {
+      "name": "news",
+      "topic": null,
+      "avatar": null,
+      "joinRule": "restricted",
+      "allow": [
+        {
+          "type": "m.room_membership",
+          "room_id": "!hub:example.test"
+        }
+      ],
+      "history": "shared",
+      "retention": 31536000000,
+      "encrypted": false,
+      "published": true,
+      "powerLevels": {
+        "users_default": 0,
+        "events_default": 50,
+        "state_default": 50,
+        "ban": 50,
+        "kick": 50,
+        "redact": 50,
+        "invite": 50,
+        "notifications": {
+          "room": 50
+        },
+        "events": {
+          "m.room.power_levels": 100,
+          "m.room.join_rules": 100,
+          "m.room.history_visibility": 100,
+          "m.room.encryption": 100,
+          "m.room.server_acl": 100,
+          "m.room.retention": 100,
+          "m.room.guest_access": 100,
+          "m.room.tombstone": 150,
+          "m.room.name": 75,
+          "m.room.topic": 75,
+          "m.room.avatar": 75,
+          "m.room.canonical_alias": 75,
+          "m.space.child": 75,
+          "m.space.parent": 75,
+          "m.room.pinned_events": 50,
+          "app.blackbranch.forum.tags_available": 50,
+          "m.reaction": 0
+        },
+        "users": {
+          "@streamer:example.test": 100,
+          "@staffer:example.test": 75,
+          "@moddy:example.test": 50,
+          "@botty:example.test": 50,
+          "@tim:example.test": -1
+        }
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@staffer:example.test": "join",
+        "@moddy:example.test": "join",
+        "@botty:example.test": "join",
+        "@bob:example.test": "join",
+        "@mallory:example.test": "ban"
+      },
+      "tombstone": null,
+      "creators": [
+        "@community:example.test"
+      ],
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    },
+    "!lounge:example.test": {
+      "name": "lounge",
+      "topic": null,
+      "avatar": null,
+      "joinRule": "restricted",
+      "allow": [
+        {
+          "type": "m.room_membership",
+          "room_id": "!gate:example.test"
+        }
+      ],
+      "history": "shared",
+      "retention": 31536000000,
+      "encrypted": false,
+      "published": false,
+      "powerLevels": {
+        "users_default": 0,
+        "events_default": 10,
+        "state_default": 50,
+        "ban": 50,
+        "kick": 50,
+        "redact": 50,
+        "invite": 50,
+        "notifications": {
+          "room": 50
+        },
+        "events": {
+          "m.room.power_levels": 100,
+          "m.room.join_rules": 100,
+          "m.room.history_visibility": 100,
+          "m.room.encryption": 100,
+          "m.room.server_acl": 100,
+          "m.room.retention": 100,
+          "m.room.guest_access": 100,
+          "m.room.tombstone": 150,
+          "m.room.name": 75,
+          "m.room.topic": 75,
+          "m.room.avatar": 75,
+          "m.room.canonical_alias": 75,
+          "m.space.child": 75,
+          "m.space.parent": 75,
+          "m.room.pinned_events": 50,
+          "app.blackbranch.forum.tags_available": 50
+        },
+        "users": {
+          "@streamer:example.test": 100,
+          "@staffer:example.test": 75,
+          "@moddy:example.test": 50,
+          "@botty:example.test": 50,
+          "@tim:example.test": -1,
+          "@alice:example.test": 10
+        }
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@staffer:example.test": "join",
+        "@moddy:example.test": "join",
+        "@botty:example.test": "join",
+        "@alice:example.test": "join",
+        "@mallory:example.test": "ban"
+      },
+      "tombstone": null,
+      "creators": [
+        "@community:example.test"
+      ],
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    },
+    "!mods:example.test": {
+      "name": "mods",
+      "topic": null,
+      "avatar": null,
+      "joinRule": "invite",
+      "allow": [],
+      "history": "shared",
+      "retention": 31536000000,
+      "encrypted": false,
+      "published": false,
+      "powerLevels": {
+        "users_default": 0,
+        "events_default": 0,
+        "state_default": 50,
+        "ban": 50,
+        "kick": 50,
+        "redact": 50,
+        "invite": 50,
+        "notifications": {
+          "room": 50
+        },
+        "events": {
+          "m.room.power_levels": 100,
+          "m.room.join_rules": 100,
+          "m.room.history_visibility": 100,
+          "m.room.encryption": 100,
+          "m.room.server_acl": 100,
+          "m.room.retention": 100,
+          "m.room.guest_access": 100,
+          "m.room.tombstone": 150,
+          "m.room.name": 75,
+          "m.room.topic": 75,
+          "m.room.avatar": 75,
+          "m.room.canonical_alias": 75,
+          "m.space.child": 75,
+          "m.space.parent": 75,
+          "m.room.pinned_events": 50,
+          "app.blackbranch.forum.tags_available": 50
+        },
+        "users": {
+          "@streamer:example.test": 100,
+          "@staffer:example.test": 75,
+          "@moddy:example.test": 50,
+          "@botty:example.test": 50,
+          "@tim:example.test": -1
+        }
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@staffer:example.test": "join",
+        "@moddy:example.test": "join",
+        "@botty:example.test": "join",
+        "@mallory:example.test": "ban"
+      },
+      "tombstone": null,
+      "creators": [
+        "@community:example.test"
+      ],
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    },
+    "!vip:example.test": {
+      "name": "vip",
+      "topic": null,
+      "avatar": null,
+      "joinRule": "invite",
+      "allow": [],
+      "history": "shared",
+      "retention": 31536000000,
+      "encrypted": false,
+      "published": false,
+      "powerLevels": {
+        "users_default": 0,
+        "events_default": 0,
+        "state_default": 50,
+        "ban": 50,
+        "kick": 50,
+        "redact": 50,
+        "invite": 50,
+        "notifications": {
+          "room": 50
+        },
+        "events": {
+          "m.room.power_levels": 100,
+          "m.room.join_rules": 100,
+          "m.room.history_visibility": 100,
+          "m.room.encryption": 100,
+          "m.room.server_acl": 100,
+          "m.room.retention": 100,
+          "m.room.guest_access": 100,
+          "m.room.tombstone": 150,
+          "m.room.name": 75,
+          "m.room.topic": 75,
+          "m.room.avatar": 75,
+          "m.room.canonical_alias": 75,
+          "m.space.child": 75,
+          "m.space.parent": 75,
+          "m.room.pinned_events": 50,
+          "app.blackbranch.forum.tags_available": 50
+        },
+        "users": {
+          "@streamer:example.test": 100,
+          "@staffer:example.test": 75,
+          "@moddy:example.test": 50,
+          "@botty:example.test": 50,
+          "@tim:example.test": -1
+        }
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@bob:example.test": "join",
+        "@mallory:example.test": "ban",
+        "@carol:example.test": "invite"
+      },
+      "tombstone": null,
+      "creators": [
+        "@community:example.test"
+      ],
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    },
+    "!staff:example.test": {
+      "name": "staff",
+      "topic": null,
+      "avatar": null,
+      "joinRule": "invite",
+      "allow": [],
+      "history": "shared",
+      "retention": 31536000000,
+      "encrypted": true,
+      "published": false,
+      "powerLevels": {
+        "users_default": 0,
+        "events_default": 75,
+        "state_default": 50,
+        "ban": 50,
+        "kick": 50,
+        "redact": 50,
+        "invite": 50,
+        "notifications": {
+          "room": 50
+        },
+        "events": {
+          "m.room.power_levels": 100,
+          "m.room.join_rules": 100,
+          "m.room.history_visibility": 100,
+          "m.room.encryption": 100,
+          "m.room.server_acl": 100,
+          "m.room.retention": 100,
+          "m.room.guest_access": 100,
+          "m.room.tombstone": 150,
+          "m.room.name": 75,
+          "m.room.topic": 75,
+          "m.room.avatar": 75,
+          "m.room.canonical_alias": 75,
+          "m.space.child": 75,
+          "m.space.parent": 75,
+          "m.room.pinned_events": 50,
+          "app.blackbranch.forum.tags_available": 50
+        },
+        "users": {
+          "@streamer:example.test": 100,
+          "@staffer:example.test": 75,
+          "@moddy:example.test": 50,
+          "@botty:example.test": 50,
+          "@tim:example.test": -1
+        }
+      },
+      "members": {
+        "@community:example.test": "join",
+        "@streamer:example.test": "join",
+        "@staffer:example.test": "join",
+        "@mallory:example.test": "ban"
+      },
+      "tombstone": null,
+      "creators": [
+        "@community:example.test"
+      ],
+      "banReasons": {
+        "@mallory:example.test": "Banned by the example site"
+      }
+    }
+  }
+}

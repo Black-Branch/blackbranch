@@ -31,7 +31,7 @@ import pool from "../../lib/db.ts";
 import { streamApiFetch, streamApiWsUrl } from "./streamApi.ts";
 import { installValues, type InstallKey } from "./installValues.ts";
 import {
-  INSTANCE_KEYS, resolveInstanceValue,
+  INSTANCE_KEYS, parseInstanceValue, resolveInstanceValue,
 } from "./instanceSchema.generated.mjs";
 
 /** The JSDoc types the generated copy carries. */
@@ -94,10 +94,14 @@ export function createInstanceReader(deps: Deps = realDeps) {
     const e = entryOf(key);
     if (e.tier === "install") {
       // The values published at boot are the truth for install keys (installValues.ts says why).
+      // They travel as text, so each is read back through its kind's parser: a switch is a boolean.
       const v = installValues()[e.key as InstallKey] ?? "";
-      return v
-        ? { value: v, source: "env", envName: e.env[0] ?? null, error: null }
-        : resolveInstanceValue(e, deps.env(), null);
+      if (!v) return resolveInstanceValue(e, deps.env(), null);
+      const envName = e.env[0] ?? null;
+      const parsed = parseInstanceValue(e, v);
+      return parsed.ok
+        ? { value: parsed.value, source: "env", envName, error: null }
+        : { value: null, source: "env", envName, error: `${envName}: ${parsed.error}` };
     }
     const r = resolveInstanceValue(e, deps.env(), e.secret ? layer.secrets : layer.plain);
     if (e.secret && r.source !== "env" && layer.unreadable.has(e.key)) {

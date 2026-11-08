@@ -3,8 +3,9 @@ import pool from "@/lib/db";
 import { parsePublicId } from "@/app/lib/publicIdServer";
 import { ERASED_CANONICAL } from "@/app/lib/erasedPerson";
 import { NATIVE_SQL } from "@/app/lib/nativePlatform";
+import { resolveCardSenders } from "@/app/lib/modCardSender";
 
-// POST /api/mod/identity/resolve { ids: string[] } → { ids: { [publicId]: { canonicalId, matrixId } } }
+// POST /api/mod/identity/resolve { ids: string[] } → { ids: { [publicId | card:<id>]: { canonicalId, matrixId } } }
 //
 // Chat lines carry only per-platform public ids; the moderation tools
 // act by canonical id and site account. A moderator's chat resolves the ids on screen through here
@@ -23,7 +24,10 @@ export async function POST(req: Request) {
     const p = parsePublicId(id);
     if (p && p.canonical !== ERASED_CANONICAL) parsed.set(id, p.canonical);
   }
-  if (parsed.size === 0) return Response.json({ ids: {} });
+  // A tip card that wears no account (ADR 0145) is asked for as `card:<row id>`: its sender comes
+  // from the card's own row (modCardSender.ts).
+  const cards = await resolveCardSenders(asked, (sql, params) => pool.query(sql, params));
+  if (parsed.size === 0) return Response.json({ ids: cards }, { headers: { "Cache-Control": "private, no-store" } });
   const canonicals = [...new Set(parsed.values())];
   const { rows } = await pool.query<{ canonical: string; matrix_id: string }>(
     `SELECT DISTINCT ON (canonical) canonical, matrix_id FROM (
@@ -34,7 +38,7 @@ export async function POST(req: Request) {
     [canonicals],
   ).catch(() => ({ rows: [] as { canonical: string; matrix_id: string }[] }));
   const site = new Map(rows.map((r) => [r.canonical, r.matrix_id]));
-  const out: Record<string, { canonicalId: string; matrixId: string | null }> = {};
+  const out: Record<string, { canonicalId: string | null; matrixId: string | null }> = { ...cards };
   for (const [id, canonical] of parsed) out[id] = { canonicalId: canonical, matrixId: site.get(canonical) ?? null };
   return Response.json({ ids: out }, { headers: { "Cache-Control": "private, no-store" } });
 }

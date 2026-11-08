@@ -9,8 +9,14 @@ import { useCallback, useEffect, useState } from "react";
 import { siteName } from "@/app/lib/siteName";
 import Link from "next/link";
 import { useMatrixIdentity } from "@/app/lib/MatrixClientContext";
+import { HISTORY_WINDOWS, type HistoryWindow } from "@/app/lib/banHistory";
+import { useCommunityHistory } from "@/app/lib/useCommunityHistory";
 import type { ChatMsg } from "@/app/lib/chatMsg";
-import { avatarBg, usernameColor } from "@/app/lib/avatarColor";
+import { usernameColor } from "@/app/lib/avatarColor";
+import { useImgFallback } from "@/app/lib/useImgFallback";
+import { LetterCircle } from "./Avatar";
+import { avatarStyle } from "@/app/lib/avatarSize";
+
 import { localpart } from "@/app/lib/matrixDisplay";
 import { postJson, getJson } from "@/app/lib/http";
 import PlatformIcon, { PLATFORM_COLORS } from "./PlatformIcon";
@@ -35,6 +41,9 @@ import { useModIds } from "@/app/lib/modIdentity";
 import { scoreName } from "@/app/lib/currency";
 import { normalizePlatform } from "@/app/lib/nativePlatform";
 import { useBillingAvailability } from "@/app/lib/useStripe";
+
+// The card's picture on its banner: the avatar scale's xl step.
+const CARD_PIC = avatarStyle("xl");
 
 // The /api/user/[id] `Lookup` shape lives in app/lib/userCardData.ts now,
 // beside the prefetch cache that fetches it — this file imports the type.
@@ -163,7 +172,6 @@ export default function UserCard({
   const giftsOn = billing.stripe && billing.supporter !== null;
   const [data, setData] = useState<Lookup | null>(initialData ? initialData.lookup : null);
   const [credit, setCredit] = useState<number | null>(initialData ? initialData.credit : null);
-  const [avatarOk, setAvatarOk] = useState(true);
   const [ban, setBan] = useState<{ banned: boolean; expiresAt?: string | null } | null>(null);
   const [purgeArmed, setPurgeArmed] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
@@ -210,6 +218,9 @@ export default function UserCard({
   const pfp = siteId && data?.siteName
     ? avatarSrc({ matrixId: siteId })
     : avatarSrc(msg);
+  // A failure belongs to one picture: the lookup swapping the platform pfp for the
+  // site avatar gives the new one its try.
+  const { ok: avatarOk, ref: avatarRef, onError: onAvatarError } = useImgFallback(pfp);
   const linkedPlatforms = data?.linkedPlatforms ?? [];
   // A mod's pick (below) shows at once; otherwise the lookup, then the chat frame.
   const [pronounsSet, setPronounsSet] = useState<string | null | undefined>(undefined);
@@ -369,9 +380,28 @@ export default function UserCard({
   // it reached read back. A kept stronger ban comes back as an error, never as success.
   const cardMsg: ModTargetMsg = { id: msg.id, platform: msg.platform, matrixId: modTargetId, canonicalId: modIds.canonicalId };
   const [banArmed, setBanArmed] = useState(false);
+  // On for every ban from this card unless the mod turns it off for this one (ticket #228).
+  const [alsoRemove, setAlsoRemove] = useState(true);
+  // A permanent ban can also delete their community message history (banHistory.ts); default none.
+  // Only for a site account: a platform-only chatter has no community account.
+  const [history, setHistory] = useState<HistoryWindow>("none");
+  const [historyLine, setHistoryLine] = useState<string | null>(null);
+  const deleteCommunityHistory = useCommunityHistory();
   async function banAtOnce(minutes?: number) {
-    const r = await modBanAtOnce(cardMsg, minutes);
+    const r = await modBanAtOnce(cardMsg, minutes, { purge: alsoRemove });
     if (!r.ok) { setActionErr(r.error); return; }
+    const window = !minutes && modTargetId ? history : "none";
+    if (window !== "none" && modTargetId) {
+      // The card stays open while their community lines go, so the progress can be read.
+      setActionErr(null);
+      const line = await deleteCommunityHistory({
+        targetId: modTargetId, window, siteRemoved: r.purged ?? null, batchId: r.batchId ?? null,
+        onProgress: (p) => { if (p) setHistoryLine(p); },
+      });
+      setHistoryLine(line);
+      setHistory("none");
+      return;
+    }
     if (stayOpenAfterAction) setActionErr(null);
     else onClose();
   }
@@ -430,9 +460,10 @@ export default function UserCard({
         displayName={displayName}
         bannerMxc={data?.bannerMxc}
         topRight={
-          !isOwnMessage && (msg.matrixId || hideTarget || canReport) ? (
+          // Only actions toward the person sit here, under the window's ✕; Hide and Report
+          // are in the action row below the name, away from it (ticket #191).
+          !isOwnMessage && msg.matrixId && (onStartDM || giftsOn) ? (
             <>
-              {msg.matrixId && (<>
                 {onStartDM && (
                   <button
                     onClick={() => { onStartDM(msg.matrixId!); onClose(); }}
@@ -455,30 +486,6 @@ export default function UserCard({
                 >
                   🎁 Gift
                 </button>}
-              </>)}
-              {canReport && (
-                <button
-                  onClick={() => { openReportDialog({ platform: msg.platform, messageId: msg.id, name: displayName }); onClose(); }}
-                  title="Report this message to the mods"
-                  className="px-2 py-1 rounded-md bg-scrim hover:bg-scrim-strong text-2xs text-strong transition-colors"
-                >
-                  Report
-                </button>
-              )}
-              {/* ⑤ Behavior: hide this person — only for you (behaviorStore). */}
-              {hideTarget && (
-                <button
-                  onClick={() => {
-                    if (isHiddenHere) void unhidePerson(hideTarget.id);
-                    else void hidePerson(hideTarget, { matrixId: ownMatrixId, ownIds: [...ownIds] });
-                    onClose();
-                  }}
-                  title={isHiddenHere ? "Show their messages again" : "Hide their messages — only for you"}
-                  className="px-2 py-1 rounded-md bg-scrim hover:bg-scrim-strong text-2xs text-strong transition-colors"
-                >
-                  {isHiddenHere ? "Show again" : "Hide"}
-                </button>
-              )}
             </>
           ) : undefined
         }
@@ -487,16 +494,16 @@ export default function UserCard({
             <img
               src={pfp}
               alt={displayName}
-              onError={() => setAvatarOk(false)}
-              className="w-16 h-16 rounded-full object-cover"
+              ref={avatarRef}
+              onError={onAvatarError}
+              className="avatar" style={CARD_PIC}
             />
           ) : (
-            <span
-              className="w-16 h-16 rounded-full flex items-center justify-center text-xl font-bold text-strong"
-              style={{ backgroundColor: msg.matrixId ? avatarBg(displayName) : color }}
-            >
-              {displayName.charAt(0).toUpperCase()}
-            </span>
+            <LetterCircle
+              name={displayName}
+              bg={msg.matrixId ? undefined : color}
+              className="avatar text-xl font-bold text-strong" style={CARD_PIC}
+            />
           )
         }
       />
@@ -565,6 +572,37 @@ export default function UserCard({
           </p>
         )}
       </div>
+
+      {/* The card's action row: what you do about this person, for you or for the mods. */}
+      {!isOwnMessage && (hideTarget || canReport) && (
+        <div data-card-actions className="px-4 pt-3 flex items-center gap-2">
+          {/* ⑤ Behavior: hide this person — only for you (behaviorStore). */}
+          {hideTarget && (
+            <button
+              type="button"
+              onClick={() => {
+                if (isHiddenHere) void unhidePerson(hideTarget.id);
+                else void hidePerson(hideTarget, { matrixId: ownMatrixId, ownIds: [...ownIds] });
+                onClose();
+              }}
+              title={isHiddenHere ? "Show their messages again" : "Hide their messages, only for you"}
+              className="h-9 px-3 rounded-md bg-surface-2 hover:bg-surface-3 text-xs text-strong transition-colors"
+            >
+              {isHiddenHere ? "Show messages" : "Hide messages"}
+            </button>
+          )}
+          {canReport && (
+            <button
+              type="button"
+              onClick={() => { openReportDialog({ platform: msg.platform, messageId: msg.id, name: displayName }); onClose(); }}
+              title="Report this message to the mods"
+              className="h-9 px-3 rounded-md bg-surface-2 hover:bg-surface-3 text-xs text-strong transition-colors"
+            >
+              Report
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Badge slots — a user equips their own; everyone else sees them read-only.
           Admins no longer hand-assign; this is just a view of their slots + unlocks. */}
@@ -815,6 +853,21 @@ export default function UserCard({
                 />
                 {modPanelButton}
               </div>
+              <label className="flex items-center justify-center gap-1.5 text-3xs text-muted">
+                <input type="checkbox" checked={alsoRemove} onChange={(e) => setAlsoRemove(e.target.checked)} />
+                Also remove their recent messages
+              </label>
+              {modTargetId && (
+                <label className="flex items-center justify-center gap-1.5 text-3xs text-muted">
+                  Ban also deletes community history
+                  <select value={history} onChange={(e) => setHistory(e.target.value as HistoryWindow)}
+                    aria-label="Delete message history"
+                    className="rounded bg-surface-1 border border-edge px-1 py-0.5 text-3xs text-body-dim outline-none">
+                    {HISTORY_WINDOWS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+                  </select>
+                </label>
+              )}
+              {historyLine && <p role="status" className="text-3xs text-body-dim text-center">{historyLine}</p>}
               {canonicalOnly && (
                 // No site account: the action lands on their platform account(s)
                 // via the identity graph, and the platforms hold the ban state —

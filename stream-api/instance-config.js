@@ -450,6 +450,19 @@ function createInstanceConfig({
     for (const fn of writeListeners) { try { fn(keys); } catch (err) { log.warn(`[instance-config] write listener: ${err.message}`); } }
     return null;
   }
+  /** POST /config/reload — a writer outside this process (the host's `blackbranch federation` and
+   *  `matrix ensure`, which write site.instance_config by SQL) asks for the same re-read and
+   *  `config_changed` a write here does. Only key NAMES come in; nothing is written. */
+  async function reload(keys) {
+    if (!Array.isArray(keys) || keys.length === 0 || keys.length > 64
+        || keys.some((k) => typeof k !== 'string' || !entryOf(k))) {
+      return refuse(400, 'keys must be a list of known setting names');
+    }
+    const uniq = [...new Set(keys)];
+    const failed = await afterWrite(uniq);
+    if (failed) return failed;
+    return { status: 200, body: { ok: true, keys: uniq } };
+  }
   // This process's own modules told after every committed write (memory re-probes a paused
   // embedder when its key or connection changes).
   const writeListeners = new Set();
@@ -640,6 +653,11 @@ function createInstanceConfig({
     app.post('/config/test/:key', requireSecret, wrap(async (req, res) => {
       noStore(res);
       const r = await test(req.params.key, { record: req.body?.record !== false });
+      res.status(r.status).json(r.body);
+    }));
+    app.post('/config/reload', requireSecret, wrap(async (req, res) => {
+      noStore(res);
+      const r = await reload(req.body?.keys);
       res.status(r.status).json(r.body);
     }));
   }

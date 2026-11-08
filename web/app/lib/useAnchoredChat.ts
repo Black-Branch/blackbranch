@@ -48,10 +48,30 @@ const PAUSE_PX = 8;
 export const REANCHOR_PX = 48;
 const GESTURE_MS = 150;
 
+// The READING position while paused. Native scroll anchoring holds the row at the TOP of the
+// view, so when the list's width changes (a divider drag) every row between the top and the
+// reader's eye re-wraps and pushes the eye's row down — measured 393 px in Chromium, 606 px
+// in Firefox — and Safari has no native anchoring at all. With `anchorRows` set, the engine
+// remembers the row crossing the middle of the view and its offset, and after any geometry
+// change puts that row back. A scroll (the reader's, a jump, a page key) re-picks the row; a
+// scroll event that arrives with the geometry changed is the layout's, and restores instead.
+
+/** Index of the first row whose bottom reaches `y` (rows stack in DOM order). */
+function rowAt(rows: NodeListOf<Element>, y: number): number {
+  let lo = 0, hi = rows.length - 1, found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid]!.getBoundingClientRect().bottom < y) lo = mid + 1;
+    else { found = mid; hi = mid - 1; }
+  }
+  return found;
+}
+
 export function useAnchoredChat<T>({
   items,
   getKey,
   onAnchored,
+  anchorRows,
 }: {
   /** Full live list — the consumer keeps ownership of buffering/merging. */
   items: T[];
@@ -59,6 +79,8 @@ export function useAnchoredChat<T>({
   getKey: (item: T) => string;
   /** Fires on every re-anchor — trim buffers, reset pagination windows. */
   onAnchored?: () => void;
+  /** CSS selector of the rendered rows: holds the reading position while paused (see above). */
+  anchorRows?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -92,13 +114,50 @@ export function useAnchoredChat<T>({
   const touchActiveRef = useRef(false);
   const pointerHeldRef = useRef(false);
 
+  const anchorRowsRef = useRef(anchorRows);
+  useLayoutEffect(() => { anchorRowsRef.current = anchorRows; });
+  // The row under the reader's eye: the element, its offset from the scroller's top, and the
+  // geometry it was measured in. `wroteTop` is the scrollTop our own restore wrote, so the
+  // scroll event that write fires does not re-pick (a re-wrapped row may no longer cross the
+  // middle, and re-picking then would drift over a drag back and forth).
+  const readingRef = useRef<{ el: Element; off: number; geo: string } | null>(null);
+  const wroteTopRef = useRef<number | null>(null);
+  const geometry = (el: HTMLElement) => `${el.clientWidth}|${el.clientHeight}|${el.scrollHeight}`;
+
+  const captureReading = useCallback(() => {
+    const el = scrollRef.current;
+    const sel = anchorRowsRef.current;
+    readingRef.current = null;
+    if (!el || !sel || anchoredRef.current) return;
+    const rows = (contentRef.current ?? el).querySelectorAll(sel);
+    const top = el.getBoundingClientRect().top;
+    const i = rowAt(rows, top + el.clientHeight / 2);
+    const row = i >= 0 ? rows[i] : undefined;
+    if (row) readingRef.current = { el: row, off: row.getBoundingClientRect().top - top, geo: geometry(el) };
+  }, []);
+
+  const restoreReading = useCallback(() => {
+    const el = scrollRef.current;
+    const r = readingRef.current;
+    if (!el || !r || anchoredRef.current) return;
+    if (!r.el.isConnected) { captureReading(); return; }
+    const d = r.el.getBoundingClientRect().top - el.getBoundingClientRect().top - r.off;
+    if (Math.abs(d) >= 1) {
+      el.scrollTop += d;
+      wroteTopRef.current = el.scrollTop;
+    }
+    r.geo = geometry(el);
+  }, [captureReading]);
+
   const setAnchored = useCallback((v: boolean) => {
     if (anchoredRef.current === v) return;
     anchoredRef.current = v;
+    if (v) readingRef.current = null;
+    else captureReading();
     setFrozenKeys(v ? null : new Set(itemsRef.current.map((it) => getKeyRef.current(it))));
     setAnchoredState(v);
     if (v) onAnchoredRef.current?.();
-  }, []);
+  }, [captureReading]);
 
   /** Call right before prepending older history. */
   const captureAnchor = useCallback(() => {
@@ -149,8 +208,12 @@ export function useAnchoredChat<T>({
     } else if (prependAnchorRef.current != null) {
       el.scrollTop = el.scrollHeight - prependAnchorRef.current;
       prependAnchorRef.current = null;
+      wroteTopRef.current = el.scrollTop;
+      captureReading();
+    } else {
+      restoreReading();
     }
-  }, [rendered, anchored]);
+  }, [rendered, anchored, captureReading, restoreReading]);
 
   /**
    * Reassert the bottom lock for a geometry change the hook can't see itself —
@@ -172,6 +235,7 @@ export function useAnchoredChat<T>({
     if (!el) return;
     const assertBottom = () => {
       if (anchoredRef.current) el.scrollTop = el.scrollHeight;
+      else restoreReading();
     };
     const ro = new ResizeObserver(assertBottom);
     ro.observe(el);
@@ -184,7 +248,7 @@ export function useAnchoredChat<T>({
       ro.disconnect();
       vv?.removeEventListener("resize", assertBottom);
     };
-  }, []);
+  }, [restoreReading]);
 
   // User-intent listeners. The scrollbar is hidden (no-scrollbar), so wheel,
   // touch, and held-pointer drags (text selection, middle-click autoscroll)
@@ -260,8 +324,14 @@ export function useAnchoredChat<T>({
     } else if (anchoredRef.current && dist > 1) {
       el.scrollTop = el.scrollHeight;
     }
+    if (!anchoredRef.current) {
+      const r = readingRef.current;
+      if (r && r.geo !== geometry(el)) restoreReading(); // the layout moved, not the reader
+      else if (wroteTopRef.current !== el.scrollTop) captureReading();
+      wroteTopRef.current = null;
+    }
     lastTopRef.current = el.scrollTop; // after any correction above, so the next event sees the true position
-  }, [setAnchored, anchorToBottom]);
+  }, [setAnchored, anchorToBottom, captureReading, restoreReading]);
 
   return {
     scrollRef,

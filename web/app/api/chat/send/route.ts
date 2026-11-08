@@ -7,6 +7,7 @@ import { deliverChatEvent } from "@/app/lib/chatEventDelivery";
 import { sendToPlatform, platformOutgoingText, isRoutablePlatform, stripLongEmoteNames, type SendTarget, type PlatformSendResult } from "@/app/lib/platformChat";
 import { canCrossPost } from "@/app/lib/platforms";
 import { getStreamStatus } from "@/app/lib/streamStatus";
+import { communityTarget } from "@/app/lib/streamView";
 import { sanitizeChatMessage } from "@/app/lib/sanitize";
 import { classify } from "@/app/lib/blacklist";
 import { gate, currentPosture } from "@/app/lib/linkGate";
@@ -28,6 +29,7 @@ import { getPersonalEmotes } from "@/app/lib/userEmotesServer";
 import { resolveOutgoingEmotes } from "@/app/lib/personalEmotes";
 import { getManifest } from "@/app/api/emotes/route";
 import { chatCharLimit } from "@/app/lib/chatLimits";
+import { youtubeEchoParts } from "@/app/lib/youtubeParts";
 import { NextRequest } from "next/server";
 import { NATIVE_PLATFORM, isNativePlatform, normalizePlatform } from "@/app/lib/nativePlatform";
 import { failureOf, nativeAnswer, skipPlatformsFrom, thrownFailure } from "@/app/lib/sendDelivery";
@@ -98,6 +100,16 @@ function maybeEarnChatCoin(matrixId: string): void {
     .catch((e) => console.error("[points-earn] chat-message earn failed:", e));
 }
 
+/** The browser's own id for a composed line (v173): every attempt at that line carries it. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A second attempt at a line already on the site: the first row's id, and nothing posted again. */
+function replayAnswer(row: { id: unknown }): Response {
+  return Response.json({ ok: true, replayed: true, id: Number(row.id) });
+}
+const isReplay = (j: unknown): j is { id: unknown; replay: true } =>
+  !!j && typeof j === "object" && (j as { replay?: unknown }).replay === true;
+
 /** A held message's answer: 202 + the review row's id, which the sender's pending line
  *  polls by. A hold whose row was never written holds nothing, so it is a failure. */
 function heldResponse(rowId: number | null, error: string): Response {
@@ -153,6 +165,9 @@ export async function POST(req: NextRequest) {
   // A page opened before the platform-key rename may still send the site's old id (nativePlatform.ts).
   const reply_to_platform = typeof body.reply_to_platform === "string" ? String(normalizePlatform(body.reply_to_platform)) : null;
   const fd = typeof body.forced_destination === "string" ? body.forced_destination : null;
+  // The community streamer the viewer watches (its entry key). Never a channel: it only selects
+  // among the server's own list (communityTarget), and an unknown key means the featured one.
+  const chosenCommunity = typeof body.community === "string" ? body.community.slice(0, 64) : null;
   // Support-mode text is a PRIVATE conversation with the help desk. The
   // coercion below maps any unroutable destination to null — and null means
   // native — so a support send reaching this route would post the user's
@@ -165,6 +180,27 @@ export async function POST(req: NextRequest) {
   // only ever come OUT of the sender's own targets below, on all three outbound
   // paths, and the site line still posts; a skip list can never add a destination.
   const skipPlatforms = skipPlatformsFrom(body);
+
+  // ── A retried line (client message id, v173) ───────────────────────────────
+  // The composer keeps one id per composed line through its own timeout retry, a restored draft
+  // and the "Not sent" retry. A key this sender already stored is answered with that row and
+  // nothing is posted again; stream-api's INSERT is the race guard for two attempts in flight at
+  // once (it answers `replay`, checked after each /chat/native call below). Read now, awaited after
+  // the ban check. A spend carries its own key (spendId) and is replayed by the coin ledger.
+  // A HELD line (word filter, link gate, automod) is not in site.chat_messages, so a retried held
+  // line is judged and held again — it was never posted, so nothing is posted twice.
+  const clientMsgId = !body.spend && typeof body.client_msg_id === "string" && UUID_RE.test(body.client_msg_id)
+    ? body.client_msg_id.toLowerCase()
+    : null;
+  const priorLineRead: Promise<{ id: string } | null> = clientMsgId
+    ? pool.query<{ id: string }>(
+        `SELECT id FROM site.chat_messages WHERE matrix_id = $1 AND client_msg_id = $2`,
+        [matrixId, clientMsgId],
+      ).then((r) => r.rows[0] ?? null)
+      // A failed read falls through to the normal path: stream-api's unique index still answers a replay.
+      .catch(() => null)
+    : Promise.resolve(null);
+  const keyExtra = clientMsgId ? { clientMsgId } : {};
 
   // ── Character limit (chatLimits.ts) ──────────────────────────────────────
   // `userRow` is awaited HERE, ahead of its other uses further down, so role
@@ -218,6 +254,10 @@ export async function POST(req: NextRequest) {
   if (rows.length > 0) {
     return Response.json({ error: "banned", expiresAt: rows[0].expires_at }, { status: 403 });
   }
+  // Before every gate that judges a NEW line (sub-only, slow mode, the filters): this one is
+  // already up, and refusing its retry would tell the sender a posted line was not sent.
+  const priorLine = await priorLineRead;
+  if (priorLine) return replayAnswer(priorLine);
 
   // ── Sub-only chat (lockdown, v147) ─────────────────────────────────────────
   // After the ban check, before anything else looks at the text: only a subscriber, a mod or an
@@ -613,12 +653,15 @@ export async function POST(req: NextRequest) {
         username: displayName,
         message: red.publicText,
         ...redactExtra,
+        ...keyExtra,
         usernameColor,
         usernameStyle,
         ...replyMeta,
       }),
     }).catch(() => null);
     if (!encRes?.ok) return Response.json({ error: "send_failed" }, { status: 502 });
+    const encJson = await encRes.json().catch(() => null);
+    if (isReplay(encJson)) return replayAnswer(encJson);
 
     maybeEarnChatCoin(matrixId);
     return Response.json({ ok: true, encrypted: true });
@@ -699,6 +742,7 @@ export async function POST(req: NextRequest) {
           username: displayName,
           message: red.publicText,
           ...redactExtra,
+          ...keyExtra,
           usernameColor,
           usernameStyle,
           ...(personalEmotes ? { emotes: personalEmotes } : {}),
@@ -712,6 +756,8 @@ export async function POST(req: NextRequest) {
           // Scope the echo window to the platforms we actually fan out to — an
           // unrelated viewer typing the same text elsewhere must not be swallowed.
           expectedPlatforms: targets,
+          // A staff line over 200 characters reaches YouTube as parts: arm each part's echo.
+          ...(targets.includes("youtube") ? youtubeEchoParts(red.platformText) : {}),
           // The sender's account id on each platform. Lets stream-api hold the
           // echo window open far longer than a text guess safely allows, because a
           // viewer's message can never match it.
@@ -731,6 +777,8 @@ export async function POST(req: NextRequest) {
       // The native row's id keys the copies mapping (site delete → platform copies).
       // A line that was only a poll vote has no id (nothing stored) — `nativeAnswer`.
       const nativeJson = nativeRes?.ok ? await nativeRes.json().catch(() => null) : null;
+      // Another attempt at this line stored it first: its platform copies are that attempt's.
+      if (isReplay(nativeJson)) return replayAnswer(nativeJson);
       const native = nativeAnswer(nativeJson);
       const siteMsgId = Number(native.id);
       const results = await Promise.all(
@@ -823,14 +871,14 @@ export async function POST(req: NextRequest) {
   // non-cross-postable platform (CROSSPOST_DISABLED) falls through to native so
   // the reply is still delivered on the site instead of erroring.
   if (platformTarget && canCrossPost(platformTarget)) {
-    // When a community streamer is featured (the streamer offline), route outbound chat
-    // to THEIR channel — resolved server-side from the current selection, never
-    // from client input. If they aren't on the chosen platform, refuse rather
-    // than silently posting into the streamer's channel.
+    // When a community streamer is on (the streamer offline), route outbound chat to the one this
+    // viewer watches — their pick among the server's own list, else the featured one; the channel
+    // is always resolved server-side, never taken from client input. If they aren't on the chosen
+    // platform, refuse rather than silently posting into the streamer's channel.
     let target: SendTarget | undefined;
     const status = await getStreamStatus();
-    if (!status.live && status.community) {
-      const c = status.community;
+    const c = status.live ? null : communityTarget(status, chosenCommunity);
+    if (c) {
       if (platformTarget === "youtube" && c.youtube_channel_id) target = { youtubeChannelId: c.youtube_channel_id };
       else if (platformTarget === "twitch" && c.twitch_login) target = { twitchLogin: c.twitch_login };
       else {
@@ -895,6 +943,7 @@ export async function POST(req: NextRequest) {
         username: displayName,
         message: red.publicText,
         ...redactExtra,
+        ...keyExtra,
         usernameColor,
         usernameStyle,
         ...(personalEmotes ? { emotes: personalEmotes } : {}),
@@ -902,6 +951,8 @@ export async function POST(req: NextRequest) {
         canonicalId,
         expectedEchoes: 1,
         expectedPlatforms: [platformTarget],
+        // A staff line over 200 characters reaches YouTube as parts: arm each part's echo.
+        ...(platformTarget === "youtube" ? youtubeEchoParts(platformOutgoingText(outgoingMessage, reply_to_username)) : {}),
         // See the allSend path: the sender's own id on this platform is what
         // lets stream-api recognise the echo by sender instead of by text.
         ...(singleSenderPlatformId
@@ -924,6 +975,7 @@ export async function POST(req: NextRequest) {
       }),
     }).catch(() => null);
     const singleNativeJson = singleNativeRes?.ok ? await singleNativeRes.json().catch(() => null) : null;
+    if (isReplay(singleNativeJson)) return replayAnswer(singleNativeJson);
     const singleNative = nativeAnswer(singleNativeJson);
     const singleSiteMsgId = Number(singleNative.id);
     const singlePosted = !!singleNativeRes?.ok;
@@ -978,6 +1030,7 @@ export async function POST(req: NextRequest) {
       username: displayName,
       message: red.publicText,
       ...redactExtra,
+      ...keyExtra,
       usernameColor,
       usernameStyle,
       ...(personalEmotes ? { emotes: personalEmotes } : {}),
@@ -991,10 +1044,12 @@ export async function POST(req: NextRequest) {
     if (err?.error === "vote_failed") return Response.json({ error: "vote_failed" }, { status: 503 });
     return new Response("Failed to send", { status: 502 });
   }
+  const plainJson = await res.json().catch(() => null);
+  if (isReplay(plainJson)) return replayAnswer(plainJson);
   maybeEarnChatCoin(matrixId);
   // The line was only an option number of the running poll: counted as a vote, not
   // shown — the composer says so, or the sender would think it was dropped.
-  const plain = nativeAnswer(await res.json().catch(() => null));
+  const plain = nativeAnswer(plainJson);
   if (plain.pollVote) return Response.json({ ok: true, pollVote: plain.pollVote });
   const plainReport = { posted: true, ...(plain.id != null ? { id: plain.id } : {}) };
   const blockedTarget = requestedTarget ?? forced_destination ?? NATIVE_PLATFORM;

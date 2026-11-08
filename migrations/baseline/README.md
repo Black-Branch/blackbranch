@@ -85,3 +85,4 @@ A full replay of the chain into an empty database leaves rows in these tables:
 | `site.badge_slots` | 2 | dropped — install data | rows for one install's accounts |
 | `site.badge_unlocks` | 2 | dropped — install data | rows for one install's accounts |
 | `site.community_embeds` | 4 | dropped — install data | one install's featured channels |
+| `site.community_roles` | 7 | dropped — fills itself (v165) | the role ladder is not key-only singleton rows; web `community/desired.ts` `readDesired` writes the same default ladder into an empty table |

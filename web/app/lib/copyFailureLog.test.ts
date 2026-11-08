@@ -7,6 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { copyFailureLogger, COPY_LOG_WINDOW_MS } from "./copyFailureLog.ts";
+import { twitchDropCode } from "./sendDelivery.ts";
 import { stripComments } from "./testSource.ts";
 
 function harness() {
@@ -37,6 +38,51 @@ test("the other classes log their class; a transient refusal's free-text reason 
     "[chat/send] copy not delivered platform=twitch class=transient error=not_live code=not_live",
   ]);
   assert.doesNotMatch(h.lines.join("\n"), /casey/, "a platform's own sentence can name people — never logged");
+});
+
+test("a Twitch drop is logged with Twitch's drop code, always, and never its message text (P03)", () => {
+  // The defect: one viewer's every Twitch copy was dropped (0/178) and the line said only
+  // class=transient error=refused — no cause. The drop CODE names the cause and never a person.
+  const h = harness();
+  h.log("twitch", { error: "refused", reason: "held by AutoMod", dropCode: "msg_rejected" }, 1);
+  h.log("twitch", { error: "refused", reason: "Your message about casey was not sent", dropCode: "unknown" }, 2);
+  h.log("twitch", { error: "refused", reason: "followers-only", dropCode: "msg_followersonly" }, 3);
+  assert.deepEqual(h.lines, [
+    "[chat/send] copy not delivered platform=twitch class=transient error=refused drop=msg_rejected code=refused msg=1",
+    "[chat/send] copy not delivered platform=twitch class=transient error=refused drop=unknown code=refused msg=2",
+    "[chat/send] copy not delivered platform=twitch class=persistent error=refused reason=followers-only drop=msg_followersonly code=refused msg=3",
+  ], "an undocumented code is drop=unknown; two different codes are two lines, not one suppressed");
+  assert.doesNotMatch(h.lines.join("\n"), /casey|message about/, "Twitch's own sentence never reaches the log");
+});
+
+test("RESTART: a fresh logger (a restarted process) logs the first drop with its code", () => {
+  const first = harness();
+  first.log("twitch", { error: "refused", reason: "slow mode", dropCode: "msg_slowmode" }, 1);
+  const restarted = harness();
+  restarted.log("twitch", { error: "refused", reason: "slow mode", dropCode: "msg_slowmode" }, 1);
+  assert.deepEqual(restarted.lines, first.lines);
+  assert.match(restarted.lines[0]!, / drop=msg_slowmode /);
+});
+
+test("only a documented Twitch drop code is logged as itself; any other value is 'unknown'", () => {
+  const body = (drop_reason: unknown) => ({ data: [{ is_sent: false, drop_reason }] });
+  assert.equal(twitchDropCode(body({ code: "msg_rejected", message: "about casey" })), "msg_rejected");
+  for (const code of ["msg_banned", "msg_timedout", "msg_duplicate", "msg_ratelimit", "msg_requires_verified_phone_number", "msg_verified_email", "automod_held"]) {
+    assert.equal(twitchDropCode(body({ code })), code);
+  }
+  assert.equal(twitchDropCode(body({ code: "msg_brand_new_code" })), "unknown", "undocumented, even shaped like a code");
+  assert.equal(twitchDropCode(body({ code: "casey" })), "unknown", "a single word could be a name");
+  assert.equal(twitchDropCode(body({ code: "a sentence about casey" })), "unknown");
+  assert.equal(twitchDropCode(body({ code: 42 })), "unknown");
+  assert.equal(twitchDropCode(body({ message: "no code" })), undefined);
+  assert.equal(twitchDropCode({ data: [{ is_sent: true, message_id: "x" }] }), undefined);
+  assert.equal(twitchDropCode(null), undefined);
+});
+
+test("the Twitch sender hands the drop code to the route with the refusal", () => {
+  const chat = stripComments(readFileSync(new URL("./platformChat.ts", import.meta.url), "utf8"));
+  assert.match(chat, /const dropCode = twitchDropCode\(body\);/);
+  assert.match(chat, /if \(!outcome\.sent\) return \{ ok: false, error: "refused", \.\.\.\(outcome\.reason \? \{ reason: outcome\.reason \} : \{\}\), \.\.\.\(dropCode \? \{ dropCode \} : \{\}\) \};/);
 });
 
 test("rate limit: a quota-out night is one line per platform per 10 minutes, the next one carrying the count", () => {

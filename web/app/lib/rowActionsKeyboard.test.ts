@@ -90,7 +90,7 @@ test("both consumer rows keep a tab stop in the row body (the reveal's premise)"
     /<\/div>\s*\)\s*;\s*}\s*\)\s*;\s*$/, stripComments);
   assert.match(chat, /className={`group relative/,
     "ChatMessage's row lost its `group` class — the reveal selector no longer matches it");
-  assert.match(chat, /onClick={\(e\) => onUsernameClick\?\.\(msg, e\.currentTarget\)}/,
+  assert.match(chat, /onClick={\(e\) => openCard\?\.\(msg, e\.currentTarget\)}/,
     "ChatMessage's username button is gone — no tab stop left in the row body to trigger the reveal");
 
   const matrix = readWhole(

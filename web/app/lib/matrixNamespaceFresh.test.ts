@@ -7,13 +7,14 @@ import assert from "node:assert/strict";
 
 delete process.env.INSTALL_VALUES;
 const {
-  ROOM_TYPE, FORUM_TITLE, FORUM_TAGS, FORUM_BODY, USERNAME_COLOR, MUTE_RULE, HIDDEN_PEOPLE, IGNORED_BOTS, readFirst,
+  ROOM_TYPE, FORUM_TITLE, FORUM_TAGS, FORUM_BODY, USERNAME_COLOR, MUTE_RULE, HIDDEN_PEOPLE, IGNORED_BOTS, SPACE_KIND, DM_CLOSED, readFirst,
 } = await import("./matrixNamespace.ts");
 
 const NAMES = [
   [ROOM_TYPE, "room_type"], [FORUM_TITLE, "forum.title"], [FORUM_TAGS, "forum.tags"],
   [FORUM_BODY, "forum.body"], [USERNAME_COLOR, "username_color"], [MUTE_RULE, "mute"],
-  [HIDDEN_PEOPLE, "hidden_people"], [IGNORED_BOTS, "ignored_bots"],
+  [HIDDEN_PEOPLE, "hidden_people"], [IGNORED_BOTS, "ignored_bots"], [SPACE_KIND, "space_kind"],
+  [DM_CLOSED, "dm_closed"],
 ] as const;
 
 test("unset legacy prefix: readers accept only the product name, writers write it", () => {

@@ -87,6 +87,10 @@ type SharedConn = {
   lastFrame: number;
   /** When the watchdog last ran: a long gap means the page was frozen, not the socket dead. */
   lastCheck: number;
+  /** The newest buffer position seen (stream-api's `seq`) and the boot it belongs to (`epoch`):
+   *  a reconnect resumes from here. Null until the first `history` frame names a boot. */
+  since: number | null;
+  epoch: string | null;
 };
 
 let conn: SharedConn | null = null;
@@ -114,9 +118,35 @@ function dropped(c: SharedConn, ws: WebSocket) {
   }, delay);
 }
 
+/**
+ * The socket URL, resuming from a position when there is one: `?since=<seq>&epoch=<epoch>`.
+ * stream-api answers a position it can vouch for with only the changes since; anything else
+ * (another boot, a position the buffer no longer holds) with the full `history` frame.
+ * @test-only exported for the delta tests; production calls it in-file (connect).
+ */
+export function resumeUrl(base: string, since: number | null, epoch: string | null): string {
+  if (since == null || !epoch) return base;
+  const sep = base.includes("?") ? "&" : base.endsWith("/") ? "?" : "/?";
+  return `${base}${sep}since=${since}&epoch=${encodeURIComponent(epoch)}`;
+}
+
+// Move the resume position on a frame. A `history` frame names the boot and its newest seq (a
+// new boot replaces the old position outright, even with a lower number); a live line carries its
+// own seq. Only frames the subscribers were handed move it, so it never runs ahead of what the
+// page holds. A seq from a boot this page has not been told about yet can only RAISE the number
+// under the old epoch, which stream-api refuses — the full frame is the answer, never a gap.
+function track(c: SharedConn, data: ChatSocketEvent) {
+  if (data.type === "history") {
+    if (typeof data.epoch === "string" && Number.isSafeInteger(data.seq)) { c.epoch = data.epoch; c.since = data.seq!; }
+    return;
+  }
+  const seq = (data as { seq?: unknown }).seq;
+  if (c.epoch && typeof seq === "number" && Number.isSafeInteger(seq) && seq > (c.since ?? 0)) c.since = seq;
+}
+
 function connect(c: SharedConn) {
   if (conn !== c || c.ws?.readyState === WebSocket.OPEN) return;
-  const ws = new WebSocket(WS_URL);
+  const ws = new WebSocket(resumeUrl(WS_URL, c.since, c.epoch));
   c.ws = ws;
   c.lastFrame = Date.now();
   c.lastCheck = c.lastFrame;
@@ -135,6 +165,7 @@ function connect(c: SharedConn) {
   ws.onopen = () => {
     c.lastFrame = Date.now();
     c.open = true;
+    socketHealth.opens += 1; // device-health report: a connection that really opened
     for (const s of Array.from(c.subs)) s.onOpen?.();
   };
   ws.onclose = () => dropped(c, ws);
@@ -155,6 +186,7 @@ function connect(c: SharedConn) {
         s.onEvent(data);
       } catch {}
     }
+    track(c, data);
   };
 }
 
@@ -164,7 +196,7 @@ function connect(c: SharedConn) {
  */
 export function subscribe(sub: Subscriber): () => void {
   if (!conn) {
-    conn = { ws: null, subs: new Set(), reconnectTimer: null, reconnectDelay: 1000, open: false, watchdog: null, lastFrame: 0, lastCheck: 0 };
+    conn = { ws: null, subs: new Set(), reconnectTimer: null, reconnectDelay: 1000, open: false, watchdog: null, lastFrame: 0, lastCheck: 0, since: null, epoch: null };
     connect(conn);
   }
   const c = conn;

@@ -222,11 +222,12 @@ test('stream-side account erase against real Postgres', async (t) => {
   await t.test('the route is behind the bearer secret, never IP trust', () => {
     const src = require('node:fs').readFileSync(require('node:path').join(__dirname, 'account-erase.js'), 'utf8');
     assert.match(src, /app\.post\('\/account\/erase', requireSecret, wrap/);
-    assert.match(src, /module\.exports = \{ createAccountErase, ERASED_NAME, ERASED_CANONICAL, RESTRICTION_UPSERT_SQL \};\s*$/, 'vacuity: the file was read to its end');
+    assert.match(src, /module\.exports = \{ createAccountErase, ERASED_NAME, ERASED_CANONICAL, RESTRICTION_UPSERT_SQL, restrictionEnd \};\s*$/, 'vacuity: the file was read to its end');
   });
 
-  // A TIMEOUT's restriction ends when the timeout does; a case never does.
-  await t.test('/account/erase: a timed ban records its end; a case (or no end) records none; garbage is permanent', async () => {
+  // A TIMEOUT's restriction ends when the timeout does; a case with its evidence (A3-06): web's end,
+  // else the held-message retention. A ban with no readable end is permanent.
+  await t.test('/account/erase: a timed ban records its end; a case ends (web\'s end, else the retention); a ban\'s garbage end is permanent', async () => {
     const routes = {};
     ae.registerAccountEraseRoutes({ post: (p, ...h) => { routes[p] = h[h.length - 1]; } }, { requireSecret: () => {}, wrap: (fn) => fn });
     const until = new Date(Date.now() + 10 * 60_000).toISOString();
@@ -249,7 +250,12 @@ test('stream-side account erase against real Postgres', async (t) => {
     assert.deepEqual(await run('@aetest-to1:x', 'aetest-k1', { keepEvidence: true, keepLinks: true, restrictionExpiresAt: until }),
       { reason: 'ban', expires_at: until });
     assert.deepEqual(await run('@aetest-to2:x', 'aetest-k2', { keepEvidence: true, restrictionExpiresAt: until }),
-      { reason: 'case', expires_at: null }, 'an open case must never expire');
+      { reason: 'case', expires_at: until }, 'a case did not take web\'s end');
+    const before = Date.now();
+    const caseOnly = await run('@aetest-to4:x', 'aetest-k4', { keepEvidence: true });
+    const days = (Date.parse(caseOnly.expires_at) - before) / 86_400_000;
+    assert.equal(caseOnly.reason, 'case');
+    assert.ok(days > 29.99 && days < 30.01, `a case with no end sent got ${days} days, not the held-message retention`);
     assert.deepEqual(await run('@aetest-to3:x', 'aetest-k3', { keepEvidence: true, keepLinks: true, restrictionExpiresAt: 'soon' }),
       { reason: 'ban', expires_at: null }, 'an unreadable end must keep the restriction, not drop it');
   });

@@ -9,15 +9,24 @@
 // Where a hold comes from — each from its own source of truth, so a restart rebuilds the same set:
 //   • a SITE ban (site.bans, by matrix id) holds every canonical identity linked to that account
 //     (site.platform_links, and the account's own native link in stream.links) until it expires;
-//   • a ban of a PLATFORM-ONLY chatter (no site account; web writes only a mod_log row and fans out)
-//     holds that canonical for PLATFORM_HOLD_MS. The platform's own ban is what keeps them out after
-//     that — the design web/app/api/mod/ban/route.ts states — so this hold bridges its delay rather
-//     than becoming a second, diverging ban list.
+//     — and holds each linked PLATFORM ID too (platform + id, the key a platform line carries), so a
+//     fresh canonical for the same platform account (an unlink, a deletion) is still stopped;
+//   • a DELETED account's site ban (site.bans keeps the account's row) holds the platform ids its
+//     deletion recorded (stream.erased_restrictions — account-erase.js), and whatever canonical
+//     stream.links now gives them — until THAT BAN ends or is lifted. The restriction row's own end
+//     is not read here: it can outlast the ban (an open case keeps it 30 days, an old row has none),
+//     and a chat hold must never outlast the ban it came from;
+//   • a CANONICAL's own standing (config/canonical-standing.mjs — the one rule web's Allow check
+//     reads too: its own mod_log rows by id, a ban until a later unban, a timeout while it runs)
+//     holds that canonical for PLATFORM_HOLD_MS from its newest standing row. The platform's own ban
+//     is what keeps them out after that — the design web/app/api/mod/ban/route.ts states — so this
+//     hold bridges its delay rather than becoming a second, diverging ban list.
 // Web PUSHES each ban and unban (POST /chat/ban) so it applies within the request; the table is
 // also rebuilt from the database at boot and every REFRESH_MS, which covers a push lost to a
 // restart. The rebuild never undoes a push that landed while it was reading.
 
 const { NATIVE_SQL } = require('./native-platform');
+const { CANONICAL_STANDING } = require('./canonicalStanding.generated');
 
 const PLATFORM_HOLD_MS = 15 * 60_000;
 const REFRESH_MS = 60_000;
@@ -32,21 +41,46 @@ const SITE_BANS_SQL =
            UNION
            SELECT platform_id, canonical FROM stream.links WHERE platform IN ${NATIVE_SQL}) ids
        ON ids.matrix_id = b.matrix_id
+    WHERE b.expires_at IS NULL OR b.expires_at > now()
+   UNION ALL
+   SELECT l.canonical, b.expires_at
+     FROM stream.erased_restrictions r
+     JOIN site.bans b ON b.matrix_id = r.matrix_id
+     JOIN stream.links l ON l.platform = r.platform AND l.platform_id = r.platform_id
     WHERE b.expires_at IS NULL OR b.expires_at > now()`;
-// The last ban-or-unban of each canonical target inside the bridge window.
-const PLATFORM_BANS_SQL =
-  `SELECT DISTINCT ON (target_id) target_id, action, expires_at, created_at
-     FROM site.mod_log
-    WHERE action IN ('ban', 'timeout', 'unban')
-      AND target_id ~ '^[0-9a-f]{12}$'
-      AND created_at > now() - make_interval(secs => $1)
-    ORDER BY target_id, created_at DESC`;
+// The platform ids a ban holds: a live site ban's linked platform accounts, and the platform ids a
+// deleted account's deletion recorded while that account's site ban runs — each until the BAN ends.
+const SITE_BAN_PLATFORM_IDS_SQL =
+  `SELECT p.platform, p.platform_id, b.expires_at
+     FROM site.platform_links p
+     JOIN site.bans b ON b.matrix_id = p.matrix_id
+    WHERE b.expires_at IS NULL OR b.expires_at > now()
+   UNION ALL
+   SELECT r.platform, r.platform_id, b.expires_at
+     FROM stream.erased_restrictions r
+     JOIN site.bans b ON b.matrix_id = r.matrix_id
+    WHERE b.expires_at IS NULL OR b.expires_at > now()`;
+// Each canonical whose standing (CANONICAL_STANDING) has a row newer than the bridge window: until
+// lifted when a ban stands (a timeout never weakens it), else the latest running timeout's end. The
+// window counts from the NEWEST standing row; candidates come from the window's rows (mod_log_created_idx).
+const CANONICAL_BANS_SQL =
+  `SELECT s.target_id,
+          CASE WHEN bool_or(s.action = 'ban') THEN NULL ELSE max(s.expires_at) END AS expires_at,
+          max(s.created_at) AS created_at
+     FROM (${CANONICAL_STANDING}) s
+    WHERE s.target_id IN (SELECT r.target_id FROM site.mod_log r
+                           WHERE r.created_at > now() - make_interval(secs => $1) AND r.action IN ('ban', 'timeout'))
+    GROUP BY s.target_id
+   HAVING max(s.created_at) > now() - make_interval(secs => $1)`;
 const CANONICALS_OF_SQL =
-  `SELECT canonical_id AS canonical FROM site.platform_links WHERE matrix_id = ANY($1::text[])
+  `SELECT canonical_id AS canonical, platform, platform_id FROM site.platform_links WHERE matrix_id = ANY($1::text[])
    UNION
-   SELECT canonical FROM stream.links WHERE platform IN ${NATIVE_SQL} AND platform_id = ANY($1::text[])`;
+   SELECT canonical, NULL, NULL FROM stream.links WHERE platform IN ${NATIVE_SQL} AND platform_id = ANY($1::text[])`;
 
 const msOf = (v) => (v == null ? Infinity : new Date(v).getTime());
+/** The key a platform account is held under: its platform and its id there. */
+const platformKey = (platform, platformId) =>
+  (platform && platformId ? `${String(platform).toLowerCase()}:${String(platformId)}` : null);
 
 /**
  * @param {object} o
@@ -54,17 +88,21 @@ const msOf = (v) => (v == null ? Infinity : new Date(v).getTime());
  * @param {() => number} [o.now]
  */
 function createBanHold({ pool, now = () => Date.now(), log = console, schedule = setInterval, cancel = clearInterval }) {
-  let held = new Map();        // canonical → until (ms; Infinity = until lifted)
-  const pushedAt = new Map();  // canonical → ms of the last push about it (a rebuild must not undo it)
+  let held = new Map();        // canonical, or `platform:id` (platformKey) → until (ms; Infinity = until lifted)
+  const pushedAt = new Map();  // the same keys → ms of the last push about it (a rebuild must not undo it)
   let handle = null;
 
-  function isHeld(canonicalId) {
-    if (!canonicalId) return false;
-    const until = held.get(canonicalId);
+  function heldKey(key) {
+    if (!key) return false;
+    const until = held.get(key);
     if (until === undefined) return false;
     if (until > now()) return true;
-    held.delete(canonicalId);
+    held.delete(key);
     return false;
+  }
+  /** Is this sender held — by their canonical, or by the platform account the line came from? */
+  function isHeld(canonicalId, platform, platformUserId) {
+    return heldKey(canonicalId) || heldKey(platformKey(platform, platformUserId));
   }
 
   /** A push states the latest mod action, so it SETS the hold (a re-ban to a shorter timeout is
@@ -80,17 +118,19 @@ function createBanHold({ pool, now = () => Date.now(), log = console, schedule =
   /** Rebuild from the database. Pushes that arrived while it read stand as pushed. */
   async function refresh() {
     const startedAt = now();
-    const [site, plat] = await Promise.all([
+    const [site, sitePids, plat] = await Promise.all([
       pool.query(SITE_BANS_SQL),
-      pool.query(PLATFORM_BANS_SQL, [PLATFORM_HOLD_MS / 1000]),
+      pool.query(SITE_BAN_PLATFORM_IDS_SQL),
+      pool.query(CANONICAL_BANS_SQL, [PLATFORM_HOLD_MS / 1000]),
     ]);
     const next = new Map();
     const put = (c, until) => { if (until > startedAt && (next.get(c) ?? -1) < until) next.set(c, until); };
     for (const r of site.rows) if (r.canonical) put(r.canonical, msOf(r.expires_at));
-    for (const r of plat.rows) {
-      if (r.action === 'unban') continue;
-      put(r.target_id, Math.min(msOf(r.expires_at), new Date(r.created_at).getTime() + PLATFORM_HOLD_MS));
+    for (const r of sitePids.rows) {
+      const k = platformKey(r.platform, r.platform_id);
+      if (k) put(k, msOf(r.expires_at));
     }
+    for (const r of plat.rows) put(r.target_id, Math.min(msOf(r.expires_at), new Date(r.created_at).getTime() + PLATFORM_HOLD_MS));
     for (const [c, at] of pushedAt) {
       if (at < startedAt) { pushedAt.delete(c); continue; }
       if (held.has(c)) next.set(c, held.get(c)); else next.delete(c);
@@ -133,15 +173,21 @@ function createBanHold({ pool, now = () => Date.now(), log = console, schedule =
       expiresMs = Date.parse(b.expiresAt);
       if (!Number.isFinite(expiresMs)) return { status: 400, body: { error: 'expiresAt must be an ISO time or null' } };
     }
-    const fromSite = matrixIds.length
-      ? (await pool.query(CANONICALS_OF_SQL, [matrixIds])).rows.map((r) => r.canonical).filter(Boolean)
-      : [];
+    const siteRows = matrixIds.length ? (await pool.query(CANONICALS_OF_SQL, [matrixIds])).rows : [];
+    const fromSite = siteRows.map((r) => r.canonical).filter(Boolean);
     const t = now();
     const touched = new Set();
     for (const c of fromSite) {
       touched.add(c);
       if (lift) held.delete(c); else hold(c, expiresMs);
       pushedAt.set(c, t);
+    }
+    // The linked platform accounts themselves (not counted as identities: one per canonical).
+    for (const r of siteRows) {
+      const k = platformKey(r.platform, r.platform_id);
+      if (!k) continue;
+      if (lift) held.delete(k); else hold(k, expiresMs);
+      pushedAt.set(k, t);
     }
     if (canonicalId) {
       touched.add(canonicalId);

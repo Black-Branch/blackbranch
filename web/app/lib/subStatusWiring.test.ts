@@ -115,7 +115,7 @@ test("5: SupportContent shows the status line, the ledger, and refreshes the led
   const src = read("app/components/SupportContent.tsx");
   assert.match(src, /<\/div>\s*\);\s*\}\s*$/, "END of SupportContent.tsx not read");
   const s = stripComments(src);
-  assert.match(s, /import \{ subscriptionStatusLine, giftSubscribeNotes, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView \} from "@\/app\/lib\/supportStatus";/);
+  assert.match(s, /import \{ subscriptionStatusLine, queuedGiftLine, giftSubscribeNotes, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView \} from "@\/app\/lib\/supportStatus";/);
   assert.doesNotMatch(s, /giftLedgerServer/, "the client must never import the pool-backed module, not even for a type");
   // The old two lines are gone — one status line replaces both.
   assert.doesNotMatch(s, /"Access ends" : "Renews"/, "the unreachable 'Access ends' branch is replaced");

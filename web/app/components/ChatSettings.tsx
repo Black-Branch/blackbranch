@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import BehaviorListPanel from "./BehaviorListPanel";
+import MentionColourPreview from "./MentionColourPreview";
 import { pullAccountSettings } from "../lib/accountSettings";
 import { migrateSettingsBlob } from "../lib/settingsMigrate";
 import { scheduleSettingsSave, flushSettingsSave, useSettingsSaveState } from "../lib/settingsSave";
@@ -222,10 +223,22 @@ export default function ChatPrefs({
         );
       case "color": {
         const v = values[key] as string;
-        const shown = v || (control.fallbackKey ? values[control.fallbackKey] as string : v);
+        const shown = v || (control.fallbackKey ? values[control.fallbackKey] as string : control.defaultHex ?? v);
         return (
           <Row key={key} label={control.label}>
-            <ColorInput value={shown} onChange={c => applyKey(key, c as Values[SettingKey])} />
+            <div className="flex items-center gap-1.5">
+              {control.defaultHex && v && (
+                <button
+                  type="button"
+                  onClick={() => applyKey(key, "" as Values[SettingKey])}
+                  title={`Back to the default ${control.label.toLowerCase()}`}
+                  className="h-6 px-1.5 rounded-md text-2xs text-secondary hover:text-body hover:bg-control"
+                >
+                  Default
+                </button>
+              )}
+              <ColorInput value={shown} onChange={c => applyKey(key, c as Values[SettingKey])} />
+            </div>
           </Row>
         );
       }
@@ -300,6 +313,7 @@ export default function ChatPrefs({
       <Section key={section.title} title={section.title} hint={section.hint}>
         {section.items.map(renderItem)}
         {section.panel && <BehaviorListPanel kind={section.panel} />}
+        {section.preview === "mentionColours" && <MentionColourPreview />}
       </Section>
     );
   }

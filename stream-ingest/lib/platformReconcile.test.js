@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstanceConfig } from './instanceConfig.js';
-import { choosePlatforms, PLATFORM_KEYS } from './platformsEnv.js';
+import { choosePlatforms } from './platformsEnv.js';
 import { createPlatformStarter, startPlatformsWhenLoaded, oneLine } from './platformStarter.js';
 
 process.env.STREAM_API_URL = 'http://stream-api.test';
@@ -43,11 +43,10 @@ function spies() {
   return { log, running, starters };
 }
 
-const starterFor = (config, starters, extra = {}) => createPlatformStarter({
+const starterFor = (config, starters) => createPlatformStarter({
   starters,
   choose: () => choosePlatforms(undefined, Object.keys(starters), (k) => config.get(k)),
   log: quiet,
-  ...extra,
 });
 
 test('a platform switched on after boot starts on the next load; switched off, it stops; on again, it starts', async () => {
@@ -86,16 +85,14 @@ test('a platform switched on after boot starts on the next load; switched off, i
 test('a channel changed while its reader runs: the reader is stopped, then started with the new one', async () => {
   const { config, stored } = reader({ 'platform.twitch.channel': 'casey' });
   const { log, running, starters } = spies();
-  const applied = [];
   try {
-    const platforms = starterFor(config, starters, { onApplied: (name) => applied.push(name) });
+    const platforms = starterFor(config, starters);
     await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
     stored['platform.twitch.channel'] = 'casey2';
     await config.load();
     await platforms.settled();
     assert.deepEqual(log, ['start twitch', 'stop twitch', 'start twitch']);
     assert.equal(running.twitch, 1, 'never two readers of one platform');
-    assert.deepEqual(applied, ['twitch', 'twitch'], 'each start counts its settings as applied');
   } finally { config.stop(); }
 });
 
@@ -177,17 +174,15 @@ test('oneLine: no stack, no URL path or query, at most 200 characters', () => {
   assert.equal(oneLine(null), 'unknown error');
 });
 
-// The panel says a restart-applied switch is "waiting for a restart" while this process reports
-// the value it booted with. A reader that STOPS because its switch went off has applied that
-// switch too, so the report must follow the stop as it follows a start (index.js's wiring).
-const wired = (config, starters) => starterFor(config, starters, { onApplied: (name) => config.markApplied(PLATFORM_KEYS[name] || []) });
+// The YouTube switch applies on the settings load: the reader starts or stops, and the settings
+// report says the saved value at once (no "waiting for a restart").
 const shown = (config) => config.statusReport()['modules.youtube'].display;
 
 test('YouTube switched off: the report says off at once, with no restart (original path)', async () => {
   const { config, stored } = reader({ 'platform.youtube.channelId': 'UCcaseytest', 'modules.youtube': true });
   const { log, starters } = spies();
   try {
-    const platforms = wired(config, starters);
+    const platforms = starterFor(config, starters);
     await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
     assert.deepEqual(log, ['start youtube']);
     assert.equal(shown(config), true);
@@ -195,7 +190,7 @@ test('YouTube switched off: the report says off at once, with no restart (origin
     await config.load();
     await platforms.settled();
     assert.deepEqual(log, ['start youtube', 'stop youtube']);
-    assert.equal(shown(config), false, 'the reader stopped, but the report still says on: "waiting for a restart"');
+    assert.equal(shown(config), false, 'the reader stopped, and the report says off');
   } finally { config.stop(); }
 });
 
@@ -203,7 +198,7 @@ test('retry: off, on, off again: the report follows every flip', async () => {
   const { config, stored } = reader({ 'platform.youtube.channelId': 'UCcaseytest', 'modules.youtube': true });
   const { starters } = spies();
   try {
-    const platforms = wired(config, starters);
+    const platforms = starterFor(config, starters);
     await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
     for (const v of [false, true, false, true]) {
       stored['modules.youtube'] = v;
@@ -219,7 +214,7 @@ test('a reader that never started (it failed) and is then switched off: the repo
   const { starters } = spies();
   starters.youtube = async () => { throw new Error('browser missing: no chromium'); };
   try {
-    const platforms = wired(config, starters);
+    const platforms = starterFor(config, starters);
     await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
     assert.equal(platforms.states().youtube.state, 'failed');
     stored['modules.youtube'] = false;
@@ -234,7 +229,7 @@ test('restart: a process that boots with YouTube off reports off, and a later re
   const { config } = reader({ 'platform.youtube.channelId': 'UCcaseytest', 'modules.youtube': false });
   const { log, starters } = spies();
   try {
-    const platforms = wired(config, starters);
+    const platforms = starterFor(config, starters);
     await startPlatformsWhenLoaded({ platforms, config, bootLoaded: await config.start(), log: quiet });
     assert.equal(shown(config), false);
     await config.load();

@@ -43,7 +43,7 @@ const ENDS = {
   "install.sh": /\nexit 0\n$/,
   "blackbranch": /\n {2}\*\) die "unknown command[^\n]*\nesac\n$/,
   "migrate.sh": /now at v\$head"; fi\n$/,
-  ".env.example": /\nBB_ALERT_NTFY_URL=\nBB_ALERT_EMAIL_COMMAND=\n$/,
+  ".env.example": /\nSIGNIN_OIDC_CLIENT_SECRET=\nSIGNIN_OIDC_NAME=\n$/,
   "Dockerfile": /\nUSER node\nEXPOSE 3000\nCMD \["node", "server.js"\]\n$/,
   "matrix/render.sh": /\n\thandle \{\n\t\trespond 404\n\t\}\nEOF\n\}\n$/,
   "matrix/bootstrap.mjs": /process\.stdout\.write\(`\$\{JSON\.stringify\(\{ hub, general, forum, created \}\)\}\\n`\);\n$/,
@@ -67,12 +67,14 @@ test("the Compose file renders with every profile, and every service is pinned",
   const skip = needs(dockerCompose, "docker compose"); if (skip) return t.skip(skip);
   const cfg = composeConfig(path.join(here, ".env.example"), ["tunnel", "matrix", "discord"]);
   const names = Object.keys(cfg.services).sort();
-  assert.deepEqual(names, ["caddy", "cloudflared", "mas", "mautrix-discord", "migrate", "postgres", "stream-api", "stream-ingest", "synapse", "web"]);
+  assert.deepEqual(names, ["caddy", "cloudflared", "mas", "migrate", "ooye", "postgres", "stream-api", "stream-ingest", "synapse", "web"]);
   for (const [name, s] of Object.entries(cfg.services)) {
     assert.ok(s.image, `${name}: no image`);
     if (s.build) {
       assert.match(s.image, /^blackbranch\/[a-z-]+:local$/, `${name}: a built image carries the local name`);
-      assert.equal(s.build.dockerfile, "install/Dockerfile", name);
+      // The Discord bridge is built from its own folder (install/ooye/, upstream's source pinned there).
+      if (name === "ooye") assert.match(s.build.context, /\/install\/ooye$/, name);
+      else assert.equal(s.build.dockerfile, "install/Dockerfile", name);
     } else {
       assert.match(s.image, /^[a-z0-9./-]+:[A-Za-z0-9._-]+$/, `${name}: image must name a tag`);
       assert.doesNotMatch(s.image, /:(latest|stable|main)$/, `${name}: a moving tag is not a pin`);
@@ -112,7 +114,7 @@ test("the box never builds the site at run time — no web-build, no build volum
 test("profiles: tunnel and discord are the only optional parts — the homeserver is core", () => {
   const src = read("compose.yaml");
   const block = (svc) => src.match(new RegExp(`\\n  ${svc}:\\n([\\s\\S]*?)(?=\\n  [a-z-]+:\\n|\\nnetworks:)`))?.[1] ?? "";
-  const want = { cloudflared: "tunnel", "mautrix-discord": "discord" };
+  const want = { cloudflared: "tunnel", ooye: "discord" };
   for (const svc of ["postgres", "migrate", "stream-api", "stream-ingest", "web", "caddy", "synapse", "mas", ...Object.keys(want)]) {
     const b = block(svc);
     assert.ok(b, `no service block for ${svc}`);
@@ -136,7 +138,7 @@ const NOT_PASSED = { "matrix.legacyNamespace": "never on a fresh install", "site
 
 test("web gets exactly the schema's install keys it reads, at start", () => {
   const schema = INSTANCE_KEYS.filter((k) => k.tier === "install" && k.packages.includes("web") && !(k.key in NOT_PASSED)).map((k) => k.env[0]);
-  assert.equal(schema.length, 24);
+  assert.equal(schema.length, 26);
   assert.ok(INSTANCE_KEYS.filter((k) => k.tier === "install").every((k) => k.reload === "restart"), "an install key applies at restart — nothing is built in");
   assert.deepEqual([...installBlock()].sort(), [...schema].sort());
   const src = read("compose.yaml");
@@ -152,7 +154,10 @@ const arr = (name) => {
 };
 
 test("`set` reaches the site's display values only — its install values minus the permanent identity", () => {
-  const identity = ["SITE_ORIGIN", "SITE_API_ORIGIN", "SITE_API_WS_ORIGIN", "MATRIX_SERVER_NAME", "MATRIX_HOMESERVER_URL", "MATRIX_OAUTH_ISSUER", "MATRIX_OAUTH_CLIENT_ID"];
+  // The community service account's name too (the rooms it made are its for good), and the switch
+  // for keeping its rooms, which is the host's own setting, not a display value.
+  const identity = ["SITE_ORIGIN", "SITE_API_ORIGIN", "SITE_API_WS_ORIGIN", "MATRIX_SERVER_NAME", "MATRIX_HOMESERVER_URL", "MATRIX_OAUTH_ISSUER", "MATRIX_OAUTH_CLIENT_ID",
+    "COMMUNITY_LOCALPART", "COMMUNITY_RECONCILER"];
   assert.deepEqual([...arr("SETTABLE_KEYS")].sort(), installBlock().filter((k) => !identity.includes(k)).sort());
   assert.deepEqual(arr("REQUEST_RESTARTABLE"), ["stream-api", "stream-ingest", "web"]);
 });
@@ -302,11 +307,10 @@ test("requests: results live outside the site's drop box, and a link there is re
   } finally { rmSync(home, { recursive: true, force: true }); rmSync(elsewhere, { recursive: true, force: true }); }
 });
 
-test("commands not in this release say so and fail, rather than silently doing nothing", () => {
-  for (const c of ["user"]) {
-    const r = spawnSync("bash", [path.join(here, "blackbranch"), c], { encoding: "utf8", env: { ...process.env, BB_HOME: "/nonexistent" } });
-    assert.equal(r.status, 3, c); assert.match(r.stderr, /not in this release yet/);
-  }
+test("no command silently does nothing: an unknown one fails, and none is a placeholder (user-admin.test.mjs runs `user`)", () => {
+  const r = spawnSync("bash", [path.join(here, "blackbranch"), "frobnicate"], { encoding: "utf8", env: { ...process.env, BB_HOME: "/nonexistent" } });
+  assert.notEqual(r.status, 0); assert.match(r.stderr, /unknown command/);
+  assert.doesNotMatch(readFileSync(path.join(here, "blackbranch"), "utf8"), /\bnot_yet\b/, "no command is a placeholder any more");
 });
 
 test("set refuses identity keys, and values .env cannot hold", () => {
@@ -427,7 +431,7 @@ test("site-icons: the five PNGs are checked on the host's own copy and installed
     assert.deepEqual(readdirSync(files).filter((f) => f.startsWith(".")), [], "no staging folder left behind");
   } finally { rmSync(h, { recursive: true, force: true }); }
   // Answered while an update runs: it restarts nothing.
-  assert.match(read("blackbranch"), /\n {8}update-check\|doctor\|backup-key\|recovery-sheet\|site-icons\) ;;\n/);
+  assert.match(read("blackbranch"), /\n {8}update-check\|doctor\|backup-key\|recovery-sheet\|site-icons\|discord-links\|discord-bot\|discord-read-\*\) ;;\n/);
 });
 
 // W12: the community step's answer ends with what exists and what was made — the bootstrap's JSON

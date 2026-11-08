@@ -6,8 +6,6 @@ Alerts, paid messages and the bot spoken on stream with an ElevenLabs voice. The
 
 Choose it during setup on the **Modules** page; its setup page then appears with the steps below. The same steps are in the Admin Panel later.
 
-The addresses below are for a site at `example.com`; your setup page shows your own.
-
 ## 1. Your ElevenLabs key and voice (optional)
 
 ElevenLabs → Developers → API keys → Create key, with access to Text to Speech, Models and Voices. Paste it, then pick a voice in ElevenLabs' Voices page and copy its voice id. Speaking stays off until you switch it on here.

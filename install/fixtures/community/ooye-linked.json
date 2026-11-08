@@ -1,0 +1,539 @@
+{
+ "//": "Real state, read as the community account from Synapse 1.162 after OOYE 3.7 (the bundle image, Discord replaced by a stand-in) linked the stand-in server to the hub (privacy link) and #general to a channel; then after it unlinked the channel. Captured by task 2.4, 2026-10-31; ids made readable.",
+ "hubLinked": [
+  {
+   "type": "m.room.create",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "room_version": "12",
+    "type": "m.space"
+   }
+  },
+  {
+   "type": "m.room.guest_access",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "guest_access": "forbidden"
+   }
+  },
+  {
+   "type": "m.room.history_visibility",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "history_visibility": "world_readable"
+   }
+  },
+  {
+   "type": "m.room.join_rules",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "join_rule": "public"
+   }
+  },
+  {
+   "type": "m.room.member",
+   "state_key": "@_ooye_bot:bb.test",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "displayname": "_ooye_bot",
+    "membership": "join"
+   }
+  },
+  {
+   "type": "m.room.member",
+   "state_key": "@blackbranch:bb.test",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "displayname": "blackbranch",
+    "membership": "join"
+   }
+  },
+  {
+   "type": "m.room.name",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "name": "Stand-in Discord server"
+   }
+  },
+  {
+   "type": "m.room.power_levels",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "ban": 50,
+    "events": {
+     "m.call.invite": 50,
+     "m.room.avatar": 50,
+     "m.room.canonical_alias": 50,
+     "m.room.encryption": 100,
+     "m.room.history_visibility": 100,
+     "m.room.name": 50,
+     "m.room.power_levels": 100,
+     "m.room.server_acl": 100,
+     "m.room.tombstone": 150
+    },
+    "events_default": 0,
+    "historical": 100,
+    "invite": 50,
+    "kick": 50,
+    "redact": 50,
+    "state_default": 50,
+    "users": {
+     "@_ooye_bot:bb.test": 100
+    },
+    "users_default": 0
+   }
+  },
+  {
+   "type": "m.space.child",
+   "state_key": "!general:bb.test",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "order": "a0",
+    "via": [
+     "bb.test"
+    ]
+   }
+  }
+ ],
+ "roomBefore": [
+  {
+   "type": "m.room.create",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "room_version": "12"
+   }
+  },
+  {
+   "type": "m.room.guest_access",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "guest_access": "forbidden"
+   }
+  },
+  {
+   "type": "m.room.history_visibility",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "history_visibility": "shared"
+   }
+  },
+  {
+   "type": "m.room.join_rules",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "allow": [
+     {
+      "room_id": "!hub:bb.test",
+      "type": "m.room_membership"
+     }
+    ],
+    "join_rule": "restricted"
+   }
+  },
+  {
+   "type": "m.room.member",
+   "state_key": "@blackbranch:bb.test",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "displayname": "blackbranch",
+    "membership": "join"
+   }
+  },
+  {
+   "type": "m.room.name",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "name": "general"
+   }
+  },
+  {
+   "type": "m.room.power_levels",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "ban": 50,
+    "events": {
+     "m.room.avatar": 75,
+     "m.room.canonical_alias": 75,
+     "m.room.encryption": 100,
+     "m.room.guest_access": 100,
+     "m.room.history_visibility": 100,
+     "m.room.join_rules": 100,
+     "m.room.name": 75,
+     "m.room.pinned_events": 50,
+     "m.room.power_levels": 100,
+     "m.room.retention": 100,
+     "m.room.server_acl": 100,
+     "m.room.tombstone": 150,
+     "m.room.topic": 75,
+     "m.space.child": 75,
+     "m.space.parent": 75
+    },
+    "events_default": 0,
+    "historical": 100,
+    "invite": 50,
+    "kick": 50,
+    "notifications": {
+     "room": 50
+    },
+    "redact": 50,
+    "state_default": 50,
+    "users": {
+     "@moddy:bb.test": 50,
+     "@streamer:bb.test": 100
+    },
+    "users_default": 0
+   }
+  },
+  {
+   "type": "m.room.retention",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "max_lifetime": 15552000000
+   }
+  },
+  {
+   "type": "m.room.topic",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "m.topic": {
+     "m.text": [
+      {
+       "body": "Say hello"
+      }
+     ]
+    },
+    "topic": "Say hello"
+   }
+  },
+  {
+   "type": "m.space.parent",
+   "state_key": "!hub:bb.test",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "canonical": true,
+    "via": [
+     "bb.test"
+    ]
+   }
+  }
+ ],
+ "roomLinked": [
+  {
+   "type": "m.room.avatar",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {}
+  },
+  {
+   "type": "m.room.create",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "room_version": "12"
+   }
+  },
+  {
+   "type": "m.room.guest_access",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "guest_access": "forbidden"
+   }
+  },
+  {
+   "type": "m.room.history_visibility",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "history_visibility": "shared"
+   }
+  },
+  {
+   "type": "m.room.join_rules",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "join_rule": "public"
+   }
+  },
+  {
+   "type": "m.room.member",
+   "state_key": "@_ooye_bot:bb.test",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "displayname": "_ooye_bot",
+    "membership": "join"
+   }
+  },
+  {
+   "type": "m.room.member",
+   "state_key": "@blackbranch:bb.test",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "displayname": "blackbranch",
+    "membership": "join"
+   }
+  },
+  {
+   "type": "m.room.name",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "name": "general"
+   }
+  },
+  {
+   "type": "m.room.power_levels",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "ban": 50,
+    "events": {
+     "m.reaction": 0,
+     "m.room.avatar": 75,
+     "m.room.canonical_alias": 75,
+     "m.room.encryption": 100,
+     "m.room.guest_access": 100,
+     "m.room.history_visibility": 100,
+     "m.room.join_rules": 100,
+     "m.room.name": 75,
+     "m.room.pinned_events": 50,
+     "m.room.power_levels": 100,
+     "m.room.redaction": 0,
+     "m.room.retention": 100,
+     "m.room.server_acl": 100,
+     "m.room.tombstone": 150,
+     "m.room.topic": 75,
+     "m.space.child": 75,
+     "m.space.parent": 75,
+     "org.matrix.msc3381.poll.response": 0
+    },
+    "events_default": 0,
+    "historical": 100,
+    "invite": 50,
+    "kick": 50,
+    "notifications": {
+     "room": 20
+    },
+    "redact": 50,
+    "state_default": 50,
+    "users": {
+     "@_ooye_bot:bb.test": 100,
+     "@moddy:bb.test": 50,
+     "@streamer:bb.test": 100
+    },
+    "users_default": 0
+   }
+  },
+  {
+   "type": "m.room.retention",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "max_lifetime": 15552000000
+   }
+  },
+  {
+   "type": "m.room.topic",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "m.topic": {
+     "m.text": [
+      {
+       "body": "Say hello"
+      }
+     ]
+    },
+    "topic": "Say hello"
+   }
+  },
+  {
+   "type": "m.space.parent",
+   "state_key": "!hub:bb.test",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "canonical": true,
+    "via": [
+     "bb.test"
+    ]
+   }
+  },
+  {
+   "type": "uk.half-shot.bridge",
+   "state_key": "moe.cadence.ooye://discord/100000000000000101/100000000000000201",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "bridgebot": "@_ooye_bot:bb.test",
+    "channel": {
+     "displayname": "test",
+     "external_url": "https://discord.com/channels/100000000000000101/100000000000000201",
+     "id": "100000000000000201"
+    },
+    "network": {
+     "avatar_url": "mxc://bb.test/GMFSSlTcjcwzqxircVoZiHNZ",
+     "displayname": "Stand-in Discord server",
+     "id": "100000000000000101"
+    },
+    "protocol": {
+     "displayname": "Discord",
+     "id": "discord"
+    }
+   }
+  }
+ ],
+ "roomUnlinked": [
+  {
+   "type": "m.room.avatar",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {}
+  },
+  {
+   "type": "m.room.create",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "room_version": "12"
+   }
+  },
+  {
+   "type": "m.room.guest_access",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "guest_access": "forbidden"
+   }
+  },
+  {
+   "type": "m.room.history_visibility",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "history_visibility": "shared"
+   }
+  },
+  {
+   "type": "m.room.join_rules",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "join_rule": "public"
+   }
+  },
+  {
+   "type": "m.room.member",
+   "state_key": "@_ooye_bot:bb.test",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "membership": "leave"
+   }
+  },
+  {
+   "type": "m.room.member",
+   "state_key": "@blackbranch:bb.test",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "displayname": "blackbranch",
+    "membership": "join"
+   }
+  },
+  {
+   "type": "m.room.name",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "name": "general"
+   }
+  },
+  {
+   "type": "m.room.power_levels",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "ban": 50,
+    "events": {
+     "m.reaction": 0,
+     "m.room.avatar": 75,
+     "m.room.canonical_alias": 75,
+     "m.room.encryption": 100,
+     "m.room.guest_access": 100,
+     "m.room.history_visibility": 100,
+     "m.room.join_rules": 100,
+     "m.room.name": 75,
+     "m.room.pinned_events": 50,
+     "m.room.power_levels": 100,
+     "m.room.redaction": 0,
+     "m.room.retention": 100,
+     "m.room.server_acl": 100,
+     "m.room.tombstone": 150,
+     "m.room.topic": 75,
+     "m.space.child": 75,
+     "m.space.parent": 75,
+     "org.matrix.msc3381.poll.response": 0
+    },
+    "events_default": 0,
+    "historical": 100,
+    "invite": 50,
+    "kick": 50,
+    "notifications": {
+     "room": 20
+    },
+    "redact": 50,
+    "state_default": 50,
+    "users": {
+     "@moddy:bb.test": 50,
+     "@streamer:bb.test": 100
+    },
+    "users_default": 0
+   }
+  },
+  {
+   "type": "m.room.retention",
+   "state_key": "",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "max_lifetime": 15552000000
+   }
+  },
+  {
+   "type": "m.room.topic",
+   "state_key": "",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {
+    "topic": "a channel on Discord"
+   }
+  },
+  {
+   "type": "m.space.parent",
+   "state_key": "!hub:bb.test",
+   "sender": "@blackbranch:bb.test",
+   "content": {
+    "canonical": true,
+    "via": [
+     "bb.test"
+    ]
+   }
+  },
+  {
+   "type": "uk.half-shot.bridge",
+   "state_key": "moe.cadence.ooye://discord/100000000000000101/100000000000000201",
+   "sender": "@_ooye_bot:bb.test",
+   "content": {}
+  }
+ ]
+}

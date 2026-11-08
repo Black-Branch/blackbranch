@@ -1,0 +1,17 @@
+# One run of the community reconciler in mode %i (report, adopt or apply): the rooms made to match the
+# Admin Panel. Started by blackbranch-community.timer (apply, every 10 minutes while the switch is on),
+# by the site's request after a change in the panel (verb community-reconcile), and by `blackbranch up`.
+# Its own unit, so the request watcher is never held up by a long run. Two runs never overlap: the
+# command holds state/community.lock and a second one exits 75 ("already running"), which is no failure.
+# Installed by `blackbranch install-files` (install.sh and every update).
+[Unit]
+Description=Black Branch: keep the community's rooms as the Admin Panel sets them (%i)
+After=docker.service network-online.target blackbranch-matrix.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbranch community reconcile --mode %i
+TimeoutStartSec=20min
+SuccessExitStatus=75

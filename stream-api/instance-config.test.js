@@ -70,6 +70,8 @@ test('provider checks: one read each, a fixed CODE back, never the value or a pr
     [/anthropic\.com\/v1\/models/, json(200, { data: [{}, {}, {}] })],
     [/openai\.com\/v1\/models/, json(401, { error: { message: 'Incorrect API key provided: sk-oa-SECRETVALUE' } })],
     [/elevenlabs\.io\/v1\/models/, json(200, [{}, {}])],
+    // The customer portal saved once (its default configuration exists): A1-07's read.
+    [/api\.stripe\.com\/v1\/billing_portal\/configurations/, json(200, { data: [{ id: 'bpc_1', is_default: true }] })],
     [/api\.stripe\.com\/v1\//, json(200, { data: [] })],
     [/sandbox\.paypal\.com\/v1\/oauth2\/token/, json(200, { access_token: 'AT' })],
     [/sandbox\.paypal\.com\/v1\/notifications\/webhooks\/WH-1/, json(200, { event_types: [{ name: '*' }] })],
@@ -132,6 +134,8 @@ test('a scoped key lacking one permission reads limited on every provider that s
     [/openai\.com\/v1\/models/, json(401, { error: { message: 'You have insufficient permissions for this operation. Missing scopes: api.model.read.', code: null } })],
     // A restricted key without Invoices: Read — 403 for that object type alone.
     [/api\.stripe\.com\/v1\/invoices/, json(403, { error: { type: 'invalid_request_error', message: "The provided key 'rk_live_***' does not have the required permissions for this endpoint." } })],
+    // The customer portal saved once (its default configuration exists): A1-07's read.
+    [/api\.stripe\.com\/v1\/billing_portal\/configurations/, json(200, { data: [{ id: 'bpc_1', is_default: true }] })],
     [/api\.stripe\.com\/v1\//, json(200, { data: [] })],
   ]);
   assert.deepEqual(await runProviderCheck('openai', get, f), { ok: true, code: 'limited', status: 401 });
@@ -212,7 +216,7 @@ test('every /config route is requireSecret — never the IP allowlist', () => {
   for (const m of ['get', 'put', 'post', 'delete']) app[m] = (path, ...mw) => seen.push([m, path, mw[0]]);
   const requireSecret = () => {};
   createInstanceConfig({ log: quiet }).registerConfigRoutes(app, { requireSecret, wrap: (fn) => fn });
-  assert.equal(seen.length, 6);
+  assert.equal(seen.length, 7);
   for (const [m, p, first] of seen) assert.equal(first, requireSecret, `${m.toUpperCase()} ${p} is not guarded by the secret`);
 });
 
@@ -268,4 +272,65 @@ test('a restart-applied key reports what this process RUNS — the first load\'s
   assert.equal(await cfg.load(), true);
   assert.equal(cfg.get('modules.obs'), true, 'the layer itself holds the saved value');
   assert.equal(cfg.snapshot().self['modules.obs'].display, false, 'the report must say the old value is still running');
+});
+
+// The host's own verbs (`blackbranch federation`, `matrix ensure`) write site.instance_config by
+// SQL; POST /config/reload is how they ask this process to re-read and tell the others.
+test('POST /config/reload re-reads a SQL-written row and sends config_changed for the keys given (restart, retry)', async () => {
+  let federation = false; let failNext = false;
+  const pool = {
+    query: async (sql) => {
+      if (failNext && /FROM site\.instance_config/.test(sql)) { failNext = false; throw new Error('db blip'); }
+      return /FROM site\.instance_config/.test(sql)
+        ? { rows: [{ key: 'matrix.federation', value: federation, updated_by: 'blackbranch', updated_at: new Date() }] }
+        : { rows: [] };
+    },
+    connect: async () => { throw new Error('no writes in this test'); },
+  };
+  const routes = {};
+  const app = {};
+  for (const m of ['get', 'put', 'post', 'delete']) app[m] = (p, ...mw) => { routes[`${m.toUpperCase()} ${p}`] = mw; };
+  const requireSecret = () => {};
+  const frames = [];
+  const cfg = createInstanceConfig({ env: {}, log: quiet });
+  cfg.registerConfigRoutes(app, { requireSecret, wrap: (fn) => fn });
+  await cfg.init({ pool, sendInternal: (f) => { frames.push(f); return 1; } });
+  const mw = routes['POST /config/reload'];
+  assert.ok(mw, 'the route exists');
+  assert.equal(mw[0], requireSecret, 'guarded by the secret');
+  const call = async (body) => {
+    let status = 200; let out;
+    const res = { set() { return res; }, status(s) { status = s; return res; }, json(b) { out = b; return res; } };
+    await mw.at(-1)({ body }, res);
+    return { status, body: out };
+  };
+  assert.equal(cfg.get('matrix.federation'), false);
+  federation = true; // the host's SQL write
+  assert.equal(cfg.get('matrix.federation'), false, 'invisible until a re-read (the defect)');
+  let r = await call({ keys: ['matrix.federation'] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(cfg.get('matrix.federation'), true, 're-read observed');
+  assert.deepEqual(frames.at(-1), { type: 'config_changed', keys: ['matrix.federation'] });
+  // Restart of the cycle: a second host write, a second call — the layer follows again.
+  federation = false;
+  r = await call({ keys: ['matrix.federation', 'matrix.federation'] });
+  assert.equal(r.status, 200);
+  assert.equal(cfg.get('matrix.federation'), false);
+  assert.deepEqual(frames.at(-1), { type: 'config_changed', keys: ['matrix.federation'] }, 'each key once');
+  // Retry: a failed re-read answers 500 and tells nobody; the next call works.
+  const before = frames.length;
+  federation = true; failNext = true;
+  r = await call({ keys: ['matrix.federation'] });
+  assert.equal(r.status, 500);
+  assert.equal(frames.length, before, 'no config_changed after a failed re-read');
+  r = await call({ keys: ['matrix.federation'] });
+  assert.equal(r.status, 200);
+  assert.equal(cfg.get('matrix.federation'), true);
+  // Refusals: no list, an unknown key, a non-string, too many — nothing re-read or sent.
+  for (const body of [undefined, {}, { keys: [] }, { keys: ['no.such.key'] }, { keys: [7] }, { keys: Array(65).fill('matrix.federation') }]) {
+    const n = frames.length;
+    r = await call(body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.equal(frames.length, n);
+  }
 });

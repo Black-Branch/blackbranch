@@ -196,15 +196,17 @@ test("no auth file string-builds an OAuth path or reads MAS_* env directly", () 
   }
 });
 
-test("the local refresh treats a discovery failure as TRANSIENT (never RevokedSessionError)", () => {
+test("the local refresh treats a discovery failure as TRANSIENT (never a refusal)", () => {
   const src = stripComments(read("app/lib/matrixSession.ts"));
   const start = src.indexOf("async function localRefresh(");
   assert.ok(start > 0, "localRefresh is gone — the scan is blind");
   const body = src.slice(start, src.indexOf("\n}\n", start));
-  // The ONLY revoke verdict is the token endpoint's own answer, read after a response exists.
-  const revokeAt = body.indexOf("throw new RevokedSessionError()");
-  assert.ok(revokeAt > 0, "the invalid_grant → revoked mapping is gone");
-  assert.ok(body.indexOf("invalid_grant") < revokeAt && body.indexOf("invalid_grant") > body.indexOf("if (!res.ok)"),
-    "RevokedSessionError must be thrown only from the token endpoint's invalid_grant answer");
-  assert.doesNotMatch(body, /\btry\s*\{/, "a try/catch here could map a discovery failure onto a revoke");
+  // The ONLY refusal is the token endpoint's own answer, read after a response exists.
+  assert.match(body, /const res = await oauthTokenRequest\([\s\S]*?\);\s*return readRefreshAnswer\(res, MATRIX_JSON_MAX_BYTES\);\s*$/);
+  assert.doesNotMatch(body, /\btry\s*\{|\.catch\(/, "a try/catch here could map a discovery failure onto a refusal");
+  const core = stripComments(read("app/lib/matrixSessionCore.ts"));
+  const reader = core.slice(core.indexOf("export async function readRefreshAnswer("), core.indexOf("\n}\n", core.indexOf("export async function readRefreshAnswer(")));
+  const refusal = reader.indexOf("throw new RefreshRefusedError(");
+  assert.ok(refusal > reader.indexOf("if (!res.ok)") && refusal > reader.indexOf("invalid_grant"), "a refusal only from the endpoint's own error answer");
+  assert.match(core, /export async function resolveTokens\(/, "vacuity: the core was read");
 });

@@ -6,6 +6,8 @@ import { keepIfEqual } from "./stableState";
 import { edgeTab, type PlayerState } from "./playerSource";
 import { tabId } from "./tabId";
 import type { CommunityStatus, LoopVideo } from "./streamView";
+import { livenessOf } from "./streamLiveness.ts";
+import type { PublicSnapshot } from "./platformLiveness.generated.mjs";
 
 /** Kept in step with StreamView's `tab` state — see app/lib/playerSource.ts. */
 export type PlayerTab = PlayerState["tab"];
@@ -38,6 +40,8 @@ export function useStreamStatusPoll(
   // null while offline.
   const [ytVideoId, setYtVideoId] = useState<string | null>(initialYtVideoId);
   const [community, setCommunity] = useState<CommunityStatus | null>(null);
+  // Every community streamer the viewer may choose (featured first); StreamView keeps the pick.
+  const [communities, setCommunities] = useState<CommunityStatus[]>([]);
   // The community fallback playlist (v77). Only ever populated by the server
   // when nobody is live, which is exactly when the player uses it.
   const [loopVideos, setLoopVideos] = useState<LoopVideo[]>([]);
@@ -45,6 +49,10 @@ export function useStreamStatusPoll(
   // status poll below so the "N watching" count tracks the stream instead of
   // freezing at page-load. Kept when a poll omits the number (snapshot gap).
   const [liveViewers, setLiveViewers] = useState<number | null>(viewerCount);
+  // Each platform's public live state from this poll (the answer's `liveness`, cut again through
+  // the one sanitizer), for usePlatformStates; null until a poll carries one. A degraded answer
+  // without it keeps the last one — usePlatformStates keeps the newest anyway.
+  const [liveness, setLiveness] = useState<PublicSnapshot | null>(null);
   const liveWasOn = useRef(isLive);
   const primaryWasOn = useRef(isLive);
 
@@ -58,7 +66,7 @@ export function useStreamStatusPoll(
 
   useEffect(() => {
     const poll = () =>
-      getJson<{ live?: boolean; community?: CommunityStatus | null; viewers?: number | null;
+      getJson<{ live?: boolean; community?: CommunityStatus | null; communities?: CommunityStatus[]; viewers?: number | null;
                 loopVideos?: LoopVideo[]; ytVideoId?: string | null }>(
         // The census rides the poll that already runs — no new timer, no new
         // request. The server validates both values against a closed vocabulary.
@@ -77,7 +85,11 @@ export function useStreamStatusPoll(
           // payload that almost never changes. (live/viewers are primitives —
           // React bails on those by itself.)
           setCommunity(keepIfEqual(d?.community ?? null));
+          // An older server sends no list: the featured entry is the whole of it.
+          setCommunities(keepIfEqual(Array.isArray(d?.communities) ? d.communities : d?.community ? [d.community] : []));
           setLoopVideos(keepIfEqual(d?.loopVideos ?? []));
+          const lv = livenessOf(d);
+          if (lv) setLiveness(keepIfEqual<PublicSnapshot | null>(lv));
           if (!d?.live) setLiveViewers(null);
           else if (typeof d.viewers === "number") setLiveViewers(d.viewers);
           // Only an EDGE moves the tab (playerSource.edgeTab): a viewer who chose
@@ -120,5 +132,5 @@ export function useStreamStatusPoll(
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one interval for the page's lifetime. offlineTab is fixed by the build (the installed plugin); setTab is a prop the rule cannot see through; listing it would tear down and re-arm the 30s timer on every parent render, so a re-rendering page would never actually reach a poll. The functional updater (see above) is what keeps the []-dep closure from reading a stale tab
   }, []);
 
-  return { live, community, liveViewers, loopVideos, ytVideoId };
+  return { live, community, communities, liveViewers, loopVideos, ytVideoId, liveness };
 }

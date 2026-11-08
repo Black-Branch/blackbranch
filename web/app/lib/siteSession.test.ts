@@ -121,13 +121,17 @@ test("a deleted account authenticates nothing — by its tombstone, and at once 
   const db = fakeDb();
   db.sessions.set(SID, ME);
   db.deleted.add(ME);
-  assert.equal((await sessionFromToken(freshSession(), { sub: ME, sessionId: SID }, db.query, ALLOW)).user.id, undefined);
+  const byTombstone = await sessionFromToken(freshSession(), { sub: ME, sessionId: SID }, db.query, ALLOW);
+  assert.equal(byTombstone.user.id, undefined);
+  assert.equal(byTombstone.authState, "deleted", "a deleted account is told apart from a signed-out cookie (the browser wipes for it)");
 
   const other = "@deltest-marked-s1:site.test";
   db.sessions.set(SID, other);
   db.deleted.clear();
   markAccountDeleted(other);
-  assert.equal((await sessionFromToken(freshSession(), { sub: other, sessionId: SID }, db.query, ALLOW)).user.id, undefined);
+  const byMark = await sessionFromToken(freshSession(), { sub: other, sessionId: SID }, db.query, ALLOW);
+  assert.equal(byMark.user.id, undefined);
+  assert.equal(byMark.authState, "deleted");
 });
 
 test("one indexed query per auth() — the session's primary key, joined to its user", async () => {
@@ -138,7 +142,7 @@ test("one indexed query per auth() — the session's primary key, joined to its 
   assert.match(db.queries[0] ?? "", /WHERE s\.session_id = \$1 AND s\.matrix_id = \$2/);
 });
 
-test("every auth() runs the check: the session callback IS sessionFromToken, and the Matrix token route reports a dead row as revoked", () => {
+test("every auth() runs the check: the session callback IS sessionFromToken, and the Matrix token route reports a dead row as signed out", () => {
   const authSrc = read("auth.ts");
   assert.match(authSrc, /async session\(\{ session, token \}\) \{\s*return sessionFromToken\(session, token\);\s*\}/,
     "the session callback no longer goes through sessionFromToken");
@@ -147,11 +151,17 @@ test("every auth() runs the check: the session callback IS sessionFromToken, and
   assert.match(guard, /if \(!session\?\.user\?\.id\) return authRefusal\(session\) \?\? new Response\("Unauthorized", \{ status: 401 \}\);/);
   const admin = read("app/lib/admin.ts");
   assert.match(admin, /export async function requireMod\(\)[\s\S]*?if \(!session\?\.user\?\.id\) return authRefusal\(session\) \?\? new Response\("Unauthorized", \{ status: 401 \}\);/);
-  // The browser's revoked-session path (wipe crypto stores + sign out — matrix-crypto.md) keys on
-  // the token route's reason "revoked"; a revoked cookie must keep reaching it.
+  // A dead row is a sign-out the browser answers by keeping its crypto store (whatever removed the
+  // row decided about the device); only a deleted account is answered as revoked (wipe).
+  // The token route's getter is the core's (matrixSession.ts wires it; the mapping is executed in
+  // matrixSessionCore.test.ts "getter: …").
   const mx = read("app/lib/matrixSession.ts");
-  assert.match(mx, /if \(session\?\.authState === "revoked"\) throw new RevokedSessionError\(\);/);
+  assert.match(mx, /export const getMatrixSession: \(\) => Promise<MatrixSession \| null> = createSessionGetter<MatrixSession>\(/);
   assert.match(mx, /export async function destroyMatrixSession/, "vacuity: the end of matrixSession.ts was read");
+  const core = read("app/lib/matrixSessionCore.ts");
+  assert.match(core, /if \(session\?\.authState === "deleted"\) \{\s*deps\.log\("[^"]*"\);\s*throw new RevokedSessionError\(\);/);
+  assert.match(core, /if \(session\?\.authState === "revoked"\) throw new SignedOutSessionError\("no_row"\);/);
+  assert.match(core, /export function createSessionGetter<T>/, "vacuity: the core's getter was read");
 });
 
 test("the real schema: the callback's query answers live / revoked / deleted on Postgres", async (t) => {
@@ -180,7 +190,7 @@ test("the real schema: the callback's query answers live / revoked / deleted on 
     assert.equal(await siteSessionState(who, sid, q), "live");
     assert.equal(await siteSessionState("@s1test-other:site.test", sid, q), "revoked");
     await db.query(`UPDATE site.users SET deleted_at = now() WHERE matrix_id = $1`, [who]);
-    assert.equal(await siteSessionState(who, sid, q), "revoked");
+    assert.equal(await siteSessionState(who, sid, q), "deleted");
     await db.query(`UPDATE site.users SET deleted_at = NULL WHERE matrix_id = $1`, [who]);
     // Re-sign-in on the same device, with each callback's own upsert (read from the route): the
     // row survives with a NEW id, so the cookie bound to the old one is revoked.
@@ -188,7 +198,10 @@ test("the real schema: the callback's query answers live / revoked / deleted on 
     for (const cb of ["app/api/auth/mas-callback/route.ts", "app/api/auth/matrix-callback/route.ts"]) {
       const upsert = /`(INSERT INTO site\.user_sessions[\s\S]*?RETURNING session_id)`/.exec(readFileSync(join(webRoot, cb), "utf8"))?.[1];
       assert.ok(upsert, `${cb}: the upsert was not found`);
-      const next = (await db.query(upsert, [who, "S1TESTDEV", null, null, 0])).rows[0].session_id as string;
+      // Each callback's own placeholders: the federated one also writes the session's binding (v168).
+      const count = Math.max(...[...upsert.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+      const params: unknown[] = [who, "S1TESTDEV", null, null, 0, ...Array(Math.max(0, count - 5)).fill(null)];
+      const next = (await db.query(upsert, params)).rows[0].session_id as string;
       assert.notEqual(next, current, `${cb}: the session id survived a re-sign-in`);
       assert.equal(await siteSessionState(who, current, q), "revoked", `${cb}: the pre-re-sign-in cookie is still live`);
       assert.equal(await siteSessionState(who, next, q), "live");

@@ -39,3 +39,28 @@ test("the committed pages are exactly what the setup lists make", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /ok — \d+ pages match the setup lists/);
 });
+
+test("Discord's page is made from its setup list: switched on on the server, never on the Modules page", () => {
+  const files = renderAll();
+  const page = files["discord.md"];
+  assert.ok(page, "no discord.md: the Discord setup list is missing");
+  // How it is turned on: the bundle's own command, not a setup choice or a module switch.
+  assert.match(page, /`sudo blackbranch discord on`/);
+  assert.doesNotMatch(page, /Modules\*\* page|This is a module/);
+  // The provider's side, in the list's own words: its own application, the description OOYE's
+  // author asks for, the privileged intents, the token pasted into the panel.
+  assert.match(page, /\| Description \(somewhere in it\) \| `Powered by OOYE` \|/);
+  for (const intent of ["Presence Intent", "Server Members Intent", "Message Content Intent"]) assert.match(page, new RegExp(intent));
+  assert.match(page, /\[Discord: Developer Portal\]\(https:\/\/discord\.com\/developers\/applications\)/);
+  assert.match(page, /Admin Panel → Site → Discord/);
+  // Nothing to paste carries an address, so the page does not speak of one.
+  assert.doesNotMatch(page, /The addresses below/);
+  assert.match(files["stripe.md"], /The addresses below are for a site at `example\.com`/);
+  const row = files["README.md"].split("\n").find((l) => l.startsWith("| [Discord](discord.md)"));
+  assert.ok(row, "the index does not list Discord");
+  assert.match(row, /\| on the server: `sudo blackbranch discord on` \|/);
+});
+
+test("retry: a second render of every page is the same text (the generator is a function of the lists)", () => {
+  assert.deepEqual(renderAll(), renderAll());
+});

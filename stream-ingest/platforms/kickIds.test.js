@@ -69,7 +69,7 @@ test('keyless live status: kick.com refusing = unknown, said once per episode, w
   let answer = 403;
   global.fetch = async () => (answer === 403 ? { ok: false, status: 403, json: async () => ({}) } : { ok: true, status: 200, json: async () => ({ livestream: { is_live: false } }) });
   try {
-    for (let i = 0; i < 3; i++) assert.deepEqual(await fetchKickState(), { state: 'unknown', viewers: null });
+    for (let i = 0; i < 3; i++) assert.deepEqual(await fetchKickState(), { state: 'unknown', viewers: null, key: '', evidence: 'kick-error' });
     assert.equal(warns.length, 1, warns.join(' | '));
     assert.match(warns[0], /live status unknown: kick\.com refused the lookup \(HTTP 403\) and no Kick app keys are set/);
     answer = 200;

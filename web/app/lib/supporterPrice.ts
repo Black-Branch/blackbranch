@@ -83,7 +83,7 @@ export function createSupporterPrice(deps: Deps = realDeps) {
       const p = await deps.retrieve(id);
       const problem = priceProblem(p);
       if (problem) {
-        warnOnce(`${id}:${problem}`, `[billing] the Supporter price ${id} ${problem} — subscriptions and gifts are not offered until it is fixed (Admin Panel → Stripe)`);
+        warnOnce(`${id}:${problem}`, `[billing] the Supporter price ${id} ${problem} — subscriptions and gifts are not offered until it is fixed (Admin Panel → Payments → Connections, card Stripe)`);
         cached = { id, at: deps.now(), ttl: OK_TTL_MS, value: null };
         return null;
       }

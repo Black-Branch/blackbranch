@@ -44,7 +44,7 @@ test("compose hands the site the reader's sign-in; .env, install.sh and migratio
   assert.match(read(".env.example"), /^MATRIX_READER_TOKEN=$/m);
   assert.match(read("install.sh"), /^MATRIX_READER_TOKEN=$/m);
   assert.match(read("migrations/004-forum-reader.sh"), /envm_add MATRIX_READER_TOKEN ""\n$/);
-  assert.match(read(".env.example"), /^BB_ENV_VERSION=4$/m);
+  assert.match(read(".env.example"), /^BB_ENV_VERSION=7$/m);
 });
 
 test("up makes the reader before the site starts: one account, its sign-in in .env (600), never printed or on a command line", () => {

@@ -31,3 +31,25 @@ baseline — [`baseline/README.md`](baseline/README.md) has the rules and the ch
   database. That is how a migration's lost columns and another's silent failure were found. A
   column diff says WHICH columns differ, not why — anti-join `schema_migrations` before calling
   anything drift.
+
+## Columns waiting to be dropped
+
+Emptied first, dropped in a later migration, so a deploy that still names a column never meets
+one that is gone:
+
+- **`site.users.mx_access_token`, `mx_refresh_token`, `mx_token_expires`, `mx_device_id`** — the
+  June-era Matrix token columns, superseded by `site.user_sessions` (v24) and emptied by v169. The
+  drop migration also deletes `web/scripts/encrypt-tokens.mjs` (it encrypts only these columns) and
+  the nulling of them in `web/app/lib/accountDeletion.ts`.
+
+## Applied migrations whose words outlived their design
+
+An applied migration is never edited, so its header and its `COMMENT ON` text can describe a design
+that changed after it shipped. The current truth for each:
+
+- **v166 `site.community_unbans`.** Its header and table comment say the community reconciler's
+  feed lists the people lifted since the last apply run and lifts their room bans from that list.
+  It does not: the reconciler lifts a room ban when the ban's reason is the site's marker and the
+  person is no longer banned, and the feed carries no `unbanned` list. The table is an audit log of
+  lifted permanent bans (who lifted whom, when), written by `LIFT_BAN_SQL`
+  (`web/app/lib/community/unbans.ts`) and pruned there after 30 days. Nothing reads it to act.

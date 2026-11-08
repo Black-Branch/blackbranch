@@ -74,6 +74,28 @@ export function settleNeverPaid(sub: Stripe.Subscription, paidAmounts: readonly 
   return { ...sub, status: "incomplete" };
 }
 
+/** The subscription's latest invoice id, when Stripe gave one: what settleFinalRetry is asked of,
+ *  for a past_due subscription only. */
+export function latestInvoiceToCheck(sub: Pick<Stripe.Subscription, "status" | "latest_invoice">): string | null {
+  if (sub.status !== "past_due" || !sub.latest_invoice) return null;
+  return typeof sub.latest_invoice === "string" ? sub.latest_invoice : sub.latest_invoice.id ?? null;
+}
+
+/** Stripe's final retry (area-1 round 2, A1-08 / P07; k 2026-10-25). past_due entitles, with grace on
+ *  the period end, and Stripe moves the period end every unpaid cycle — so with the Dashboard's
+ *  last-retry action "leave past_due" a subscriber who stopped paying kept Supporter for ever. Once
+ *  Stripe has given up (the latest invoice is unpaid and has NO next attempt) the subscription reads
+ *  as cancelled: the record ends (the transition function writes it), the legacy row reads
+ *  `canceled`. Paying the invoice later moves Stripe back to active, and so this. */
+export function settleFinalRetry(
+  sub: Stripe.Subscription,
+  latest: { status?: string | null; next_payment_attempt?: number | null } | null,
+): Stripe.Subscription {
+  if (sub.status !== "past_due" || !latest) return sub;
+  if (latest.status === "paid" || latest.next_payment_attempt != null) return sub;
+  return { ...sub, status: "canceled" };
+}
+
 const customerOf = (s: Stripe.Subscription) => (typeof s.customer === "string" ? s.customer : s.customer.id);
 
 /** A subscription Stripe no longer has (`resource_missing` on its retrieve — deleted, or the keys

@@ -24,7 +24,7 @@ export type HomePayload = {
   lastStream: LastStream | null;
   news: HomeNewsItem[] | null;
   vods: Vod[] | null;
-  /** The forums' most active threads, from the forum reader. */
+  /** The forums' threads with the most recent activity, from the forum reader. */
   threads: HomeThread[] | null;
   /** The Leaderboard's top fives, every face × window. */
   boards: HomeBoards | null;

@@ -71,6 +71,41 @@ export function ownDeviceKeyState(
   return serverKey === local.ed25519 ? "match" : "mismatch";
 }
 
+/** The per-device mark "this store's keys were seen on the server", keyed like the store. */
+const KEYS_ON_SERVER = ":keys-on-server";
+type MarkReader = { getItem(k: string): string | null };
+type MarkStore = MarkReader & { setItem(k: string, v: string): void; removeItem(k: string): void };
+
+/** Was this store's device ever seen holding its keys on the server? Unreadable storage = no. */
+export function readKeysOnServer(storage: MarkReader, storePrefix: string): boolean {
+  try { return storage.getItem(storePrefix + KEYS_ON_SERVER) === "1"; } catch { return false; }
+}
+
+/** Record it (the boot check found a match, or the first sync's check did). Never throws: a write
+ *  that fails is written at the next match. */
+export function markKeysOnServer(storage: MarkStore, storePrefix: string): void {
+  try { storage.setItem(storePrefix + KEYS_ON_SERVER, "1"); } catch { /* the next match writes it */ }
+}
+
+/** Forget it with its store (a store and its device id die together, and so does this mark). */
+export function forgetKeysOnServer(storage: MarkStore, storePrefix: string): void {
+  try { storage.removeItem(storePrefix + KEYS_ON_SERVER); } catch { /* nothing to keep */ }
+}
+
+/**
+ * The boot check's verdict. `mismatch`: the store was replaced under a live device id → discard.
+ * `absent` discards only a store that existed before this boot AND whose keys were once seen on the
+ * server (`keysOnServer`): its device was removed upstream while the store was kept, and an
+ * OlmMachine that already shared its keys never uploads them again. Without the mark it is a device
+ * whose first sync never finished (a reload, a backgrounded phone): its next sync uploads the keys,
+ * so it is kept.
+ */
+export function bootKeyVerdict(store: { hadStore: boolean; keysOnServer: boolean }, state: OwnKeyState): "keep" | "discard" {
+  if (state === "mismatch") return "discard";
+  if (state === "absent" && store.hadStore && store.keysOnServer) return "discard";
+  return "keep";
+}
+
 /** Does the server already hold a self-signing-key signature on this device? */
 function hasSelfSignature(
   server: ServerDeviceKeys | null,

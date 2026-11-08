@@ -1,7 +1,7 @@
 // Run: node --test app/lib/chatTime.test.ts
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatChatTime, tsIndentWidth, TS_FORMATS } from "./chatTime.ts";
+import { formatChatTime, communityHeaderParts, tsIndentWidth, TS_FORMATS } from "./chatTime.ts";
 
 const d = new Date(2026, 8, 28, 15, 4, 27);      // local 15:04:27
 const morning = new Date(2026, 8, 28, 9, 5, 7);
@@ -30,6 +30,25 @@ test("community header keeps its day prefix with an explicit format", () => {
   const yest = new Date(2026, 8, 27, 15, 4, 27);
   assert.equal(formatChatTime(yest, "12", "community-header", now), "Yesterday at 3:04 PM");
   assert.equal(formatChatTime(d, "24", "community-hover", now), "15:04");
+});
+
+test("the Community head's stamp splits into a day part and a time part; the full stamp joins them", () => {
+  assert.deepEqual(communityHeaderParts(d, "24", now), { day: "Today at", time: "15:04" });
+  const yest = new Date(2026, 8, 27, 15, 4, 27);
+  assert.deepEqual(communityHeaderParts(yest, "12s", now), { day: "Yesterday at", time: "3:04:27 PM" });
+  for (const f of TS_FORMATS) {
+    const { day, time } = communityHeaderParts(d, f, now);
+    assert.equal(formatChatTime(d, f, "community-header", now), day ? `${day} ${time}` : time, f);
+  }
+  assert.deepEqual(communityHeaderParts(d, "rel", now), { day: "", time: "1m ago" }, "rel has no day part");
+});
+
+test("the Cozy gutter's hover time never carries seconds", () => {
+  assert.equal(formatChatTime(d, "12s", "community-gutter", now), "3:04 PM");
+  assert.equal(formatChatTime(d, "24s", "community-gutter", now), "15:04");
+  assert.equal(formatChatTime(d, "12", "community-gutter", now), "3:04 PM");
+  assert.equal(formatChatTime(d, "standard", "community-gutter", now), formatChatTime(d, "standard", "community-hover", now));
+  assert.equal(formatChatTime(d, "rel", "community-gutter", now), "1m ago");
 });
 
 test("relative", () => {

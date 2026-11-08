@@ -29,10 +29,10 @@ test("ChatInput: the binding is read synchronously at send time; a bound line go
   assert.doesNotMatch(CHAT_INPUT, /bound\.destination/, "the binding no longer carries a destination string");
   // The plain send keeps EXACTLY its unbound expression.
   assert.match(CHAT_INPUT,
-    /const sentTo = encryptArmed \? null : forcedDest;\s*await onSendMessage\(text, capturedReply, sentTo, capturedSpend, encryptArmed\);/,
+    /const sentTo = encryptArmed \? null : forcedDest;\s*await onSendMessage\(text, capturedReply, sentTo, capturedSpend, encryptArmed, clientMsgId\);/,
     "the plain send's destination is `encryptArmed ? null : forcedDest`");
   // The one-shot command send is NOT overridden: a `/t hi` names its own destination and wins.
-  assert.match(CHAT_INPUT, /await onSendMessage\(outcome\.text, null, outcome\.destination, spend, outcome\.encrypted\);/,
+  assert.match(CHAT_INPUT, /await onSendMessage\(outcome\.text, null, outcome\.destination, spend, outcome\.encrypted, clientMsgId\);/,
     "a routing command's send is untouched by the binding");
 });
 
@@ -52,6 +52,12 @@ test("SendToButton: a binding renders even with nowhere else to send, wears the 
   assert.match(SEND_TO, /aria-label=\{`Sending to \$\{label\}\. Click to stop and send to chat again\.`\}/);
   // END anchor: SupportButton is the file's last export and follows the bound branch.
   assert.ok(SEND_TO.indexOf("export function SupportButton") > SEND_TO.indexOf("onClick={binding.release}"));
+});
+
+test("ChatInput: while a DM window holds the box, the field reads \"Message <name>\" (and its screen-reader name with it)", () => {
+  assert.match(CHAT_INPUT, /placeholder=\{binding\?\.kind === "sendTo" \? dmPlaceholder\(binding\.face\.label\) : "Send a message…"\}/);
+  assert.match(CHAT_INPUT, /import \{ dmPlaceholder \} from "@\/app\/lib\/dm\/dmPlaceholder";/);
+  assert.ok(CHAT_INPUT.lastIndexOf("</form>") > CHAT_INPUT.indexOf("dmPlaceholder(binding"), "the read reached the end of the form");
 });
 
 test("ChatInput: the terminal's `say` sends through this box's path — same destination, no reply, no spend, slow mode kept", () => {

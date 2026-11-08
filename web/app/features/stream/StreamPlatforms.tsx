@@ -75,7 +75,7 @@ export function StreamPlatforms({ active }: { active: boolean }) {
                         onToggle={() => void flip(r)}
                       />
                     </>
-                  ) : r.key === "kick" ? <span>No embed on the site</span> : null}
+                  ) : null}
                 </span>
               </div>
               {r.setUp && (

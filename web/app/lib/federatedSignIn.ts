@@ -24,7 +24,7 @@ import { readBodyPrefix, readJsonCapped, ERROR_LOG_MAX_BYTES, MATRIX_JSON_MAX_BY
 import { parseAuthMetadata, type AuthMetadata } from "./matrixAuthMetadata.ts";
 import { sameOrigin } from "./homeserverTrust.ts";
 import { deviceMismatch } from "./signinDevice.ts";
-import { normalizeServerName, FEDERATED_SIGNIN_REFUSED } from "./federatedSignInSwitch.ts";
+import { normalizeServerName, FEDERATED_SIGNIN_REFUSED, OWN_SERVER_SIGN_IN } from "./federatedSignInSwitch.ts";
 
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -47,6 +47,9 @@ export type FedState = {
   /** The Matrix server name the visitor asked to sign in with (initiate checked it against the
    *  sign-in policy). The account the callback authenticates must be on exactly this server. */
   serverName: string;
+  /** The registration endpoint `clientId` came from (site.oauth_clients' key) — that server's
+   *  own, discovered from serverName at initiate. */
+  registrationEndpoint: string;
 };
 
 /** The secret the state cookie is signed with: the site's existing Auth.js secret (no new key to
@@ -98,7 +101,7 @@ export function verifyFedState(raw: string | undefined | null, secret: string, n
     return { ok: false, reason: "invalid" };
   }
   const d = data as Record<string, unknown> | null;
-  const keys = ["state", "codeVerifier", "tokenEndpoint", "homeserver", "clientId", "deviceId", "serverName"] as const;
+  const keys = ["state", "codeVerifier", "tokenEndpoint", "homeserver", "clientId", "deviceId", "serverName", "registrationEndpoint"] as const;
   if (!d || typeof d !== "object" || keys.some((k) => typeof d[k] !== "string" || d[k] === "")) {
     return { ok: false, reason: "invalid" };
   }
@@ -128,6 +131,48 @@ export function initiateEndpointsProblem(e: { authorizationEndpoint: unknown; to
   }
   if (urls.some((u) => u.origin !== urls[0]?.origin)) return "the endpoints are on different origins";
   return null;
+}
+
+// ─── One client per outside server ───────────────────────────────────────────
+
+type ClientQuery = (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }>;
+
+/**
+ * This site's public client at an outside account server: registered (RFC 7591) the first time
+ * anyone signs in there, then reused by every member and every device. Registering on every
+ * sign-in made the account's next sign-in overwrite the client its other devices refresh as —
+ * and the server refused them. Keyed by the registration endpoint the client was made at (the
+ * server initiate actually registered with, so a value the browser sends can only name its own
+ * entry) and the redirect URI. Two first sign-ins racing both end up with the one stored client.
+ */
+export async function federatedClientId(
+  deps: { query: ClientQuery; register: () => Promise<string> },
+  registrationEndpoint: string,
+  redirectUri: string,
+): Promise<string> {
+  const SELECT = `SELECT client_id FROM site.oauth_clients WHERE registration_endpoint = $1 AND redirect_uri = $2`;
+  const stored = (await deps.query(SELECT, [registrationEndpoint, redirectUri])).rows[0] as { client_id?: string } | undefined;
+  if (stored?.client_id) return stored.client_id;
+  const clientId = await deps.register();
+  const ins = await deps.query(
+    `INSERT INTO site.oauth_clients (registration_endpoint, redirect_uri, client_id) VALUES ($1, $2, $3)
+     ON CONFLICT (registration_endpoint, redirect_uri) DO NOTHING RETURNING client_id`,
+    [registrationEndpoint, redirectUri, clientId],
+  );
+  if (ins.rows.length > 0) return clientId;
+  const winner = (await deps.query(SELECT, [registrationEndpoint, redirectUri])).rows[0] as { client_id?: string } | undefined;
+  return winner?.client_id ?? clientId;
+}
+
+/** Drop a stored client the outside server no longer knows, so the next sign-in registers afresh.
+ *  Keyed by the WHOLE registry entry (a hostile server can answer its registration with another
+ *  server's client id string; that must never reach the other server's entry). Sessions already
+ *  signed in keep their own binding (site.user_sessions.oidc_client_id). */
+export async function forgetFederatedClient(query: ClientQuery, entry: { registrationEndpoint: string; redirectUri: string; clientId: string }): Promise<void> {
+  await query(
+    `DELETE FROM site.oauth_clients WHERE registration_endpoint = $1 AND redirect_uri = $2 AND client_id = $3`,
+    [entry.registrationEndpoint, entry.redirectUri, entry.clientId],
+  );
 }
 
 // ─── Discovery ────────────────────────────────────────────────────────────────
@@ -205,6 +250,38 @@ async function resolveHomeserverFor(serverName: string, fetch: Fetcher): Promise
   }
 }
 
+export type ServerDiscovery =
+  | { ok: true; homeserver: string; metadata: AuthMetadata }
+  /** `error` is a discovery code the sign-in page knows (matrix-discover answers the same ones). */
+  | { ok: false; error: string };
+
+/**
+ * A Matrix server's sign-in endpoints, found from its NAME the way the callback vouches for an
+ * account: its `.well-known` homeserver, then that homeserver's issuer. Initiate uses this — never
+ * endpoints a browser sent — so the client it registers, and the registry entry it keys, belong to
+ * the server the visitor named.
+ */
+export async function discoverServer(serverName: string, fetch: Fetcher): Promise<ServerDiscovery> {
+  const hs = await resolveHomeserverFor(serverName, fetch);
+  if (!hs) return { ok: false, error: "well_known_unreachable" };
+  const found = await discoverIssuer(hs.homeserver, hs.wellKnown, fetch);
+  return found.ok ? { ok: true, homeserver: hs.homeserver, metadata: found.metadata } : { ok: false, error: found.error };
+}
+
+/** Is the state's homeserver and token endpoint the ones `serverName` vouches for today? */
+async function vouchedIssuer(serverName: string, st: FedState, fetch: Fetcher): Promise<
+  { ok: true; metadata: AuthMetadata } | { ok: false; error: "homeserver_mismatch" | "issuer_mismatch"; why: string }> {
+  const vouched = await resolveHomeserverFor(serverName, fetch);
+  if (!vouched || !sameOrigin(vouched.homeserver, st.homeserver)) {
+    return { ok: false, error: "homeserver_mismatch", why: `${serverName} resolves to ${vouched?.homeserver ?? "(unresolvable)"}` };
+  }
+  const issuer = await discoverIssuer(vouched.homeserver, vouched.wellKnown, fetch);
+  if (!issuer.ok || !sameOrigin(st.tokenEndpoint, issuer.metadata.issuer)) {
+    return { ok: false, error: "issuer_mismatch", why: issuer.ok ? "different origin" : issuer.error };
+  }
+  return { ok: true, metadata: issuer.metadata };
+}
+
 // ─── The callback ─────────────────────────────────────────────────────────────
 
 export type CallbackTokens = { access_token: string; refresh_token?: string; expires_in?: number };
@@ -217,10 +294,13 @@ export type CallbackOutcome =
       homeserver: string;
       tokenEndpoint: string;
       clientId: string;
+      /** The vouched issuer's revocation endpoint (validated on its origin), or null. */
+      revocationEndpoint: string | null;
       tokens: CallbackTokens;
     }
-  /** `error` is the sign-in page's `?error=` code. */
-  | { ok: false; error: string };
+  /** `error` is the sign-in page's `?error=` code; `forgetClient`, a stored client the server
+   *  answered `invalid_client` for. */
+  | { ok: false; error: string; forgetClient?: { registrationEndpoint: string; clientId: string } };
 
 export type CallbackDeps = {
   /** The SSRF-guarded transport (safeFetch) in production; tests count calls through a stub. */
@@ -232,6 +312,8 @@ export type CallbackDeps = {
   /** The sign-in policy as it is NOW (federatedSignInSwitch.ts federatedServerAllowed) — asked
    *  again here, so a login that started before the policy tightened is refused at the end. */
   serverAllowed: (serverName: string) => boolean;
+  /** This install's own server name? Its accounts sign in with the main button, never here. */
+  isOwnServer: (serverName: string) => boolean;
 };
 
 /**
@@ -253,6 +335,11 @@ export async function completeFederatedCallback(
   if (!checked.ok) return { ok: false, error: checked.reason === "expired" ? "session_expired" : "invalid_state" };
   const st = checked.data;
   if (st.state !== input.state) return { ok: false, error: "state_mismatch" };
+  // Our own server's accounts are never signed in through this flow (federatedSignInSwitch.ts
+  // federatedEntryRefusal says why) — refused before the code is exchanged. The account the
+  // exchange would authenticate must be on st.serverName (server_mismatch below), so this holds
+  // for the authenticated account too.
+  if (deps.isOwnServer(st.serverName)) return { ok: false, error: OWN_SERVER_SIGN_IN };
 
   // Exchange the authorization code (public client — no client_secret). The transport re-validates
   // the endpoint against the SSRF filter and carries the default deadline over the body read.
@@ -273,8 +360,21 @@ export async function completeFederatedCallback(
     return { ok: false, error: "token_exchange_failed" };
   }
   if (!tokenRes.ok) {
-    deps.log.error("[matrix-callback] token exchange failed:", tokenRes.status, await readBodyPrefix(tokenRes, ERROR_LOG_MAX_BYTES));
-    return { ok: false, error: "token_exchange_failed" };
+    const prefix = await readBodyPrefix(tokenRes, ERROR_LOG_MAX_BYTES);
+    deps.log.error("[matrix-callback] token exchange failed:", tokenRes.status, prefix);
+    let code: unknown = null;
+    try { code = (JSON.parse(prefix) as { error?: unknown }).error; } catch { /* not JSON: an ordinary failure */ }
+    if (code !== "invalid_client") return { ok: false, error: "token_exchange_failed" };
+    // The server no longer knows our client. Forget the registry entry it came from — but only
+    // when that token endpoint (and the registration endpoint) are the issuer st.serverName
+    // vouches for today: a server that is not the one named must never make us drop an entry.
+    const issuer = await vouchedIssuer(st.serverName, st, deps.fetch);
+    if (!issuer.ok || !sameOrigin(st.registrationEndpoint, issuer.metadata.issuer)) {
+      deps.log.error("[matrix-callback] REJECTED invalid_client from %s — not the issuer %s vouches for (%s); nothing forgotten",
+        st.tokenEndpoint, st.serverName, issuer.ok ? "registration endpoint off the issuer" : issuer.why);
+      return { ok: false, error: issuer.ok ? "issuer_mismatch" : issuer.error };
+    }
+    return { ok: false, error: "token_exchange_failed", forgetClient: { registrationEndpoint: st.registrationEndpoint, clientId: st.clientId } };
   }
   const tokens = (await readJsonCapped(tokenRes, OAUTH_REPLY_MAX_BYTES).catch(() => null)) as Partial<CallbackTokens> | null;
   if (typeof tokens?.access_token !== "string" || !tokens.access_token) return { ok: false, error: "token_exchange_failed" };
@@ -313,24 +413,17 @@ export async function completeFederatedCallback(
     deps.log.error("[matrix-callback] REFUSED sign-in for %s: sign-in from that server is not enabled", matrixId);
     return { ok: false, error: FEDERATED_SIGNIN_REFUSED };
   }
-  const vouched = await resolveHomeserverFor(serverName, deps.fetch);
-  if (!vouched || !sameOrigin(vouched.homeserver, st.homeserver)) {
-    deps.log.error(
-      "[matrix-callback] REJECTED identity assertion — %s claims to be hosted at %s, but %s resolves to %s",
-      matrixId, st.homeserver, serverName, vouched?.homeserver ?? "(unresolvable)",
-    );
-    return { ok: false, error: "homeserver_mismatch" };
-  }
-
   // The token endpoint is stored and POSTed to on every refresh — so it must belong to the issuer
   // that the VOUCHED homeserver names today, not merely to whatever the browser sent.
-  const issuer = await discoverIssuer(vouched.homeserver, vouched.wellKnown, deps.fetch);
-  if (!issuer.ok || !sameOrigin(st.tokenEndpoint, issuer.metadata.issuer)) {
+  const issuer = await vouchedIssuer(serverName, st, deps.fetch);
+  if (!issuer.ok) {
     deps.log.error(
-      "[matrix-callback] REJECTED token endpoint for %s — not on the issuer %s names (%s)",
-      matrixId, vouched.homeserver, issuer.ok ? "different origin" : issuer.error,
+      issuer.error === "homeserver_mismatch"
+        ? "[matrix-callback] REJECTED identity assertion — %s claims to be hosted at %s, but %s"
+        : "[matrix-callback] REJECTED token endpoint for %s — not on the issuer %s names (%s)",
+      matrixId, st.homeserver, issuer.why,
     );
-    return { ok: false, error: "issuer_mismatch" };
+    return { ok: false, error: issuer.error };
   }
 
   return {
@@ -340,6 +433,7 @@ export async function completeFederatedCallback(
     homeserver: st.homeserver,
     tokenEndpoint: st.tokenEndpoint,
     clientId: st.clientId,
+    revocationEndpoint: issuer.metadata.revocationEndpoint,
     tokens: {
       access_token: tokens.access_token,
       ...(typeof tokens.refresh_token === "string" ? { refresh_token: tokens.refresh_token } : {}),

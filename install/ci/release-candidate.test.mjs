@@ -180,7 +180,7 @@ printf '{"digest":"sha256:%s"}\\n' "$(printf '%s' "$4" | sha256sum | cut -d' ' -
     const table = JSON.parse(readFileSync(out, "utf8"));
     const compose = readFileSync(path.join(root, "install", "compose.yaml"), "utf8");
     const docker = readFileSync(path.join(root, "install", "Dockerfile"), "utf8");
-    assert.equal(Object.keys(table).length, 9, Object.keys(table).join(" "));
+    assert.equal(Object.keys(table).length, 8, Object.keys(table).join(" "));
     for (const [ref, d] of Object.entries(table)) {
       assert.ok(compose.includes(`image: ${ref}`) || docker.includes(ref), `${ref} is not how the repo writes it`);
       assert.equal(d, `sha256:${createHash("sha256").update(ref).digest("hex")}`);

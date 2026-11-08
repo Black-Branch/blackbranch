@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   bindComposer, releaseComposer, currentBinding, subscribeComposerBinding,
-  _resetComposerBindingForTests, type ComposerBinding,
+  _resetComposerBindingForTests, watchBoundText, type ComposerBinding,
 } from "./composerBinding.ts";
 
 test.beforeEach(() => _resetComposerBindingForTests());
@@ -85,4 +85,85 @@ test("subscribers are notified on bind and on release, and unsubscribe stops the
   unsub();
   bindComposer(dm.sendTo("dm:@peer:site.test", "peer"));
   assert.equal(n, 2, "bind + release; nothing after unsubscribe");
+});
+
+// ── A line typed for a DM never reaches Live (Task 2 round 2) ─────────────────────────────────
+// The chat box, modelled the way ChatInput behaves: Enter with an empty box sends nothing; a bound
+// box sends to the binding; otherwise the line goes to Live.
+function chatBox() {
+  const box = { text: "", live: [] as string[] };
+  const stop = watchBoundText(() => box.text, (t) => { box.text = t; });
+  const enter = async () => {
+    const text = box.text;
+    if (!text.trim()) return;
+    box.text = "";
+    const bound = currentBinding();
+    if (bound?.kind === "sendTo") await bound.send(text); else box.live.push(text);
+  };
+  return { box, enter, stop };
+}
+
+/** A DM window that can stop holding the box by itself (their request arrived; someone joined). */
+function dmWindow(id: string) {
+  const w = {
+    holdsBox: true, open: true, kept: undefined as string | undefined, sent: [] as string[],
+    binding(): ComposerBinding {
+      return {
+        kind: "sendTo", windowId: id, face: { label: "casey" },
+        send: async (t) => { w.sent.push(t); },
+        onRelease: () => { if (w.holdsBox) w.open = false; },   // the person's own release closes it
+        keep: (t) => { if (!w.open || w.holdsBox) return false; w.kept = t; return true; },
+        takeKept: () => { const k = w.kept; w.kept = undefined; return k; },
+      };
+    },
+  };
+  return w;
+}
+
+test("a line typed while bound, then the window lets go by itself (each cause): Enter posts NOTHING to Live; the line is in the DM's box", async () => {
+  for (const cause of ["their request arrived on my draft", "someone else joined"]) {
+    _resetComposerBindingForTests();
+    const { box, enter, stop } = chatBox();
+    const w = dmWindow("dm:1");
+    bindComposer(w.binding());
+    box.text = "a private line";
+    w.holdsBox = false;                 // the conversation stopped being bindable (cause)
+    releaseComposer("dm:1");           // DmHost's binding effect lets go
+    assert.equal(w.open, true, cause);
+    assert.equal(box.text, "", `${cause}: the chat box is emptied`);
+    assert.equal(w.kept, "a private line", `${cause}: the line moved to the DM window`);
+    await enter();
+    assert.deepEqual(box.live, [], `${cause}: Enter posts nothing to Live`);
+    // The person answers (Accept / Reply / Start a private conversation): the box holds the DM again
+    // and the kept line comes back into it; Enter sends it into the conversation.
+    w.holdsBox = true;
+    bindComposer(w.binding());
+    assert.equal(box.text, "a private line", `${cause}: the line is back in the box, bound to the DM`);
+    await enter();
+    assert.deepEqual(w.sent, ["a private line"]);
+    assert.deepEqual(box.live, [], cause);
+    stop();
+  }
+});
+
+test("a release the person chose (the window's close, the send-to control) leaves their text where it is", () => {
+  const { box, stop } = chatBox();
+  const w = dmWindow("dm:1");
+  bindComposer(w.binding());
+  box.text = "typed";
+  releaseComposer("dm:1");             // still bindable: the person's own release
+  assert.equal(box.text, "typed");
+  assert.equal(w.kept, undefined);
+  stop();
+});
+
+test("a kept line is never poured over what the person is typing now; it waits in the window", () => {
+  const { box, stop } = chatBox();
+  const w = dmWindow("dm:1");
+  w.kept = "kept line";
+  box.text = "something else";
+  bindComposer(w.binding());
+  assert.equal(box.text, "something else");
+  assert.equal(w.kept, "kept line", "still held by the window");
+  stop();
 });

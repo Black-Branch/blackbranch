@@ -1,7 +1,7 @@
 "use client";
 
 // The Undo for a timeout or ban that was applied at once:
-// "Ban: done. Undo" for six seconds, then gone. One store (app/lib/modUndo.ts) and one toast for
+// "Ban: done. Undo lifts the ban. Removed messages stay removed. Undo" for six seconds, then gone. One store (app/lib/modUndo.ts) and one toast for
 // every host — live chat and the Chat history both mount this, and only the first mounted one
 // draws, so a mod with the panel open beside chat never sees two.
 
@@ -23,7 +23,8 @@ export default function ModUndoToast() {
   }, [me]);
   const mine = useSyncExternalStore((fn) => { ownerSubs.add(fn); return () => { ownerSubs.delete(fn); }; }, () => owner === me, () => false);
   const items = useSyncExternalStore(subscribeUndos, pendingUndos, () => EMPTY);
-  // After a ban, timeout or unban: which platforms it reached, one line per action, with Retry.
+  // After a ban, timeout or unban: which platforms it reached, one line per action, with Retry;
+  // under it, what a ban's purge removed (modPropagation.ts removalLine).
   const lines = useSyncExternalStore(subscribeStatusLines, statusLines, () => EMPTY);
   const [result, setResult] = useState<string | null>(null);
   useEffect(() => {
@@ -49,7 +50,10 @@ export default function ModUndoToast() {
         const retry = !!l.outcomes?.some((o) => o.state === "failed" && o.retryable);
         return (
           <div key={`p${l.id}`} data-propagation="" className="pointer-events-auto flex items-center gap-3 rounded-lg border border-edge bg-surface-2 px-3 py-2 text-sm text-body shadow-lg">
-            <span><span className="text-secondary">{l.label}:</span> {text}</span>
+            <span>
+              <span className="text-secondary">{l.label}:</span> {text}
+              {l.removal && <span className="block text-xs text-muted">{l.removal}</span>}
+            </span>
             {retry && (
               <button type="button" className="rounded-md border border-edge px-2 py-0.5 text-xs font-medium text-strong hover:bg-surface-3"
                 onClick={() => { void retryLine(l.id); }}>

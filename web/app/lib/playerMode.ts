@@ -76,10 +76,10 @@ export function modeDetail(
   }
 }
 
-const LIVE_ORDER: readonly LiveSource[] = ["native", "streamplace", "youtube", "twitch"];
+const LIVE_ORDER: readonly LiveSource[] = ["native", "streamplace", "youtube", "twitch", "kick"];
 
 /**
- * Which modes carry a second level. Live always does (its four sources).
+ * Which modes carry a second level. Live always does (its five sources).
  * Community does only when the featured streamer is on more than one platform
  * — one platform is not a choice, and an empty caret is a lie. This menu is
  * the platform switcher; it does not list live CHANNELS.
@@ -96,7 +96,7 @@ export function modeHasMenu(mode: RailMode, s: { communityPlatforms: number; liv
  *  and each consumer narrows it. */
 export type ModeOption = { key: string; label: string; platform: string | null; checked: boolean };
 
-/** The Live dropdown: the sources that are on (all four unless the Stream tab switched some off),
+/** The Live dropdown: the sources that are on (all five unless the Stream tab switched some off),
  *  plain names, the current one checked. */
 export function liveOptions(current: LiveSource, on: readonly LiveSource[] = LIVE_ORDER): ModeOption[] {
   return LIVE_ORDER.filter((key) => on.includes(key)).map((key) => ({

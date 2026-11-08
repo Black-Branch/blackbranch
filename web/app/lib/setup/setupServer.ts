@@ -12,6 +12,7 @@
 
 import pool from "@/lib/db";
 import { instanceResolve, instanceState, instanceString, instanceBool, reloadInstanceConfig } from "../instanceConfigServer";
+import { encodeSetupChannels, setupChannelsNeedWrite, stepChannelsFrom } from "../community/setupChannels";
 import { writeInstanceValue, clearInstanceValue, requireAdminResponse, requireAdminMutation, runInstanceTest, refindDerivedIds } from "../instanceAdminServer";
 import { idsFoundFrom } from "../derivedIds";
 import type { StreamApiSnapshot } from "../instanceAdminView";
@@ -275,6 +276,7 @@ async function stepData(step: string): Promise<Record<string, unknown>> {
     return { federation: instanceBool("matrix.federation"), registration: joinChoice(instanceString("matrix.registration")),
       hub: instanceString("matrix.rooms.hub"), general: instanceString("matrix.rooms.general"),
       made: communityWords(displayValue("SITE_NAME"), result?.ok ? result.message : null),
+      channels: stepChannelsFrom(instanceResolve("community.setupChannels"), !!instanceString("matrix.rooms.hub")),
       serverName: addresses().serverName, hostRequests: hostRequestsAvailable() };
   }
   if (step === "finish") {
@@ -524,7 +526,7 @@ async function iconsAnswer(askedAt: unknown): Promise<Out> {
 
 // ── step 7: the community ───────────────────────────────────────────────────────────────────
 
-export async function startCommunity(req: Request, body: { federation?: unknown; registration?: unknown }): Promise<Out> {
+export async function startCommunity(req: Request, body: { federation?: unknown; registration?: unknown; channels?: unknown }): Promise<Out> {
   const who = await requireSetupAdmin(req, true);
   if (typeof who !== "string") return who;
   const v = validateCommunityStep(body);
@@ -533,6 +535,9 @@ export async function startCommunity(req: Request, body: { federation?: unknown;
     if (v.federation !== instanceBool("matrix.federation")) await writeSetting("matrix.federation", v.federation);
     // Sign-up stays closed while setup runs whatever this says; Finish's render applies it.
     if (v.registration !== instanceString("matrix.registration")) await writeSetting("matrix.registration", v.registration);
+    // The channels beyond #general and #forum: stored now, made after setup (setupChannels.ts).
+    const stored = encodeSetupChannels(v.channels);
+    if (setupChannelsNeedWrite(instanceResolve("community.setupChannels"), stored)) await writeSetting("community.setupChannels", stored);
   } catch (e) { return fail(502, e instanceof Error ? e.message : "could not save"); }
   const r = await requestHost("matrix-bootstrap");
   if (!r.ok) return fail(503, r.error);

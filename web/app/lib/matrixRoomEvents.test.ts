@@ -29,6 +29,14 @@ import { stripComments } from "./testSource.ts";
 
 const COMMUNITY = join(process.cwd(), "app", "features", "community");
 const PANELS = ["Timeline.tsx", "ThreadPanel.tsx", "ThreadsListPanel.tsx", "ForumView.tsx"];
+// The main timeline's (and the DM window's) refresh lives in the shared room engine since client
+// polish Task 11: its subscription is pinned there, and the timeline pinned to run on it.
+const ENGINE = join(process.cwd(), "app", "lib", "useRoomTimeline.ts");
+const panelSrc = (p: string): string => {
+  if (p !== "Timeline.tsx") return src(join(COMMUNITY, p));
+  assert.match(src(join(COMMUNITY, p)), /useRoomTimeline\(client, room,/, "Timeline runs on the shared room engine");
+  return src(ENGINE);
+};
 
 function src(path: string): string {
   return stripComments(readFileSync(path, "utf8"));
@@ -46,7 +54,7 @@ test("the shared helper filters Decrypted by room id", () => {
 
 for (const p of PANELS) {
   test(`${p} subscribes through the helper, not a hand-rolled listener`, () => {
-    const s = src(join(COMMUNITY, p));
+    const s = panelSrc(p);
     assert.match(s, /subscribeRoomRefresh\(room, client, refresh/,
       "this panel no longer goes through the shared subscription");
     assert.doesNotMatch(s, /MatrixEventEvent\.Decrypted/,
@@ -58,7 +66,7 @@ test("Timeline and ForumView keep the Members listener; the thread panels do not
   // ForumView renders sender display names, so membership changes must repaint
   // it. The thread panels don't, and subscribing would be pure overhead.
   for (const p of ["Timeline.tsx", "ForumView.tsx"]) {
-    assert.match(src(join(COMMUNITY, p)), /\{ members: true \}/, `${p} lost its Members subscription`);
+    assert.match(panelSrc(p), /\{ members: true \}/, `${p} lost its Members subscription`);
   }
   for (const p of ["ThreadPanel.tsx", "ThreadsListPanel.tsx"]) {
     assert.doesNotMatch(src(join(COMMUNITY, p)), /\{ members: true \}/,
@@ -110,6 +118,26 @@ test("ThreadPanel's onVote is stable across renders", () => {
     "onVote is an inline arrow again — it defeats the memo for every forum row");
   assert.match(s, /const onVote = isForum \? voteCb : undefined/,
     "the isForum gate no longer selects the memoized callback");
+});
+
+test("our own echo moving sending → sent / not sent / cancelled refreshes the panel (one subscription for every panel)", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { RoomEvent } = await import("matrix-js-sdk");
+  const { subscribeRoomRefresh } = await import("./matrixRoomEvents.ts");
+  const room = Object.assign(new EventEmitter(), { roomId: "!r" });
+  let n = 0;
+  const off = subscribeRoomRefresh(room as never, null, () => { n += 1; });
+  room.emit(RoomEvent.LocalEchoUpdated);
+  off();
+  room.emit(RoomEvent.LocalEchoUpdated);
+  assert.equal(n, 1);
+  // Timeline (and its room engine) keep no listener of their own beside the helper.
+  assert.doesNotMatch(src(join(COMMUNITY, "Timeline.tsx")), /RoomEvent\.LocalEchoUpdated/);
+  assert.doesNotMatch(src(ENGINE), /RoomEvent\.LocalEchoUpdated/);
+  assert.match(src(join(COMMUNITY, "Timeline.tsx")), /useRoomTimeline\(client, room,/);
+  assert.match(src(ENGINE), /subscribeRoomRefresh\(room, client, refresh, \{ members: true \}\)/);
+  assert.match(src(join(COMMUNITY, "Timeline.tsx")), /\}\s*$/, "vacuity anchor: the read reached the end of the file");
+  assert.match(src(ENGINE), /\}\s*$/, "vacuity anchor: the engine was read to its end");
 });
 
 test("rowPropsEqual still compares onEdit — the guard above is only load-bearing if it does", () => {

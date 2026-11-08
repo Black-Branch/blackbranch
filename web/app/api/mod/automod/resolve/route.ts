@@ -1,5 +1,7 @@
 import pool from "@/lib/db";
-import { requireMod } from "@/app/lib/admin";
+import { requireMod, assertCanModerate } from "@/app/lib/admin";
+import { heldLineSubject } from "@/app/lib/modTargets";
+import { bannedNow } from "@/app/lib/platformRetry";
 import { getBroadcasterToken } from "@/app/lib/platformMod/shared";
 import { twitchClientId } from "@/app/lib/twitch";
 import { streamApiFetch } from "@/app/lib/streamApi";
@@ -7,6 +9,8 @@ import { deleteSiteMessageEverywhere } from "@/app/lib/siteMessageDelete";
 import { NextRequest } from "next/server";
 import { sameOriginRequest } from "@/app/lib/instanceAdminView";
 import { isNativePlatform } from "@/app/lib/nativePlatform";
+import { appendModLog } from "@/app/lib/modlog";
+import { heldReleasedEntry } from "@/app/lib/modlogActions";
 
 const SCOPE_AUTOMOD = "moderator:manage:automod";
 
@@ -54,8 +58,27 @@ export async function POST(req: NextRequest) {
   if (!row) return new Response("Not Found", { status: 404 });
   const msgId = row.twitch_msg_id;
 
+  // The privilege ceiling, as a CASE about the line's sender: the word filter and the link gate hold
+  // mods' and admins' own lines too, so a mod never resolves their own held line, another mod's or
+  // the owner's (modCeiling.ts — an admin may). A row that names nobody resolvable (a Twitch chatter
+  // who never chatted here) is anyone's to resolve. A failed read refuses (503), never "nobody".
+  let subject: string | null;
+  try {
+    subject = await heldLineSubject(rowId, (sql, params) => pool.query(sql, params));
+  } catch {
+    return new Response("Moderation check unavailable — try again shortly", { status: 503, headers: { "Retry-After": "5" } });
+  }
+  if (subject) {
+    const denied = await assertCanModerate(mod, subject, { selfCase: true });
+    if (denied) return denied;
+  }
+
   // Our own rows: no external call, just close the row out.
   if (row.source !== "twitch" || !msgId) {
+    // Already resolved (another mod, a merge that closed a banned sender's lines, an expiry): refused
+    // in words — the same statuses the closing UPDATE below acts on, nothing else.
+    const actionable = row.status === "pending" || row.status === "blocked" || (row.status === "flagged" && row.source === "ai");
+    if (!actionable) return Response.json({ error: "already_resolved", status: row.status }, { status: 409 });
     // An age hold is the ONE source where Allow has to actually publish.
     //
     // Blocklist rows were never meant to be delivered, and Twitch rows live on
@@ -116,6 +139,25 @@ export async function POST(req: NextRequest) {
       // Whatever a real send passes, this must pass. `app/api/chat/send/route.ts`
       // reads the same three columns in one query and is the thing to
       // diff against if a fourth is ever added there.
+      // A sender banned since the hold is never posted: the line is dropped (the row closes as
+      // denied) and the mod is told why. A native sender is checked here, against site.bans; a
+      // platform sender by stream-api's ban hold, which answers 409 for a release.
+      if (isNative) {
+        const banned = await pool.query(
+          `SELECT 1 FROM site.bans WHERE matrix_id = $1 AND (expires_at IS NULL OR expires_at > now()) LIMIT 1`, [row.matrix_id])
+          .then((r) => r.rows.length > 0, () => null);
+        if (banned === null) return Response.json({ error: "release_failed" }, { status: 502 });
+        if (banned) return dropHeld(rowId, mod, "sender_banned");
+      }
+      // A platform sender's ban lives on their canonical (its own mod_log rows) or on a linked
+      // account (site.bans), and stream-api's ban hold bridges a canonical's ban for 15 minutes
+      // only: an Allow pressed later must ask here (platformRetry.ts bannedNow, the one rule in
+      // config/canonical-standing.mjs) — a standing ban, or a running timeout, drops it.
+      if (!isNative && row.user_id && /^[0-9a-f]{12}$/.test(row.user_id)) {
+        const banned = await bannedNow(row.user_id, (sql, params) => pool.query(sql, params)).catch(() => null);
+        if (banned === null) return Response.json({ error: "release_failed" }, { status: 502 });
+        if (banned) return dropHeld(rowId, mod, "sender_banned");
+      }
       const sender = isNative
         ? await pool
             .query<{
@@ -146,17 +188,26 @@ export async function POST(req: NextRequest) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               platform: row.platform ?? "unknown",
-              userId: "",            // canonical is passed via username resolution
+              userId: "",
+              // The held row's own sender (stream-api blocklist-review.js records it): the line is
+              // posted as them, and stream-api refuses it when they are banned by now.
+              ...(row.user_id ? { canonicalId: row.user_id } : {}),
               username: row.user_name ?? "unknown",
               message: row.text,
               releaseHold: true,
             }),
           }).catch(() => null);
 
+      if (released?.status === 409) {
+        const why = await released.json().then((b: { error?: unknown }) => b?.error, () => null);
+        if (why === "sender_banned" || why === "sender_gone") return dropHeld(rowId, mod, why);
+      }
       if (!released?.ok) {
         console.error("[automod/resolve] release failed for row", rowId);
         return Response.json({ error: "release_failed" }, { status: 502 });
       }
+      // Posted: the line is in chat now, so the release is logged whatever the closing UPDATE finds.
+      await appendModLog(heldReleasedEntry({ mod, sender: senderOf(subject, row), source: row.source, rowId }));
     }
 
     // A flagged automod row (a platform message, already public) is DISMISSED either way:
@@ -252,6 +303,9 @@ export async function POST(req: NextRequest) {
     await deleteSiteMessageEverywhere(mod, Number(row.site_msg_id));
   }
 
+  // Twitch accepted OUR Allow: the line is public there now.
+  if (action === "allow") await appendModLog(heldReleasedEntry({ mod, sender: senderOf(subject, row), source: row.source, rowId }));
+
   // Record the real resolver (the update event that follows only moves rows
   // still 'pending', so this write wins).
   await pool.query(
@@ -261,4 +315,18 @@ export async function POST(req: NextRequest) {
   ).catch(() => {});
 
   return Response.json({ ok: true, ...(denyOrigin ? { originDeleted: true } : {}) });
+}
+
+/** Who a released line is logged against: the ceiling's subject, else the row's own sender id. */
+function senderOf(subject: string | null, row: { matrix_id: string | null; user_id: string | null; user_name: string | null }): string {
+  return subject ?? row.matrix_id ?? row.user_id ?? row.user_name ?? "unknown";
+}
+
+/** A held line that can no longer be posted — its sender is banned now, or their chat identity is
+ *  gone: the row closes as denied by this mod, and the answer says why (409). */
+async function dropHeld(rowId: number, mod: string, why: "sender_banned" | "sender_gone"): Promise<Response> {
+  await pool.query(
+    `UPDATE site.automod_held SET status = 'denied', resolved_by = $2, resolved_at = now() WHERE id = $1 AND status = 'pending'`,
+    [rowId, mod]);
+  return Response.json({ error: why }, { status: 409 });
 }

@@ -7,7 +7,11 @@ import { CreditBadge } from "./UserCard";
 import { formatCoinsShort, earnedParenthetical } from "@/app/lib/coins";
 import { currencyTitle } from "@/app/lib/currency";
 import { useEarnedBalance, useCoinBalance } from "@/app/lib/useCoinBalance";
-import { avatarBg, usernameColor } from "@/app/lib/avatarColor";
+import { usernameColor } from "@/app/lib/avatarColor";
+import { useImgFallback } from "@/app/lib/useImgFallback";
+import { LetterCircle } from "./Avatar";
+import { avatarStyle } from "@/app/lib/avatarSize";
+
 import { formatMxid } from "@/app/lib/matrixDisplay";
 import { useEncryptionStatus } from "@/app/lib/useEncryptionStatus";
 import { signOutEverything } from "@/app/lib/signOutEverything";
@@ -25,6 +29,9 @@ import { Brain, PaintBrushBroad, ShieldStar, SignOut, Crown, Plugs, PlugsConnect
 import { dispatchClaimable } from "@/app/lib/claimableEvent";
 import { settingsFoldLabel } from "@/app/lib/profileCardFold";
 import { profileDescriptor, profileRead } from "@/app/lib/plugins/profile";
+
+// The card's picture on its banner: the avatar scale's xl step.
+const CARD_PIC = avatarStyle("xl");
 
 // The own-view profile card — the ROOT page of the account card. The card is
 // the identity surface and every account function is a row on it: banner +
@@ -92,10 +99,9 @@ export default function ProfileCardBody({
   // from one state. Seeded from the warm cache during the FIRST render (not in
   // an effect) so a warm card paints populated with no intermediate empty pass.
   const [data, setData] = useState<ProfileCardData | null>(() => readProfileCard(matrixId));
-  // Which avatar version 404'd, rather than a boolean an effect has to reset:
-  // a new version is a new URL, so it is worth another try automatically.
-  const [failedAvatarVer, setFailedAvatarVer] = useState<number | null>(null);
-  const avatarOk = failedAvatarVer !== avatarVer;
+  // A failure belongs to one avatar version, rather than a boolean an effect has
+  // to reset: a new version is a new URL, so it is worth another try automatically.
+  const { ok: avatarOk, ref: avatarRef, onError: onAvatarError } = useImgFallback(avatarVer);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [rowsOpen, setRowsOpen] = useState(false);
 
@@ -149,16 +155,12 @@ export default function ProfileCardBody({
             <img
               src={`/api/avatar/me?v=${avatarVer}`}
               alt={displayName}
-              onError={() => setFailedAvatarVer(avatarVer)}
-              className="w-16 h-16 rounded-full object-cover"
+              ref={avatarRef}
+              onError={onAvatarError}
+              className="avatar" style={CARD_PIC}
             />
           ) : (
-            <span
-              className="w-16 h-16 rounded-full flex items-center justify-center text-xl font-bold text-strong"
-              style={{ backgroundColor: avatarBg(displayName) }}
-            >
-              {displayName.charAt(0).toUpperCase()}
-            </span>
+            <LetterCircle name={displayName} className="avatar text-xl font-bold text-strong" style={CARD_PIC} />
           )
         }
       />

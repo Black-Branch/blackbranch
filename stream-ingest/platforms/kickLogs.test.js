@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 process.env.STREAM_API_URL = 'http://stream-api.site.test';
 process.env.KICK_CHANNEL_SLUG = 'testchannel';
 
-const { handleKickMonetization } = await import('./kick.js');
+const { handleKickMonetization, handleKickModeration } = await import('./kick.js');
 const { payloadShape } = await import('../lib/logShape.js');
 
 const NAMES = ['casey', 'Gadget', 'robin_t', 'Sprocket'];
@@ -86,4 +86,91 @@ test('payloadShape: keys and id, never a value, for every input shape', () => {
   // An id is printed only when it is an id-shaped scalar: an object or an over-long string is not.
   assert.equal(payloadShape({ id: { username: 'casey' } }), 'id=? keys=[id]');
   assert.equal(payloadShape({ id: 'x'.repeat(200) }), 'id=? keys=[id]');
+});
+
+// ── Kick moderation events: one journal line each, ids only (the #185 lag read) ──────────────
+// The read times a site ban (site.platform_mod_actions.created_at) against Kick's own event. A
+// site ban's echo flags nothing at stream-api (its rows are already deleted), so this receipt
+// line is the only record that Kick sent it.
+
+const AT = new Date('2026-11-04T08:34:38.912Z');
+// The receipt line itself (not the unparsed-shape line, not the mirror-failure line).
+const modLines = (lines) => lines.filter((l) => /^\[kick\] moderation (UserBannedEvent|MessageDeletedEvent) /.test(l));
+
+test('a Kick ban logs the banned user id, Kick\'s time, our receipt time and the keys — no name', async () => {
+  const ban = { id: 'evt-9', user: { id: 131902950, username: 'casey', slug: 'casey' }, banned_by: { id: 7, username: 'Gadget', slug: 'gadget' }, permanent: true, created_at: '2026-11-04T08:34:37.500Z' };
+  const { lines, posted } = await capture(() => handleKickModeration('App\\Events\\UserBannedEvent', JSON.stringify(ban), AT));
+  assertNoName(lines);
+  assert.deepEqual(modLines(lines), [
+    '[kick] moderation UserBannedEvent user=131902950 kickAt=2026-11-04T08:34:37.500Z receivedAt=2026-11-04T08:34:38.912Z id=evt-9 keys=[id,user,banned_by,permanent,created_at]',
+  ]);
+  // The mirror still gets the username: it is stream-api's fallback match, not a journal value.
+  assert.equal(posted.length, 1);
+  assert.match(posted[0].url, /\/chat\/platform-delete$/);
+  assert.deepEqual(JSON.parse(posted[0].body), { platform: 'kick', platformUserId: '131902950', username: 'casey' });
+});
+
+test('a Kick delete logs the message uuid only — never the deleted text', async () => {
+  const del = { id: 'evt-10', message: { id: '0f6c1a2e-5b1d-4c3e-9a77-1f2e3d4c5b6a', content: 'Gadget says hi' } };
+  const { lines, posted } = await capture(() => handleKickModeration('App\\Events\\MessageDeletedEvent', JSON.stringify(del), AT));
+  assertNoName(lines);
+  assert.ok(!lines.some((l) => l.includes('says hi')), lines.join('\n'));
+  assert.deepEqual(modLines(lines), [
+    '[kick] moderation MessageDeletedEvent msg=0f6c1a2e-5b1d-4c3e-9a77-1f2e3d4c5b6a kickAt=none receivedAt=2026-11-04T08:34:38.912Z id=evt-10 keys=[id,message]',
+  ]);
+  assert.deepEqual(JSON.parse(posted[0].body), { platform: 'kick', platformMsgId: '0f6c1a2e-5b1d-4c3e-9a77-1f2e3d4c5b6a' });
+});
+
+test('a Kick ban with no user id prints user=?, never the username the mirror falls back to', async () => {
+  const { lines, posted } = await capture(() => handleKickModeration('App\\Events\\UserBannedEvent', JSON.stringify({ user: { slug: 'robin_t' } }), AT));
+  assertNoName(lines);
+  assert.match(modLines(lines)[0], /^\[kick\] moderation UserBannedEvent user=\? kickAt=none receivedAt=\S+ id=\? keys=\[user\]$/);
+  assert.equal(posted.length, 1, 'the mirror still runs on the username');
+});
+
+test('Kick\'s own time: epoch seconds and milliseconds read alike; anything else is "none", never echoed', async () => {
+  const at = async (v) => {
+    const { lines } = await capture(() => handleKickModeration('App\\Events\\UserBannedEvent', JSON.stringify({ user: { id: 1 }, created_at: v }), AT));
+    return modLines(lines)[0].match(/kickAt=(\S+)/)[1];
+  };
+  assert.equal(await at(1762245277), '2025-11-04T08:34:37.000Z');
+  assert.equal(await at(1762245277500), '2025-11-04T08:34:37.500Z');
+  assert.equal(await at('Gadget'), 'none');
+  assert.equal(await at({ username: 'casey' }), 'none');
+});
+
+test('an id that is not id-shaped prints as ?, so a drifted field can never carry text', async () => {
+  const { lines } = await capture(() => handleKickModeration('App\\Events\\MessageDeletedEvent', JSON.stringify({ message: { id: 'Gadget says hi to everyone in chat' } }), AT));
+  assertNoName(lines);
+  assert.match(modLines(lines)[0], /^\[kick\] moderation MessageDeletedEvent msg=\? /);
+});
+
+test('an unparsable Kick moderation frame is described by its shape and asks no mirror', async () => {
+  const { lines, posted } = await capture(() => handleKickModeration('App\\Events\\UserBannedEvent', 'casey{not json', AT));
+  assertNoName(lines);
+  assert.ok(lines.some((l) => /^\[kick\] moderation event App\\Events\\UserBannedEvent unparsed \(shape drift\?\): unparsed, 14 bytes$/.test(l)), lines.join('\n'));
+  assert.equal(modLines(lines).length, 0, 'an unparsed frame is not a receipt line');
+  assert.equal(posted.length, 0);
+});
+
+test('retry: a mirror that fails still leaves the receipt line, and Kick sending the event again logs it again', async () => {
+  const realFetch = global.fetch;
+  const lines = [];
+  const orig = { log: console.log, warn: console.warn };
+  console.log = (...a) => lines.push(a.map(String).join(' '));
+  console.warn = (...a) => lines.push(a.map(String).join(' '));
+  let calls = 0;
+  global.fetch = async () => { calls += 1; return new Response('down', { status: 502 }); };
+  const ban = JSON.stringify({ id: 'evt-11', user: { id: 42, username: 'casey' } });
+  try {
+    assert.equal(await handleKickModeration('App\\Events\\UserBannedEvent', ban, AT), false);
+    assert.equal(await handleKickModeration('App\\Events\\UserBannedEvent', ban, AT), false);
+  } finally {
+    Object.assign(console, orig);
+    global.fetch = realFetch;
+  }
+  assertNoName(lines);
+  assert.equal(calls, 2, 'each event asks the mirror once');
+  assert.equal(modLines(lines).filter((l) => l.startsWith('[kick] moderation UserBannedEvent user=42 kickAt=none')).length, 2, lines.join('\n'));
+  assert.equal(lines.filter((l) => /^\[kick\] moderation mirror failed event=App\\Events\\UserBannedEvent id=42 .*-> 502/.test(l)).length, 2, lines.join('\n'));
 });

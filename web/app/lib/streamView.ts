@@ -15,6 +15,8 @@ export type LoopVideo = { video_id: string; title: string | null };
 // it is the property the tests rely on, not a workaround for one old import.)
 
 export type CommunityStatus = {
+  /** The entry's identity (its YouTube channel id, else `tw:<login>`): the viewer's pick and a send's `community`. */
+  key: string;
   display_name: string;
   youtube_channel_id: string | null;
   video_id: string | null;
@@ -23,7 +25,23 @@ export type CommunityStatus = {
   /** The entry's Twitch login — the channel to visit when it has no YouTube one. */
   twitch_login?: string | null;
   sources?: CommunitySource[];
+  /** The install's own scheduled stream (its countdown plays); null for a live entry. */
+  scheduled?: { startsAt: number | null } | null;
 };
+
+/** The community entry a viewer watches: the one they chose while it is still listed, else the
+ *  featured one (a pick that leaves the list falls back, and returns with it). The server resolves a
+ *  send's `community` through this too, against its own list — never trusting it as a channel. */
+export function communityTarget<C extends { key: string }>(
+  status: { community: C | null; communities?: readonly C[] },
+  chosenKey: string | null | undefined,
+): C | null {
+  if (chosenKey) {
+    const hit = status.communities?.find((c) => c.key === chosenKey);
+    if (hit) return hit;
+  }
+  return status.community;
+}
 
 export const PLATFORM_LABELS: Record<Platform, string> = {
   sp: "Streamplace",

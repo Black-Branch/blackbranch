@@ -66,6 +66,24 @@ test("a failed stage renders its reason and a Try again control that calls onRet
   } finally { n.unmount(); }
 });
 
+test("a slow stage says how long it has run, still loading: one sequence, no error, no retry", async () => {
+  _resetReadinessForTests();
+  const r = registerReadiness("matrix", MATRIX);
+  r.advance("sdk", "done"); r.advance("crypto", "active"); r.note("crypto", "Still connecting… 12 s");
+  let retried = 0;
+  const m = mount({ keys: ["matrix"], label: "Joining the community", onRetry: () => { retried++; } });
+  try {
+    assert.equal(m.el.dataset.phase, "loading", "a slow stage is not a failed one");
+    assert.equal(m.el.querySelector('.chrome-boot-stage[data-status="active"] .chrome-boot-detail')?.textContent, "Still connecting… 12 s");
+    assert.equal(m.el.querySelector(".chrome-boot-retry"), null, "nothing to retry while a stage is running");
+    assert.equal(m.el.ownerDocument.querySelectorAll(".chrome-boot").length, 1, "never two loaders at once");
+    assert.equal(m.el.querySelector(".sr-only")?.textContent, "Joining the community: Preparing encryption", "the seconds are visual only: a live region ticking every second would talk over everything");
+    await act(async () => { r.advance("crypto", "done"); });
+    assert.equal(m.el.querySelector(".chrome-boot-detail"), null, "the note goes with the stage");
+    assert.equal(retried, 0);
+  } finally { m.unmount(); }
+});
+
 test("compact drops the eyebrow and marks the root, for inline hosts like a settings section", () => {
   _resetReadinessForTests();
   registerReadiness("matrix", MATRIX);

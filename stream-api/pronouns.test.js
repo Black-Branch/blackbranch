@@ -98,7 +98,7 @@ test('the precedence lives in the UPDATE: an alejo write needs NULL or alejo as 
   const { sql, params } = pool.queries[0];
   assert.match(sql, /UPDATE stream\.users SET pronouns = \$1::text, pronouns_source = \$3::text/);
   // A value with NO source is a person's (older rows carry none), so alejo may only fill a row that is empty AND unowned.
-  assert.match(sql, /WHERE id = \$2 AND \(\$3::text <> 'alejo' OR pronouns_source = 'alejo' OR \(pronouns IS NULL AND pronouns_source IS NULL\)\)/);
+  assert.match(sql, /WHERE id IN \(SELECT id FROM person\)\s+AND \(\$3::text <> 'alejo' OR pronouns_source = 'alejo' OR \(pronouns IS NULL AND pronouns_source IS NULL\)\)/);
   assert.deepEqual(params, ['she/her', 'abc', 'alejo']);
 });
 

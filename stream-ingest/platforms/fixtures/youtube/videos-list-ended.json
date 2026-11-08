@@ -1,0 +1,1 @@
+{"kind":"youtube#videoListResponse","etag":"etag-ended","items":[{"kind":"youtube#video","etag":"etag-item","id":"abcdefghijk","snippet":{"liveBroadcastContent":"none"},"liveStreamingDetails":{"actualStartTime":"2026-10-24T20:01:12Z","actualEndTime":"2026-10-24T23:58:40Z","scheduledStartTime":"2026-10-24T20:00:00Z"}}],"pageInfo":{"totalResults":1,"resultsPerPage":1}}

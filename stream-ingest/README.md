@@ -80,6 +80,19 @@ close. That is deliberate (it fails toward keeping viewers watching), and it is 
 `stream-api`'s `liveState()` independently requires a `viewer_snapshots` row newer than 10 minutes —
 so the *site* still reads offline even if the session row lingers.
 
+**A drop is not a new night.** When the poller has closed a session and a platform comes back live on
+the **same broadcast** (its key: Twitch's stream id, Kick's start time, YouTube's video id,
+stream.place's record) within `RESUME_GRACE_MS` (5 min, `config/platform-liveness.mjs`), it reopens
+that session — `POST /stream/start { streamId, resume: true }` — instead of minting a new id. While
+that window is open the poller keeps its 60 s live cadence (Twitch and YouTube have no push hint;
+the idle 180 s would see a return only at end + 3 and + 6 min), its last read 5 s before the window
+closes. A resume skips the stream-start hook: nothing touched the credit pool during the gap, and
+under the same id a rebuild would make the same pool. stream-api gives a resumed session a start's
+heartbeat grace, so it is not closed again before the first new viewer count. A mod's forced end
+never resumes, a restart forgets the last end, and a 409 (outside the window) falls back to a new
+id. A second `/stream/end` for a closed session answers `{ ok: true, already: true }` and changes
+nothing.
+
 stream.place has **no liveness vote** — viewer count only.
 
 ### Poll cadence

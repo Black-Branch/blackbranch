@@ -168,7 +168,7 @@ test('relay: descriptor + token, connect carries the token, ping/pong, a chat pu
     assert.equal(got.length, 1);
     assert.deepEqual(got[0], {
       platform: 'kick', userId: '77', username: 'casey', message: 'hello Gadget',
-      isMod: true, isVip: false, isMember: false, tier: '',
+      isMod: true, isBroadcaster: false, isVip: false, isMember: false, tier: '',
       emotes: { Gadget: 'https://files.kick.com/emotes/123/fullsize' },
       replyToUsername: undefined, replyToText: undefined, platformMsgId: 'msg-1', usernameColor: '#00ff00',
     });
@@ -373,4 +373,303 @@ test('stop() during the backoff after a failed descriptor ends the retries', asy
     http.restore();
     await server.close();
   }
+});
+
+// Kick's own on-air / off-air events on the channel subscription (ADR 0134 E7/E11): each notes a
+// push hint that wakes the poller for an immediate read (lib/liveHints.js). Home only, like
+// moderation; they are not part of the monetization discovery net, so they no longer log as unbound.
+const channelPush = (event, data, channel = `channel.${CHANNEL_ID}`) => JSON.stringify({
+  push: { channel, pub: { data: { event, data: JSON.stringify(data) }, tags: { event } } },
+});
+
+test('home: StopStreamBroadcast and StreamerIsLive on the channel note push hints, with a line each', async () => {
+  const { lastHint } = await import('../lib/liveHints.js');
+  const server = await fakeCentrifugo((conn) => scriptHandshake(conn));
+  const http = stubKickHttp(server.url);
+  const out = captureConsole();
+  process.env.KICK_CHATROOM_ID = CHATROOM_ID;
+  process.env.KICK_CHANNEL_ID = CHANNEL_ID;
+  let h;
+  try {
+    h = await startKick();
+    const conn = await waitFor(() => server.conns[0], 'connection');
+    await waitFor(() => conn.cmds.filter((c) => c.subscribe).length === 2, 'the channel subscribe');
+
+    const before = Date.now();
+    // The raw frame Kick sends (its payload holds the livestream; only the event name is read).
+    conn.sock.send(channelPush('App\\Events\\StopStreamBroadcast', { livestream: { id: 1, channel: { id: Number(CHANNEL_ID), is_banned: false } } }));
+    await waitFor(() => lastHint('kick')?.kind === 'stop' && lastHint('kick').at >= before, 'the stop hint');
+    assert.ok(out.has(/^\[kick\] StopStreamBroadcast — checking now$/, 'log'));
+
+    conn.sock.send(channelPush('App\\Events\\StreamerIsLive', { livestream: { id: 2, session_title: 'a title' } }));
+    await waitFor(() => lastHint('kick')?.kind === 'live', 'the live hint');
+    assert.ok(out.has(/^\[kick\] StreamerIsLive — checking now$/, 'log'));
+    assert.ok(!out.has(/unbound event App\\Events\\(StopStreamBroadcast|StreamerIsLive)/), 'no longer in the discovery net');
+  } finally {
+    h?.stop();
+    delete process.env.KICK_CHATROOM_ID;
+    delete process.env.KICK_CHANNEL_ID;
+    out.restore();
+    http.restore();
+    await server.close();
+  }
+});
+
+test('relay: a stream event on a relay\'s socket notes no hint (another channel\'s stream is not ours)', async () => {
+  const { lastHint, noteHint } = await import('../lib/liveHints.js');
+  noteHint('kick', 'live', 1_000);
+  const server = await fakeCentrifugo((conn) => scriptHandshake(conn));
+  const http = stubKickHttp(server.url);
+  const out = captureConsole();
+  const got = [];
+  let h;
+  try {
+    h = await startKick({ slug: 'someone', onMessage: (m) => got.push(m) });
+    const conn = await waitFor(() => server.conns[0], 'connection');
+    await waitFor(() => conn.cmds.some((c) => c.subscribe), 'subscribed');
+    // The stop event, then a chat line in the same message: once the chat line reaches the sink,
+    // the event before it has been handled.
+    conn.sock.send([
+      channelPush('App\\Events\\StopStreamBroadcast', { livestream: { id: 3 } }, `chatrooms.${CHATROOM_ID}.v2`),
+      chatPush({ id: 'msg-9', content: 'bye', sender: { id: 78, username: 'robin', identity: { badges: [] } } }),
+    ].join('\n'));
+    await waitFor(() => got.length === 1, 'the chat line after the event');
+    assert.deepEqual(lastHint('kick'), { kind: 'live', at: 1_000 }, 'unchanged');
+    assert.ok(!out.has(/StopStreamBroadcast — checking now/));
+  } finally {
+    h?.stop();
+    out.restore();
+    http.restore();
+    await server.close();
+  }
+});
+
+// ── Kick moderation events over the real socket (the #185 lag read) ─────────────────────────
+// A ban/delete on chatrooms.{id}.v2 writes ONE receipt line (ids and times only) and asks the
+// mirror. stream-api's own `[platform-delete]` line stays silent for a site ban's echo (the rows
+// are already flagged), so before this line the journal held no record that Kick sent the event.
+
+// Answers the mirror's POST /chat/platform-delete on top of the Kick stub; records each body.
+function stubMirror() {
+  process.env.STREAM_API_URL = 'http://stream-api.site.test';
+  const posted = [];
+  const inner = global.fetch;
+  global.fetch = async (url, init = {}) => {
+    if (String(url) === 'http://stream-api.site.test/chat/platform-delete') {
+      posted.push(JSON.parse(init.body));
+      return new Response('{"ok":true,"flagged":0}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return inner(url, init);
+  };
+  return posted;
+}
+
+const BAN = { id: 'evt-1', user: { id: 131902950, username: 'robin', slug: 'robin' }, banned_by: { id: 2, username: 'casey', slug: 'casey' }, permanent: true };
+const RECEIPT = /^\[kick\] moderation UserBannedEvent user=131902950 kickAt=none receivedAt=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z id=evt-1 keys=\[id,user,banned_by,permanent\]$/;
+
+async function homeBanRun(server, out, posted, idx = 0) {
+  const h = await startKick();
+  try {
+    const conn = await waitFor(() => server.conns[idx]?.cmds.filter((c) => c.subscribe).length === 2 && server.conns[idx], `home socket ${idx} subscribed`);
+    const before = Date.now();
+    conn.sock.send(channelPush('App\\Events\\UserBannedEvent', BAN, `chatrooms.${CHATROOM_ID}.v2`));
+    const n = posted.length;
+    await waitFor(() => posted.length === n + 1, 'the mirror POST');
+    const line = out.lines.filter((l) => RECEIPT.test(l.text)).at(-1);
+    assert.ok(line, `no receipt line in ${JSON.stringify(out.lines.map((l) => l.text))}`);
+    assert.equal(line.level, 'log');
+    const at = Date.parse(line.text.match(/receivedAt=(\S+)/)[1]);
+    assert.ok(at >= before - 5 && at <= Date.now(), 'receivedAt is the arrival time');
+    return h;
+  } catch (e) {
+    h.stop(); // a failed run must not leave a reader reconnecting into the next test
+    throw e;
+  }
+}
+
+test('home: a Kick ban push writes one receipt line with ids only and asks the mirror', async () => {
+  const server = await fakeCentrifugo((conn) => scriptHandshake(conn));
+  const http = stubKickHttp(server.url);
+  const posted = stubMirror();
+  const out = captureConsole();
+  process.env.KICK_CHATROOM_ID = CHATROOM_ID;
+  process.env.KICK_CHANNEL_ID = CHANNEL_ID;
+  let h;
+  try {
+    h = await homeBanRun(server, out, posted);
+    assert.deepEqual(posted, [{ platform: 'kick', platformUserId: '131902950', username: 'robin' }]);
+    assert.equal(out.lines.filter((l) => /^\[kick\] moderation /.test(l.text)).length, 1, 'one line per event');
+    assert.ok(!out.lines.some((l) => /robin|casey/.test(l.text)), 'no name in any line');
+  } finally {
+    h?.stop();
+    delete process.env.KICK_CHATROOM_ID;
+    delete process.env.KICK_CHANNEL_ID;
+    out.restore();
+    http.restore();
+    await server.close();
+  }
+});
+
+test('kick moderation retry: after the socket drops and the ladder reconnects, the next ban is still logged', async () => {
+  const server = await fakeCentrifugo((conn) => scriptHandshake(conn));
+  const http = stubKickHttp(server.url);
+  const posted = stubMirror();
+  const out = captureConsole();
+  process.env.KICK_CHATROOM_ID = CHATROOM_ID;
+  process.env.KICK_CHANNEL_ID = CHANNEL_ID;
+  let h;
+  try {
+    h = await homeBanRun(server, out, posted);
+    server.conns[0].sock.terminate();
+    const conn2 = await waitFor(() => server.conns[1]?.cmds.filter((c) => c.subscribe).length === 2 && server.conns[1], 'the reconnect', 8000);
+    conn2.sock.send(channelPush('App\\Events\\UserBannedEvent', BAN, `chatrooms.${CHATROOM_ID}.v2`));
+    await waitFor(() => posted.length === 2, 'the second mirror POST');
+    assert.equal(out.lines.filter((l) => RECEIPT.test(l.text)).length, 2);
+  } finally {
+    h?.stop();
+    delete process.env.KICK_CHATROOM_ID;
+    delete process.env.KICK_CHANNEL_ID;
+    out.restore();
+    http.restore();
+    await server.close();
+  }
+});
+
+test('kick moderation restart: a stopped reader and a fresh start log the ban on the new socket, once', async () => {
+  const server = await fakeCentrifugo((conn) => scriptHandshake(conn));
+  const http = stubKickHttp(server.url);
+  const posted = stubMirror();
+  const out = captureConsole();
+  process.env.KICK_CHATROOM_ID = CHATROOM_ID;
+  process.env.KICK_CHANNEL_ID = CHANNEL_ID;
+  let h;
+  try {
+    const first = await homeBanRun(server, out, posted);
+    first.stop();
+    h = await homeBanRun(server, out, posted, 1);
+    assert.equal(posted.length, 2);
+    assert.equal(out.lines.filter((l) => RECEIPT.test(l.text)).length, 2, 'one line per event across the restart — the stopped reader logs nothing more');
+  } finally {
+    h?.stop();
+    delete process.env.KICK_CHATROOM_ID;
+    delete process.env.KICK_CHANNEL_ID;
+    out.restore();
+    http.restore();
+    await server.close();
+  }
+});
+
+test('relay: a Kick ban on a relay\'s socket is not ours — no line, no mirror', async () => {
+  const server = await fakeCentrifugo((conn) => scriptHandshake(conn));
+  const http = stubKickHttp(server.url);
+  const posted = stubMirror();
+  const out = captureConsole();
+  const got = [];
+  let h;
+  try {
+    h = await startKick({ slug: 'someone', onMessage: (m) => got.push(m) });
+    const conn = await waitFor(() => server.conns[0], 'connection');
+    await waitFor(() => conn.cmds.some((c) => c.subscribe), 'subscribed');
+    conn.sock.send([
+      channelPush('App\\Events\\UserBannedEvent', BAN, `chatrooms.${CHATROOM_ID}.v2`),
+      chatPush({ id: 'msg-10', content: 'hi', sender: { id: 78, username: 'robin', identity: { badges: [] } } }),
+    ].join('\n'));
+    await waitFor(() => got.length === 1, 'the chat line after the event');
+    assert.deepEqual(posted, []);
+    assert.ok(!out.has(/^\[kick\] moderation /));
+  } finally {
+    h?.stop();
+    out.restore();
+    http.restore();
+    await server.close();
+  }
+});
+
+// ── The channel owner on Kick ────────────────────────────────────────────────────────────────
+// Kick gives the streamer no `moderator` badge on his own channel, so before 2026-10-31 his lines
+// arrived as an ordinary viewer's (prod: every one of the owner's Kick lines has is_mod = false):
+// the platform automod would check them and the bot refused his `remember_lore`. Twitch has always
+// carried isBroadcaster from its badge; Kick now carries it from the broadcaster badge OR from the
+// sender being the account whose channel this connection reads (its slug — platform-assigned and
+// unique, not a display name a viewer chooses).
+
+async function readOneLine(sender, { slug = 'someone' } = {}) {
+  const server = await fakeCentrifugo((conn) => scriptHandshake(conn));
+  const http = stubKickHttp(server.url);
+  const out = captureConsole();
+  const got = [];
+  let h;
+  try {
+    h = await startKick({ slug, onMessage: (m) => got.push(m) });
+    const conn = await waitFor(() => server.conns[0], 'connection');
+    await waitFor(() => conn.cmds.some((c) => c.subscribe), 'subscribed');
+    conn.sock.send(chatPush({ id: 'msg-b', content: 'hi', sender }));
+    await waitFor(() => got.length === 1, 'the line at the sink');
+    return got[0];
+  } finally {
+    h?.stop();
+    out.restore();
+    http.restore();
+    await server.close();
+  }
+}
+
+test('kick owner: the account whose channel is read is the broadcaster (by slug, any case); a viewer is not', async () => {
+  const owner = await readOneLine({ id: 5, username: 'SomeOne', slug: 'SomeOne', identity: { badges: [] } });
+  assert.equal(owner.isBroadcaster, true);
+  assert.equal(owner.isMod, false, 'broadcaster is its own flag, not a mod badge');
+  const viewer = await readOneLine({ id: 6, username: 'casey', slug: 'casey', identity: { badges: [] } });
+  assert.equal(viewer.isBroadcaster, false);
+  // A viewer whose DISPLAY name matches the owner's but whose slug is their own is not the owner.
+  const lookalike = await readOneLine({ id: 7, username: 'someone', slug: 'someone-2', identity: { badges: [] } });
+  assert.equal(lookalike.isBroadcaster, false);
+});
+
+test('kick owner: a frame without a slug falls back to the username, which Kick also keeps unique', async () => {
+  const owner = await readOneLine({ id: 5, username: 'someone', identity: { badges: [] } });
+  assert.equal(owner.isBroadcaster, true);
+});
+
+test('kick owner: a broadcaster badge marks the broadcaster even on another channel\'s reader', async () => {
+  const line = await readOneLine({ id: 9, username: 'robin', slug: 'robin', identity: { badges: [{ type: 'broadcaster', text: 'Broadcaster' }] } }, { slug: 'elsewhere' });
+  assert.equal(line.isBroadcaster, true);
+});
+
+test('kick owner: the parsed owner line is exempt from the platform automod, a viewer line is not', async () => {
+  const { platformCheckable } = await import('../lib/automod.js');
+  const owner = await readOneLine({ id: 5, username: 'someone', slug: 'someone', identity: { badges: [] } });
+  const viewer = await readOneLine({ id: 6, username: 'casey', slug: 'casey', identity: { badges: [] } });
+  assert.equal(platformCheckable(owner, false), false);
+  assert.equal(platformCheckable(viewer, false), true);
+});
+
+test('kick owner retry: after the socket drops and the ladder reconnects, the owner is still the broadcaster', async () => {
+  const server = await fakeCentrifugo((conn) => scriptHandshake(conn));
+  const http = stubKickHttp(server.url);
+  const out = captureConsole();
+  const got = [];
+  let h;
+  try {
+    h = await startKick({ slug: 'someone', onMessage: (m) => got.push(m) });
+    const first = await waitFor(() => server.conns[0], 'first connection');
+    await waitFor(() => first.cmds.some((c) => c.subscribe), 'first subscribe');
+    first.sock.close(3005, 'token expired');
+    const second = await waitFor(() => server.conns[1], 'second connection', 4000);
+    await waitFor(() => second.cmds.some((c) => c.subscribe), 'second subscribe');
+    second.sock.send(chatPush({ id: 'msg-r', content: 'back', sender: { id: 5, username: 'someone', slug: 'someone', identity: { badges: [] } } }));
+    await waitFor(() => got.length === 1, 'the line after the reconnect');
+    assert.equal(got[0].isBroadcaster, true);
+  } finally {
+    h?.stop();
+    out.restore();
+    http.restore();
+    await server.close();
+  }
+});
+
+test('kick owner restart: a stopped reader and a fresh start for another channel judge by the NEW channel', async () => {
+  const before = await readOneLine({ id: 5, username: 'someone', slug: 'someone', identity: { badges: [] } }, { slug: 'someone' });
+  assert.equal(before.isBroadcaster, true);
+  const after = await readOneLine({ id: 5, username: 'someone', slug: 'someone', identity: { badges: [] } }, { slug: 'other' });
+  assert.equal(after.isBroadcaster, false, 'a restart does not carry the previous channel over');
 });

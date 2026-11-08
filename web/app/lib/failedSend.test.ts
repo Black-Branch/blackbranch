@@ -34,11 +34,11 @@ test("ChatInput asks the helper with the composer as it is NOW, and offers the r
   assert.doesNotMatch(c, /PartialDeliveryError/);
   // The live draft and the live reply, read through refs — never the send's own closure.
   assert.match(c, /failedSendAction\(\{ draft: inputRef\.current\?\.value \?\? "", replyArmed: replyNow\.current != null \}\) === "restore"/);
-  assert.match(c, /setFailedLine\(\{ text, reply: replyToRestore, spend: capturedSpend \}\)/);
+  assert.match(c, /setFailedLine\(\{ text, reply: replyToRestore, spend: capturedSpend, clientMsgId \}\)/);
   // The unconditional overwrite is gone.
   assert.doesNotMatch(c, /showError\(msg, ERROR_MS_FAILED_SEND\);\s*setInput\(text\);/);
   // The retry sends the failed line without touching the composer.
-  assert.match(SRC, /await sendLine\(f\.text, f\.reply, f\.spend, false\);/);
+  assert.match(SRC, /await sendLine\(f\.text, f\.reply, f\.spend, false, f\.clientMsgId\);/);
   // END anchor: the component still closes on its form.
   assert.match(SRC.trimEnd(), /<\/form>\s*\)\s*;\s*}$/);
 });

@@ -12,7 +12,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { format } from "node:util";
+import { readFileSync } from "node:fs";
 import { createWhepProxy } from "./whepProxy.ts";
+import { BUSY_RETRY_S } from "./whepEscalation.ts";
+import { stripComments } from "./testSource.ts";
 
 const DID = "did:plc:example";
 const OFFER = "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\n";
@@ -176,6 +179,41 @@ test("a client that goes away is reported as aborted, and the server stays cache
   assert.equal(calls.filter((c) => isDiscovery(c.url)).length, 1);
 });
 
+test("the journal tells the node from the viewer: a slow answer and a viewer who gave up each leave a line", { timeout: 2_000 }, async () => {
+  let t = 0;
+  let hang = false;
+  const { fetch } = fakeFetch((url, init) => {
+    if (isDiscovery(url)) return discovered(["https://node-1.stream.place"]);
+    if (hang) return never(init);
+    t += 3000; // the node takes three seconds
+    return answer();
+  });
+  const proxy = createWhepProxy({ fetch, did: DID, now: () => t, timeoutMs: 5_000 });
+  const warnings: unknown[][] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args); };
+  try {
+    await proxy.exchange(OFFER, "source", new AbortController().signal);
+    hang = true;
+    const ctrl = new AbortController();
+    setTimeout(() => { t += 4000; ctrl.abort(); }, 5);
+    assert.deepEqual(await proxy.exchange(OFFER, "source", ctrl.signal), { kind: "aborted" });
+  } finally {
+    console.warn = original;
+  }
+  assert.deepEqual(warnings, [
+    ["[whep] slow answer %d ms from %s", 3000, "https://node-1.stream.place"],
+    ["[whep] viewer gave up after %d ms; %s had not answered", 4000, "https://node-1.stream.place"],
+  ]);
+});
+
+test("the relay's deadline is the one the player waits out (whepEscalation's SIGNAL_DEADLINE_MS is derived from it)", async () => {
+  const { WHEP_RELAY_TIMEOUT_MS, SIGNAL_DEADLINE_MS, ICE_GATHER_CAP_MS } = await import("./whepEscalation.ts");
+  const src = (await import("node:fs")).readFileSync(new URL("./whepProxy.ts", import.meta.url), "utf8");
+  assert.match(src, /timeoutMs = WHEP_RELAY_TIMEOUT_MS,/);
+  assert.ok(SIGNAL_DEADLINE_MS > ICE_GATHER_CAP_MS + WHEP_RELAY_TIMEOUT_MS);
+});
+
 test("an upstream 500 is warned and the answer still names the server", async () => {
   const { fetch } = fakeFetch((url) => (isDiscovery(url) ? discovered(["https://node-1.stream.place"]) : answer("boom", 500)));
   const proxy = createWhepProxy({ fetch, did: DID });
@@ -209,4 +247,35 @@ test("a fetch that throws is warned as unreachable", async () => {
   }
   assert.equal(warnings.length, 1);
   assert.match(format(...(warnings[0] ?? [])), /unreachable: https:\/\/node-1\.stream\.place/);
+});
+
+// A 429 is "busy", not a broken transport: the player waits and tries again by
+// itself, and Retry-After says how long. The node's own header is passed on; a
+// 429 without one gets BUSY_RETRY_S, the same value the relay's own limit sends.
+test("a 429 carries Retry-After — the node's own, else the default", async () => {
+  const quiet = console.warn;
+  console.warn = () => {};
+  try {
+    const withHeader = fakeFetch((url) => (isDiscovery(url) ? discovered(["https://node-1.stream.place"])
+      : new Response("slow down", { status: 429, headers: { "retry-after": "7" } })));
+    const a = await createWhepProxy({ fetch: withHeader.fetch, did: DID }).exchange(OFFER, "source", new AbortController().signal);
+    assert.deepEqual(a, { kind: "answer", status: 429, body: "slow down", server: "https://node-1.stream.place", retryAfter: "7" });
+
+    const bare = fakeFetch((url) => (isDiscovery(url) ? discovered(["https://node-1.stream.place"]) : new Response("", { status: 429 })));
+    const b = await createWhepProxy({ fetch: bare.fetch, did: DID }).exchange(OFFER, "source", new AbortController().signal);
+    assert.equal(b.kind === "answer" ? b.retryAfter : null, String(BUSY_RETRY_S));
+
+    const ok = fakeFetch((url) => (isDiscovery(url) ? discovered(["https://node-1.stream.place"]) : answer()));
+    const c = await createWhepProxy({ fetch: ok.fetch, did: DID }).exchange(OFFER, "source", new AbortController().signal);
+    assert.ok(!("retryAfter" in c), "only a 429 says when to come back");
+  } finally {
+    console.warn = quiet;
+  }
+});
+
+test("the relay's own per-address limit answers 429 with the same Retry-After", () => {
+  const route = stripComments(readFileSync(new URL("../api/streamplace/whep/route.ts", import.meta.url), "utf8"));
+  assert.match(route, /status: 429, headers: \{ "retry-after": String\(BUSY_RETRY_S\) \}/, "the limiter's 429 must say when to come back");
+  assert.match(route, /\.\.\.\(r\.retryAfter \? \{ "retry-after": r\.retryAfter \} : \{\}\)/, "a node's 429 must reach the player with its Retry-After");
+  assert.match(route.trimEnd(), /  \}\);\n\}$/, "END anchor: the whole route was read");
 });

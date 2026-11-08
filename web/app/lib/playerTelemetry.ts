@@ -12,7 +12,17 @@
 // other source is — normalizing would strip the digits this file relies on
 // to keep distinct events distinct, and every player row of one reason+state
 // would collapse onto a single fingerprint.
-export type PlayerEventKind = "reconnect" | "failed" | "ended";
+// No "ended": since 2026-10-31 a track the node ends is a reconnect
+// ("track-ended"), and the site's liveness says when the stream is over.
+// "busy" = a 429 from the relay: the player waits Retry-After and tries again.
+export type PlayerEventKind = "reconnect" | "failed" | "busy";
+
+/** How far the attempt had got (whepEscalation.ts NegotiationPhase): "signal"
+ *  = the offer was out and our own site had not answered, "connect" = answered
+ *  but the media path never came up, "media" = it was playing. With the relay's
+ *  journal lines ("[whep] slow answer" / "viewer gave up") this is what tells
+ *  the node from the viewer's network without guessing. */
+type Phase = "ice" | "signal" | "connect" | "media";
 
 type InboundVideoCounters = {
   freezeCount: number | null;
@@ -57,10 +67,14 @@ export function buildPlayerEvent(input: {
   attempt: number;
   node: string | null;
   mode: "webrtc" | "hls";
+  phase: Phase;
+  /** ms since this attempt started — in the payload only, so it does not
+   *  split one decision's message into a new row per millisecond. */
+  elapsedMs: number;
   counters: InboundVideoCounters | null;
 }): { message: string; stack: string } {
   const message =
     `player ${input.kind}: ${input.reason} — pc=${input.connectionState}/${input.iceConnectionState}` +
-    ` attempt=${input.attempt} node=${input.node ?? "?"}`;
+    ` phase=${input.phase} attempt=${input.attempt} node=${input.node ?? "?"}`;
   return { message, stack: JSON.stringify(input) };
 }

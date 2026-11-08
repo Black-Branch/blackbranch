@@ -17,15 +17,20 @@ import assert from "node:assert/strict";
 import { mountHook } from "./testDom.ts";
 import { useMatrixVerification } from "./useMatrixVerification.ts";
 
-/** A pending request as the hook reads it: the peer's device id and a phase. */
-const pending = { otherDeviceId: "FIREFOXDEV", phase: 0 };
+/** A request emits its changes (VerificationRequestEvent.Change); these fixtures never change. */
+const emits = { on: () => {}, off: () => {} };
+/** A pending request as the hook reads it: the peer's device id, whose it is, and a phase. */
+const pending = { otherDeviceId: "FIREFOXDEV", otherUserId: "@casey:site.test", isSelfVerification: true, phase: 0, ...emits };
+/** Someone else's request (person-to-person verification). */
+const fromSomeoneElse = { otherUserId: "@riley:site.test", isSelfVerification: false, initiatedByMe: false, phase: 2, ...emits };
 
-async function mount(opts: { consume?: boolean } = {}) {
+async function mount(opts: { consume?: boolean; request?: unknown; kind?: "self" | "user" } = {}) {
   let cleared = 0;
   const h = await mountHook(() =>
     useMatrixVerification({
       client: null,
-      pendingVerification: pending,
+      kind: opts.kind ?? "self",
+      pendingVerification: opts.request ?? pending,
       clearPendingVerification: () => { cleared += 1; },
       checkCrossSigningStatus: async () => {},
       schedule: (fn, ms) => setTimeout(fn, ms),
@@ -49,4 +54,24 @@ test("the default (consuming) mount takes the request: phase becomes incoming, t
   assert.equal(m.h.current.verifyPeer, "FIREFOXDEV");
   assert.equal(m.cleared, 1);
   await m.h.unmount();
+});
+
+test("a request that finished while it waited in its slot is dropped (the provider is still acked)", async () => {
+  for (const phase of [5, 6]) {
+    const m = await mount({ kind: "user", request: { ...fromSomeoneElse, phase } });
+    assert.equal(m.h.current.verifyPhase, "idle", `phase ${phase}: nothing to answer`);
+    assert.equal(m.cleared, 1, "the slot is emptied so the next request can come");
+    await m.h.unmount();
+  }
+});
+
+test("kind 'self' leaves a user request pending (the person-to-person prompt answers it)", async () => {
+  const m = await mount({ kind: "self", request: fromSomeoneElse });
+  assert.equal(m.h.current.verifyPhase, "idle");
+  assert.equal(m.cleared, 0);
+  await m.h.unmount();
+  const u = await mount({ kind: "user", request: fromSomeoneElse });
+  assert.equal(u.h.current.verifyPhase, "incoming", "vacuity: the same request IS taken by kind 'user'");
+  assert.equal(u.cleared, 1);
+  await u.h.unmount();
 });

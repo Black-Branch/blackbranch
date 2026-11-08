@@ -45,10 +45,9 @@ function platformsFromSettings(get) {
 
 /**
  * The settings each reader is started with. A reader whose values change is restarted with the
- * new ones (lib/platformStarter.js), and these keys then count as applied (the Credentials page
- * stops showing them as waiting for a restart).
+ * new ones (lib/platformStarter.js compares these signatures).
  */
-export const PLATFORM_KEYS = {
+const PLATFORM_KEYS = {
   twitch: ['platform.twitch.channel'],
   kick: ['platform.kick.slug', 'kick.chatroomId', 'kick.channelId'],
   youtube: ['platform.youtube.channelId', 'modules.youtube'],

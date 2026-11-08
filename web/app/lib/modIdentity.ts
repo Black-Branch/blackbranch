@@ -8,6 +8,7 @@
 // controls already hold their target by the time they are used — never a wait on the click.
 // A moderator's history page carries the canonical already; that wins and costs nothing.
 import { useEffect, useSyncExternalStore } from "react";
+import { cardSenderKey } from "./modCardKey.ts";
 
 export type ModIds = { canonicalId: string | null; matrixId: string | null };
 
@@ -39,6 +40,14 @@ function schedule(): void {
   setTimeout(flush, 0);
 }
 
+/** What a moderator's chat asks the resolver for: the line's public id, else — for a tip card
+ *  that wears no account (ADR 0145) — its row (`card:<id>`, modCardSender.ts). */
+export function modLookupKey(msg: { publicId?: string | null; matrixId?: string | null; id?: string | number; system?: string | null }): string | null {
+  if (msg.publicId) return msg.publicId;
+  if (msg.system === "donation" && !msg.matrixId && typeof msg.id === "number") return cardSenderKey(msg.id);
+  return null;
+}
+
 /** Ask for one public id (no-op when cached or already asked). */
 function want(id: string): void {
   if (cache.has(id) || queued.has(id)) return;
@@ -54,10 +63,10 @@ function subscribe(cb: () => void): () => void {
 /** The ids a moderator's controls act on for this line; `enabled` false (not a mod) asks nothing
  *  and answers only what the line itself carries. */
 export function useModIds(
-  msg: { publicId?: string | null; canonicalId?: string | null; matrixId?: string | null },
+  msg: { publicId?: string | null; canonicalId?: string | null; matrixId?: string | null; id?: string | number; system?: string | null },
   enabled: boolean,
 ): ModIds {
-  const pid = enabled && !msg.canonicalId ? msg.publicId ?? null : null;
+  const pid = enabled && !msg.canonicalId ? modLookupKey(msg) : null;
   useEffect(() => { if (pid) want(pid); }, [pid]);
   const hit = useSyncExternalStore(subscribe, () => (pid ? cache.get(pid) ?? null : null), () => null);
   return {

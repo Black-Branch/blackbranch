@@ -162,7 +162,7 @@ export function startDeviceHealth(): () => void {
       et: nav.connection?.effectiveType ?? null, sd: typeof nav.connection?.saveData === "boolean" ? nav.connection.saveData : null,
       dpr: window.devicePixelRatio || 1,
       openMs: Math.round(now - t0), visMs: Math.round(visMs),
-      loaf, inp, cls, req, bytes, sock: { reconnects: socketHealth.reconnects },
+      loaf, inp, cls, req, bytes, sock: { reconnects: socketHealth.reconnects, opens: socketHealth.opens },
       player: { ...playerSnapshot(now), video: videoReport(video) }, decode, frames, anim, settings: settings(), heap,
     });
     const body = JSON.stringify(report);

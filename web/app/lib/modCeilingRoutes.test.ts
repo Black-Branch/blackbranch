@@ -12,7 +12,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Pool } from "pg";
 import { checkModerationCeiling, type CeilingQuery } from "./modCeiling.ts";
-import { messageAuthor, normalizeMessageId, reportSubject, markSubject, reportsForViewer, REPORTER_FOR_MODS } from "./modTargets.ts";
+import { messageAuthor, normalizeMessageId, reportSubject, markSubject, heldLineSubject, reportsForViewer, marksForViewer, REPORTER_FOR_MODS } from "./modTargets.ts";
 import { modDeleteMessage, type ModDeleteDeps } from "./modDelete.ts";
 import { stripComments } from "./testSource.ts";
 
@@ -32,6 +32,7 @@ test("the ceiling on lines, reports, marks and people — real Postgres", { skip
   const canon = [cOwner, cMod1, cMod2, cChatter];
   const clean = async () => {
     await pool.query(`DELETE FROM site.user_marks WHERE matrix_id = ANY($1) OR canonical_id = ANY($2)`, [people, canon]);
+    await pool.query(`DELETE FROM site.automod_held WHERE matrix_id = ANY($1) OR user_id = ANY($2) OR user_id LIKE $3`, [people, canon, `${RUN}%`]);
     await pool.query(`DELETE FROM site.reports WHERE reporter_id = ANY($1)`, [people]);
     await pool.query(`DELETE FROM site.chat_messages WHERE matrix_id = ANY($1)`, [people]);
     await pool.query(`DELETE FROM stream.chat_log WHERE user_id = ANY($1)`, [canon]);
@@ -135,6 +136,51 @@ test("the ceiling on lines, reports, marks and people — real Postgres", { skip
     assert.equal(await ceiling(MOD2, await markSubject(onMod1, q), true), 403, "another mod's mark");
   });
 
+  await t.test("resolve a held line: never your own, another mod's or the owner's", async () => {
+    const held = async (cols: { source: string; matrix_id?: string; user_id?: string; site_msg_id?: string; platform?: string }) => Number((await pool.query(
+      `INSERT INTO site.automod_held (source, platform, matrix_id, user_id, site_msg_id, text, status) VALUES ($1, $2, $3, $4, $5, 'held', 'pending') RETURNING id`,
+      [cols.source, cols.platform ?? null, cols.matrix_id ?? null, cols.user_id ?? null, cols.site_msg_id ?? null])).rows[0].id);
+    // The word filter and the link gate hold mods' and admins' own site lines too.
+    const mine = await held({ source: "blocklist", platform: "native", matrix_id: MOD1 });
+    const mod2s = await held({ source: "link_gate", platform: "native", matrix_id: MOD2 });
+    const owners = await held({ source: "blocklist", platform: "native", matrix_id: OWNER });
+    const users = await held({ source: "blocklist", platform: "native", matrix_id: USER });
+    // Our platform holds record the sender's canonical; a Twitch AutoMod hold of a site mod's
+    // cross-posted copy points at the site line; one of a Twitch chatter names their Twitch id.
+    const mod2Kick = await held({ source: "account_age", platform: "kick", user_id: cMod2 });
+    const chatterKick = await held({ source: "account_age", platform: "kick", user_id: cChatter });
+    const ownerCopy = await held({ source: "twitch", user_id: `${RUN}-x`, site_msg_id: await line(OWNER) });
+    const mod1Twitch = await held({ source: "twitch", user_id: `${RUN}-m1tw` });
+    const stranger = await held({ source: "twitch", user_id: `${RUN}-never` });
+    assert.equal(await ceiling(MOD1, await heldLineSubject(mine, q), true), 403, "a mod approved their own held line");
+    assert.equal(await ceiling(MOD1, await heldLineSubject(mod2s, q), true), 403, "a mod resolved another mod's held line");
+    assert.equal(await ceiling(MOD1, await heldLineSubject(owners, q), true), 403, "a mod resolved the owner's held line");
+    assert.equal(await ceiling(MOD1, await heldLineSubject(mod2Kick, q), true), 403, "another mod's linked platform hold");
+    assert.equal(await ceiling(MOD1, await heldLineSubject(ownerCopy, q), true), 403, "the owner's cross-posted Twitch copy");
+    assert.equal(await ceiling(MOD1, await heldLineSubject(mod1Twitch, q), true), 403, "their own Twitch AutoMod hold");
+    assert.equal(await ceiling(MOD1, await heldLineSubject(users, q), true), "allowed");
+    assert.equal(await ceiling(MOD1, await heldLineSubject(chatterKick, q), true), "allowed");
+    assert.equal(await heldLineSubject(stranger, q), null, "a Twitch chatter who never chatted here names nobody");
+    assert.equal(await ceiling(OWNER, await heldLineSubject(mine, q), true), "allowed", "an admin may resolve a mod's line");
+    assert.equal(await ceiling(OWNER, await heldLineSubject(owners, q), true), "allowed", "an admin may resolve their own");
+    assert.equal(await heldLineSubject(987654321, q), null);
+    await assert.rejects(heldLineSubject(mine, async () => { throw new Error("db down"); }), /db down/, "a failed read must not read as nobody");
+  });
+
+  await t.test("the marks list: a mod never sees a mark on themselves; an admin sees all", async () => {
+    // Open marks already on: MOD1's account, MOD1's linked Twitch identity, a chatter (the test above).
+    await mark({ id: MOD2 });
+    const rows = (await pool.query(`SELECT id, matrix_id, canonical_id FROM site.user_marks
+        WHERE cleared_at IS NULL AND (matrix_id = ANY($1) OR canonical_id = ANY($2)) ORDER BY id`, [people, canon])).rows
+      .map((r) => ({ id: Number(r.id), matrixId: r.matrix_id as string | null, canonicalId: r.canonical_id as string | null }));
+    assert.ok(rows.some((r) => r.matrixId === MOD1) && rows.some((r) => r.canonicalId === cMod1), "vacuity: the mod's own marks were not read");
+    const forMod = await marksForViewer(rows, { id: MOD1, admin: false }, q);
+    assert.ok(forMod.every((r) => r.matrixId !== MOD1 && r.canonicalId !== cMod1), "a mod was shown a mark on themselves");
+    assert.ok(forMod.some((r) => r.canonicalId === cChatter) && forMod.some((r) => r.matrixId === MOD2), "other people's marks went missing");
+    assert.equal((await marksForViewer(rows, { id: OWNER, admin: true }, q)).length, rows.length);
+    await assert.rejects(marksForViewer(rows, { id: MOD1, admin: false }, async () => { throw new Error("db down"); }), /db down/);
+  });
+
   await t.test("unban, pronouns, per-person slow mode: a person by id or canonical", async () => {
     assert.equal(await ceiling(MOD1, MOD2), 403, "a mod lifting another mod's timeout");
     assert.equal(await ceiling(MOD1, cOwner), 403, "the owner's pronouns by canonical");
@@ -183,7 +229,6 @@ const NAMES_NOBODY: Record<string, string> = {
   "announce": "posts the site's own announcement",
   "automod/enabled": "a site-wide switch",
   "automod": "reads the held list",
-  "automod/resolve": "a held line — staff, mods and admins are exempt from automod (automodHold.ts), so a hold is never theirs",
   "bans/active": "reads",
   "bans": "reads",
   "bar": "the support bar",
@@ -208,7 +253,7 @@ const NAMES_NOBODY: Record<string, string> = {
 };
 
 // The writes a guard must come before, per verb.
-const WRITE = /pool\.query\(\s*`\s*(?:INSERT|UPDATE|DELETE)|streamApiFetch\(|askPronounCommand\((?![^)]*resolveOnly: true)|clearMark\(|deleteSiteMessageEverywhere\(|fanOut[A-Z]\w*\(|\b(?:ban|unban|delete|purge)On[A-Z]\w*\(/;
+const WRITE = /pool\.query\(\s*`\s*(?:INSERT|UPDATE|DELETE)|appendModLog\(|streamApiFetch\(|askPronounCommand\((?![^)]*resolveOnly: true)|clearMark\(|deleteSiteMessageEverywhere\(|runPurge\(|fanOut[A-Z]\w*\(|\b(?:ban|unban|delete|purge)On[A-Z]\w*\(/;
 
 function routes(dir: string): string[] {
   const out: string[] = [];
@@ -246,13 +291,14 @@ test("every mod route that acts on a person calls the ceiling before its first w
     seen.add(name);
     const src = read(file);
     if (name in NAMES_NOBODY) {
-      assert.doesNotMatch(src, /assertCanModerate\(/, `${name}: guarded AND listed as naming nobody — take it off the list`);
+      assert.doesNotMatch(src, /assertCanModerate(?:Account)?\(/, `${name}: guarded AND listed as naming nobody — take it off the list`);
       continue;
     }
     const writers = verbs(src).filter((v) => WRITE.test(v.body));
     assert.ok(writers.length > 0, `${name}: no writing verb found — list it in NAMES_NOBODY with a reason`);
     for (const { verb, body } of writers) {
-      const guard = body.indexOf("assertCanModerate(");
+      // assertCanModerateAccount = the same ceiling, also over the account's linked canonicals.
+      const guard = body.search(/assertCanModerate(?:Account)?\(/);
       const write = body.search(WRITE);
       assert.ok(guard > 0, `${name} ${verb}: writes without the moderation ceiling`);
       assert.ok(guard < write, `${name} ${verb}: the ceiling comes after a write`);
@@ -278,8 +324,13 @@ test("the person each route guards is the right one", () => {
   assert.match(unban, /assertCanModerate\(mod, /);
   // M1: a canonical names EVERY site account linked to it, and a ban/unban by canonical acts on each.
   assert.doesNotMatch(ban, /platform_links[^`]*LIMIT 1/, "an unordered LIMIT 1 picks an arbitrary account");
-  assert.match(ban, /linkedMatrixIds\(canonicalId, /);
+  assert.match(ban, /siteAccountsOf\(canonicalId, /);
   assert.equal((ban.match(/for \(const t of targets\)/g) ?? []).length, 2, "ban and unban must each act on every linked account");
+  const resolve = read("app/api/mod/automod/resolve/route.ts");
+  assert.match(resolve, /heldLineSubject\(rowId, /);
+  assert.match(resolve, /assertCanModerate\(mod, subject, \{ selfCase: true \}\)/, "a held line is resolved through the ceiling, as a case about its sender");
+  const marks = read("app/api/mod/marks/route.ts");
+  assert.equal((marks.match(/marksForViewer\(/g) ?? []).length, 2, "both the list and one person's mark pass the viewer rule");
   const pronouns = read("app/api/mod/pronouns/route.ts");
   assert.match(pronouns, /resolveOnly: true/, "a name is resolved to its person before the ceiling, never after the write");
 });

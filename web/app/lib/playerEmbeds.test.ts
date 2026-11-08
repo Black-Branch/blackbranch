@@ -1,6 +1,7 @@
 // The player's embed surfaces, pinned at the source level.
 //
-// No Kick player (the slug stays — it routes outbound cross-posts); no "Beta
+// No Kick in the COMMUNITY embed (the streamer's own Kick embed is a Live source since
+// liveness Task 8, decision 0135 — its pins are below); no "Beta
 // player" pill (the source row is the opt-in); every iframe configured the way
 // its platform documents; no dead offline-VOD branches; a VOD pick unmuted.
 // These files render in a browser the harness cannot drive, so the assertions
@@ -73,12 +74,12 @@ test("every player iframe carries a title, the referrer policy and the allow lis
   // than repeating the literal at each mount point — YouTubeFrame's and
   // TwitchPlayer's own headers say why ("four copies of this wiring is the
   // shape that rots"). So the raw <iframe> literal count in THIS file is
-  // just stream.place's (no adapter path exists for it) plus YouTubeFrame's
-  // one shared <iframe ref>; Twitch's no-script fallback iframe lives in
-  // TwitchPlayer.tsx instead, checked separately below.
+  // stream.place's and Kick's (no adapter path exists for either) plus
+  // YouTubeFrame's one shared <iframe ref>; Twitch's no-script fallback iframe
+  // lives in TwitchPlayer.tsx instead, checked separately below.
   const areaFrames = src.match(/<iframe[\s\S]*?\/>/g) ?? [];
-  assert.equal(areaFrames.length, 2,
-    `expected stream.place's iframe + YouTubeFrame's shared iframe, found ${areaFrames.length}`);
+  assert.equal(areaFrames.length, 3,
+    `expected stream.place's iframe + Kick's iframe + YouTubeFrame's shared iframe, found ${areaFrames.length}`);
   const twitchFrames = twitch.match(/<iframe[\s\S]*?\/>/g) ?? [];
   assert.equal(twitchFrames.length, 1,
     `expected TwitchPlayer's one no-script fallback iframe, found ${twitchFrames.length}`);
@@ -90,19 +91,31 @@ test("every player iframe carries a title, the referrer policy and the allow lis
     assert.match(f, /allowFullScreen/);
   }
 
-  // The six logical player surfaces (VOD replay, stream.place, YouTube,
-  // Twitch, playlist, community) each thread the SAME shared constants
+  // The seven logical player surfaces (VOD replay, stream.place, YouTube,
+  // Twitch, Kick, playlist, community) each thread the SAME shared constants
   // through — the four that mount via <YouTubeFrame>/<TwitchPlayer> just as
   // much as the raw literals. The community slot is one call site that
   // branches on platform (only one side of which ever renders at once), so
-  // it counts as two of these textual sites — seven in total.
-  assert.equal((src.match(/allow=\{IFRAME_ALLOW\}/g) ?? []).length, 7,
-    "one allow={IFRAME_ALLOW} per call site: VOD, stream.place, live YouTube, live Twitch, playlist, community YouTube, community Twitch");
-  assert.equal((src.match(/referrerPolicy=\{IFRAME_REFERRER\}/g) ?? []).length, 7,
+  // it counts as two of these textual sites — eight in total.
+  assert.equal((src.match(/allow=\{IFRAME_ALLOW\}/g) ?? []).length, 8,
+    "one allow={IFRAME_ALLOW} per call site: VOD, stream.place, live YouTube, live Twitch, live Kick, playlist, community YouTube, community Twitch");
+  assert.equal((src.match(/referrerPolicy=\{IFRAME_REFERRER\}/g) ?? []).length, 8,
     "the referrer policy must accompany the allow list at every call site");
 
   assert.match(src, /IFRAME_ALLOW = "autoplay; fullscreen; picture-in-picture; encrypted-media"/);
   assert.match(src, /IFRAME_REFERRER = "strict-origin-when-cross-origin"/);
+});
+
+test("the Kick embed: Kick's player by slug, titled like Twitch's, with the plain-text caption under it", () => {
+  const src = read(AREA, /<\/div>\s*\);\s*}\s*$/);
+  const block = src.match(/\{tab === "live" && playLive && active === "kk" && kkSrc && \([\s\S]*?\n {10}\)\}/)?.[0];
+  assert.ok(block, "the Kick mount: live tab, a playable source, Kick picked, a Kick channel");
+  assert.match(block, /<iframe[\s\S]*?src=\{kkSrc\}[\s\S]*?title="Live stream — Kick"[\s\S]*?allow=\{IFRAME_ALLOW\}[\s\S]*?referrerPolicy=\{IFRAME_REFERRER\}[\s\S]*?allowFullScreen/);
+  assert.match(block, /<p className="[^"]*">\{KICK_EMBED_CAPTION\}<\/p>/, "the caption, under the frame");
+  assert.doesNotMatch(block, /<a\b|href=/, "the caption is plain text: no link");
+  const sv = read(STREAM_VIEW, /GuestSupportContent = dynamic\([\s\S]*\{ ssr: false \}\);\s*$/);
+  assert.match(sv, /const kkSrc = kickLiveSrc\(kickChannel, startMuted\);/, "muted on a phone like every live source");
+  assert.match(sv, /kkSrc=\{kkSrc\}/);
 });
 
 test("the Beta player pill is gone — the source row is the opt-in", () => {

@@ -123,7 +123,9 @@ export const USERNAME_STYLES: readonly UsernameStyle[] = [
 // usernameStyles.test.ts proves the two stay equivalent over the whole catalog.
 const ANIMATIONS: Record<string, string> = {
   rainbow: "un-rainbow 5s linear infinite",
-  pulse:   "un-pulse 1.8s ease-in-out infinite",
+  // Pulse's breath runs on its two glow LAYERS (globals.css `.un-pulse::before/::after`, opacity
+  // only), not on the name: nothing is pushed inline. Kept here so membership still tags un-anim.
+  pulse:   "",
   shimmer: "un-shimmer 2.6s linear infinite",
   wobble:  "un-wobble 1.6s ease-in-out infinite",
   bounce:  "un-bounce 1.5s ease-in-out infinite",
@@ -401,16 +403,26 @@ export function usernameStyleAnimClass(style: EquippedStyle | null | undefined):
     (!!style.entrance && ARRIVALS.has(style.entrance)) ||
     (!!style.gradient && style.gradient in ANIMATIONS);
   if (!animated) return "";
-  return style.entrance && ARRIVALS.has(style.entrance) ? "un-anim un-arrive" : "un-anim";
+  const base = style.entrance && ARRIVALS.has(style.entrance) ? "un-anim un-arrive" : "un-anim";
+  // The glow layers hang on this class (globals.css).
+  return style.effect === "pulse" ? `${base} un-pulse` : base;
 }
+
+// A name as a CSS string token, for `content: var(--un-text)` on the glow layers.
+const cssString = (text: string) =>
+  `"${text.replace(/[\\"]/g, (c) => `\\${c}`).replace(/[\u0000-\u001f\u007f]/g, " ")}"`;
 
 /**
  * CSS for the equipped style set, composed onto the message's own name color.
  * Spread AFTER the base `color`. Malformed/unknown ids contribute nothing.
+ * `text` is the name the element shows: Pulse draws its halo from it (two layers behind the
+ * name whose opacity breathes — globals.css `.un-pulse`), so a surface that omits it shows the
+ * Pulse name without its glow.
  */
 export function usernameStyleCSS(
   style: EquippedStyle | null | undefined,
-  baseColor: string | null | undefined
+  baseColor: string | null | undefined,
+  text?: string | null
 ): React.CSSProperties {
   if (!style || (!style.font && !style.effect && !style.entrance && !style.gradient)) return {};
   const base = readableColor(baseColor || DEFAULT_NAME_COLOR);
@@ -573,10 +585,11 @@ export function usernameStyleCSS(
     shadow.push(`-1px -1px 0 ${lit}`, `1px 1px 0 ${dark}`);
     tail = "full";
   } else if (style.effect === "pulse") {
-    // Keyframes read --un-c; the breathing halo sits behind the glyphs, so it
-    // shows through even when a gradient makes the fill transparent.
+    // The halo layers read --un-c and draw --un-text; only their opacity animates, so the glyphs
+    // are rasterized once instead of every frame. They sit behind the glyphs, so the halo shows
+    // through even when a gradient makes the fill transparent.
     (css as React.CSSProperties & { "--un-c"?: string })["--un-c"] = base;
-    anims.push(ANIMATIONS.pulse!);
+    if (text) (css as React.CSSProperties & { "--un-text"?: string })["--un-text"] = cssString(text);
   } else if (style.effect === "shimmer" && style.gradient !== "rainbow") {
     // A white gleam sweeping over the fill (solid color or the duo gradient).
     // Skipped under rainbow — both would fight over background-position.
@@ -685,6 +698,9 @@ export function usernameStyleCSS(
     ].join(" ");
   } else if (shadow.length) {
     css.textShadow = [...shadow, tail === "contact" ? CHAT_SHADOW_CONTACT : CHAT_SHADOW].join(", ");
+  } else if (style.effect === "pulse") {
+    // The halo is the name's whole shadow, as when its keyframes overrode the row's.
+    css.textShadow = "none";
   }
   if (drift) css.filter = `hue-rotate(var(--un-h, 0deg))${css.filter ? ` ${css.filter}` : ""}`;
   // Glitch's colour split lives in its keyframes as drop-shadow FILTERS — a

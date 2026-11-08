@@ -66,8 +66,8 @@ test("fold = player_mode 'none': player and bottom bar unmount, the top bar stay
   // no prior value to transition FROM); the player is what comes and goes, from
   // inside it. foldAnimation.test.ts pins that nesting and
   // usePlayerFold.render.test.ts runs the lifecycle.
-  assert.match(view, /<div\s+className="player-fold-region"[\s\S]{0,200}\{\(!folded \|\| playerMounted\) && \(\s*<StreamPlayerArea/);
-  assert.match(view, /\{!folded && \(\s*<StreamMetaBar/);
+  assert.match(view, /<div\s+className="player-fold-region"[\s\S]{0,200}\{\(!folded \|\| playerMounted\) && \(\s*<ErrorBoundary>\s*<StreamPlayerArea/);
+  assert.match(view, /\{!folded && \(\s*<ErrorBoundary>\s*<StreamMetaBar/);
   assert.match(view, /playerPanelClass\(\{ folded, fallbackClass: currentFallback\?\.panelClass \?\? null, fillMode \}\)/, "the folded class comes from the helper, which KEEPS the mode class (playerPanelClass.test.ts)");
   // A folded frame is exactly its top bar, so that bar must stay IN FLOW —
   // theatre/compact's `overlay: true` would make it absolute over an empty

@@ -8,7 +8,7 @@ import type Stripe from "stripe";
 import { NextRequest } from "next/server";
 import { sanitizeDisplayName, sanitizeChatMessage } from "@/app/lib/sanitize";
 import { donationTtsChars } from "@/app/lib/donationTts";
-import { SITE_CURRENCY } from "@/app/lib/moneyFormat";
+import { SITE_CURRENCY, formatPrice } from "@/app/lib/moneyFormat";
 import { createSlidingWindowLimiter, ipKey } from "@/app/lib/rateLimit";
 import { statementSuffixFor, getStatementPrefixLength } from "@/app/lib/statementSuffix";
 import { PAY_MIN_CENTS, PAY_MAX_CENTS } from "@/app/lib/coins";
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(dollars)) return new Response("Bad amount", { status: 400 });
   const cents = Math.round(dollars * 100);
   if (cents < PAY_MIN_CENTS || cents > PAY_MAX_CENTS) {
-    return new Response(`Amount must be between $${PAY_MIN_CENTS / 100} and $${PAY_MAX_CENTS / 100}`, { status: 400 });
+    return new Response(`Amount must be between ${formatPrice(PAY_MIN_CENTS)} and ${formatPrice(PAY_MAX_CENTS)}`, { status: 400 });
   }
 
   const session = await auth();
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   const rawMsg = typeof body?.message === "string" ? sanitizeChatMessage(body.message, maxMessage + 1) : "";
   if (rawMsg.length > maxMessage) {
     return new Response(
-      `A $${(cents / 100).toFixed(2)} donation carries a message of up to ${maxMessage} characters.`,
+      `A ${formatPrice(cents, SITE_CURRENCY, "minor")} donation carries a message of up to ${maxMessage} characters.`,
       { status: 400 }
     );
   }

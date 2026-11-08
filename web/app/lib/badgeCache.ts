@@ -24,9 +24,9 @@
 // one-request blip into TTL_MS of site-wide missing badges, so a degraded load
 // is returned to the caller but not stored.
 
-import pool from "@/lib/db";
-import { createTtlCache } from "./ttlCache";
-import { ENTITLED_VIEWERS_SQL, subscriptionSources } from "./subscriptions/entitlement";
+import pool from "../../lib/db.ts";
+import { createTtlCache } from "./ttlCache.ts";
+import { ENTITLED_VIEWERS_SQL, subscriptionSources } from "./subscriptions/entitlement.ts";
 
 const TTL_MS = 15_000;
 

@@ -1,4 +1,5 @@
-// Kick connector — chat, Kick-side moderation and monetization over Kick's realtime socket.
+// Kick connector — chat, Kick-side moderation, monetization and the on/off-air hints over Kick's
+// realtime socket.
 // No browser, except as the fallback for the one-time channel-id lookup.
 //
 // Transport: Kick runs its own realtime service on Centrifugo (JSON protocol). Kick names the
@@ -19,11 +20,18 @@ import { processMessage } from '../lib/pipeline.js';
 import { normalizeKickEvent } from '../lib/alerts.js';
 import { postAlert, postPlatformDelete } from '../lib/api.js';
 import { instanceConfig } from '../lib/instanceConfig.js';
-import { payloadShape } from '../lib/logShape.js';
+import { payloadShape, shapedId } from '../lib/logShape.js';
+import { noteHint } from '../lib/liveHints.js';
 
 const REALTIME_API = 'https://web.kick.com/api/v1/realtime';
 const KICK_ORIGIN = 'https://kick.com';
 const KICK_EMOTE_RE = /\[emote:(\d+):([^\]]+)\]/g;
+// Kick's own on-air / off-air events on `channel.{id}` (undocumented). Each is a push hint
+// (lib/liveHints.js): it wakes the poller, whose API read is the answer, never the event itself.
+const KICK_STREAM_HINTS = new Map([
+  ['App\\Events\\StreamerIsLive', 'live'],
+  ['App\\Events\\StopStreamBroadcast', 'stop'],
+]);
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 function idsFrom(data) {
@@ -70,8 +78,9 @@ async function getKickAppToken() {
   return appToken.token;
 }
 
-// Official API: GET /public/v1/channels?slug= → data[0].stream.{is_live,viewer_count}.
-// Returns {live, viewers}. Throws on HTTP/token errors so the caller can fall back to v2.
+// Official API: GET /public/v1/channels?slug= → data[0].stream.{is_live,viewer_count,start_time}.
+// Returns {live, viewers, key}: `key` is the stream's start_time, Kick's own id for this broadcast
+// ('' when not live). Throws on HTTP/token errors so the caller can fall back to v2.
 async function viewersViaOfficial(slug, token) {
   const res = await fetch(`https://api.kick.com/public/v1/channels?slug=${encodeURIComponent(slug)}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
@@ -82,16 +91,17 @@ async function viewersViaOfficial(slug, token) {
   const ch = (await res.json())?.data?.[0];
   if (!ch) throw new Error('no channel in official response');
   const st = ch.stream;
-  if (!st || st.is_live === false) return { live: false, viewers: null }; // confirmed offline
+  if (!st || st.is_live === false) return { live: false, viewers: null, key: '' }; // confirmed offline
+  const key = typeof st.start_time === 'string' ? st.start_time : '';
   const n = Number(st.viewer_count ?? st.viewers);
   if (!Number.isFinite(n)) {
     if (!loggedOfficialShape) {
       loggedOfficialShape = true;
       console.log(`[kick] official stream shape (map viewer field): ${payloadShape(st)}`);
     }
-    return { live: true, viewers: null }; // confirmed live, count unparseable
+    return { live: true, viewers: null, key }; // confirmed live, count unparseable
   }
-  return { live: true, viewers: n };
+  return { live: true, viewers: n, key };
 }
 
 // Legacy v2 scrape — works only when Kasada isn't challenging.
@@ -102,24 +112,30 @@ async function viewersViaV2(slug) {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const ls = (await res.json())?.livestream;
-  if (!ls || ls.is_live === false) return { live: false, viewers: null }; // confirmed offline
+  if (!ls || ls.is_live === false) return { live: false, viewers: null, key: '' }; // confirmed offline
   const n = Number(ls.viewer_count ?? ls.viewers);
   if (!Number.isFinite(n)) {
     if (!loggedViewerShape) {
       loggedViewerShape = true;
       console.log(`[kick] livestream shape (map viewer field): ${payloadShape(ls)}`);
     }
-    return { live: true, viewers: null }; // confirmed live, count unparseable
+    return { live: true, viewers: null, key: '' }; // confirmed live, count unparseable
   }
-  return { live: true, viewers: n };
+  return { live: true, viewers: n, key: '' };
 }
 
+const answered = (r) => (r.live
+  ? { state: 'live', viewers: r.viewers, key: r.key, evidence: 'kick-live' }
+  : { state: 'offline', viewers: r.viewers, key: '', evidence: 'kick-not-live' });
+const unknown = (viewers) => ({ state: 'unknown', viewers, key: '', evidence: 'kick-error' });
+
 // Current live state + viewer count (poll-cadence, called by lib/poller.js).
-// Returns { state: 'live'|'offline'|'unknown', viewers: number|null }. 'offline'
+// Returns { state: 'live'|'offline'|'unknown', viewers: number|null, key, evidence }. 'offline'
 // is a genuine is_live:false answer from Kick; 'unknown' means every fetch path
-// errored and there's no fresh last-good count to smooth over it. The caller
+// errored (a fresh last-good count may still ride along). The caller
 // must NOT treat 'unknown' as 'offline' — that would make a network blip
-// indistinguishable from Kick actually ending.
+// indistinguishable from Kick actually ending. `key` is the official API's start_time ('' from
+// the v2 fallback or when not live); `evidence` is kick-live / kick-not-live / kick-error.
 export async function fetchKickState(slug = instanceConfig.get('platform.kick.slug')) {
   let usedOfficial = false;
   try {
@@ -131,7 +147,7 @@ export async function fetchKickState(slug = instanceConfig.get('platform.kick.sl
     const r = usedOfficial ? await viewersViaOfficial(slug, token) : await viewersViaV2(slug);
     if (r.live && r.viewers != null) lastGoodViewers = { count: r.viewers, at: Date.now() };
     unknownSaid = false;
-    return { state: r.live ? 'live' : 'offline', viewers: r.viewers };
+    return answered(r);
   } catch (e) {
     if (!usedOfficial && !kickKeysSet()) {
       // No app keys: only kick.com's bot-protected page is left to ask, and when it refuses, live
@@ -141,20 +157,20 @@ export async function fetchKickState(slug = instanceConfig.get('platform.kick.sl
         unknownSaid = true;
         console.warn(`[kick] live status unknown: kick.com refused the lookup (${e.message}) and no Kick app keys are set — add the Kick app client id + secret in the Admin Panel for live detection`);
       }
-      return { state: 'unknown', viewers: lastGoodViewers && Date.now() - lastGoodViewers.at < KICK_VIEWER_STALE_MS ? lastGoodViewers.count : null };
+      return unknown(lastGoodViewers && Date.now() - lastGoodViewers.at < KICK_VIEWER_STALE_MS ? lastGoodViewers.count : null);
     }
     if (usedOfficial) {
       try {
         const r = await viewersViaV2(slug);
         if (r.live && r.viewers != null) lastGoodViewers = { count: r.viewers, at: Date.now() };
-        return { state: r.live ? 'live' : 'offline', viewers: r.viewers };
+        return answered(r);
       } catch { /* fall through to last-good/unknown */ }
     }
     if (lastGoodViewers && Date.now() - lastGoodViewers.at < KICK_VIEWER_STALE_MS) {
-      return { state: 'unknown', viewers: lastGoodViewers.count };
+      return unknown(lastGoodViewers.count);
     }
     console.warn('[kick] viewer fetch:', e.message);
-    return { state: 'unknown', viewers: null };
+    return unknown(null);
   }
 }
 
@@ -284,6 +300,43 @@ export function parseKickModeration(eventName, dataStr) {
   return null;
 }
 
+// Kick's own time on a moderation event, as ISO, or 'none'. Kick documents no field for it, so
+// the two usual names are read (epoch seconds or milliseconds, or a date string); the receipt
+// line's `keys=[…]` shows which fields the first real event carries, so a miss is visible.
+function kickEventTime(dataStr) {
+  let d;
+  try { d = JSON.parse(dataStr); } catch { return 'none'; }
+  const v = d?.created_at ?? d?.timestamp;
+  let ms = NaN;
+  if (typeof v === 'number' && Number.isFinite(v)) ms = v < 1e12 ? v * 1000 : v;
+  else if (typeof v === 'string' && /^\d{4}-\d\d-\d\d[T ]\d\d:\d\d/.test(v)) ms = Date.parse(v);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : 'none';
+}
+
+// One Kick moderation event (home connection only): ONE journal line the moment it arrives, then
+// the site mirror. The line is what the #185 lag read times a site ban against
+// (site.platform_mod_actions.created_at, whose target_platform_id is the `user=` here): a site
+// ban's own echo flags nothing at stream-api — the site already removed those rows — so
+// stream-api's `[platform-delete]` line never shows it, and before this line the journal held no
+// record that Kick sent the event at all. Ids only: the deleted message's uuid or the banned
+// user's numeric id, the event id and the payload's keys. Never the text, never a name: the
+// banned user's username rides in the mirror's request (stream-api's fallback match), not in the
+// journal. Exported for platforms/kickLogs.test.js. Resolves true when the mirror took it.
+export function handleKickModeration(eventName, dataStr, receivedAt = new Date()) {
+  const payload = parseKickModeration(eventName, dataStr);
+  if (!payload) {
+    console.log(`[kick] moderation event ${eventName} unparsed (shape drift?): ${payloadShape(dataStr)}`);
+    return Promise.resolve(false);
+  }
+  const target = payload.platformMsgId ? `msg=${shapedId(payload.platformMsgId)}` : `user=${shapedId(payload.platformUserId)}`;
+  const kind = eventName.slice(eventName.lastIndexOf('\\') + 1);
+  console.log(`[kick] moderation ${kind} ${target} kickAt=${kickEventTime(dataStr)} receivedAt=${receivedAt.toISOString()} ${payloadShape(dataStr)}`);
+  return postPlatformDelete(payload).then(() => true, (e) => {
+    console.warn(`[kick] moderation mirror failed event=${eventName} id=${shapedId(payload.platformMsgId ?? payload.platformUserId)} keys=[${Object.keys(payload).join(',')}]: ${e.message}`);
+    return false;
+  });
+}
+
 const KICK_MONETIZATION_EVENTS = new Set([
   'App\\Events\\SubscriptionEvent',
   'App\\Events\\GiftedSubscriptionsEvent',
@@ -301,19 +354,32 @@ function extractEmotes(content) {
   return { text, emotes };
 }
 
-function flagsFromBadges(identity) {
+// The streamer on their OWN channel carries no `moderator` badge, so without this every line they
+// typed on Kick arrived as an ordinary viewer's: the platform automod checked it and the bot refused
+// their remember_lore. The owner is the sender whose slug is the channel being read — a slug is
+// platform-assigned and unique (a username stands in when a frame has none: Kick keeps those unique
+// too), never a display name — or anyone Kick badges `broadcaster`.
+function isChannelOwner(sender, types, channelSlug) {
+  if (types.has('broadcaster')) return true;
+  const own = String(channelSlug || '').trim().toLowerCase();
+  const who = String(sender?.slug || sender?.username || '').trim().toLowerCase();
+  return Boolean(own) && who === own;
+}
+
+function flagsFromBadges(identity, sender, channelSlug) {
   const badges = identity?.badges || [];
   const types = new Set(badges.map((b) => (b?.type || '').toLowerCase()));
   const info = identity?.badge_info || {};
   return {
     isMod: types.has('moderator') || Boolean(info.moderator || info.mod),
+    isBroadcaster: isChannelOwner(sender, types, channelSlug),
     isVip: types.has('vip') || Boolean(info.vip),
     isMember: types.has('subscriber') || types.has('founder') || types.has('og'),
     tier: types.has('founder') ? 'founder' : types.has('subscriber') ? 'subscriber' : '',
   };
 }
 
-function handleChatEvent(dataStr, sink) {
+function handleChatEvent(dataStr, sink, channelSlug) {
   let payload;
   try {
     payload = JSON.parse(dataStr);
@@ -322,7 +388,7 @@ function handleChatEvent(dataStr, sink) {
   }
   const sender = payload.sender || {};
   const { text, emotes } = extractEmotes(payload.content);
-  const flags = flagsFromBadges(sender.identity);
+  const flags = flagsFromBadges(sender.identity, sender, channelSlug);
   // Kick delivers reply context inline when a message is a reply.
   // (Shape per Kick's ChatMessageEvent — verify against a live reply frame.)
   const meta = payload.metadata || {};
@@ -471,16 +537,14 @@ export async function startKick(opts = {}) {
   // shape across the change of transport, so the handlers above are transport-independent.
   const dispatch = ({ event, data, channel }) => {
     if (event === 'App\\Events\\ChatMessageEvent') {
-      handleChatEvent(data, sink);
+      handleChatEvent(data, sink, slug);
     } else if (!onMessage && KICK_MODERATION_EVENTS.has(event)) {
-      // Home connection only: mirror Kick-side deletes/bans into site chat.
-      const payload = parseKickModeration(event, data);
-      if (payload) {
-        postPlatformDelete(payload)
-          .catch((e) => console.warn(`[kick] moderation mirror failed event=${event} id=${payload.platformMsgId ?? payload.platformUserId ?? '?'} keys=[${Object.keys(payload).join(',')}]: ${e.message}`));
-      } else {
-        console.log(`[kick] moderation event ${event} unparsed (shape drift?): ${payloadShape(data)}`);
-      }
+      // Home connection only: log it, then mirror Kick-side deletes/bans into site chat.
+      handleKickModeration(event, data);
+    } else if (!onMessage && KICK_STREAM_HINTS.has(event)) {
+      // Home connection only: a relay's channel going live or off is not ours.
+      console.log(`[kick] ${event.slice(event.lastIndexOf('\\') + 1)} — checking now`);
+      noteHint('kick', KICK_STREAM_HINTS.get(event));
     } else if (wantMonetization && KICK_MONETIZATION_EVENTS.has(event)) {
       handleKickMonetization(event, data);
     } else if (wantMonetization && event) {

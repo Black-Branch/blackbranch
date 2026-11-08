@@ -9,7 +9,7 @@ const fixture = () => ({
   loaf: { n: 2, blockMs: 300, worst: [{ d: 200, b: 150, t: 5, s: [{ src: "/_next/static/chunks/a.js", fn: "f", inv: "IMG#emote-1.onload", d: 9, fsl: 1 }] }] },
   inp: { ms: 220, type: "pointerdown", target: "div.chat-row>span", inDelay: 5, proc: 100, pres: 115 },
   cls: 0.02, req: 40, bytes: { js: { n: 20, b: 600000, nb: 0 }, emote_7tv: { n: 300, b: 0, nb: 300 } },
-  sock: { reconnects: 1 },
+  sock: { reconnects: 5, opens: 2 },
   player: { src: "native", silent: true, vol: 0.5, mountedMs: 800, unseenMs: 100, silentUnseenMs: 100, foldedMs: 0,
     video: { w: 1920, h: 1080, fps: 59.9, decoded: 50000, dropped: 12, decodeMs: 2.1, freezes: 0, freezeMs: 0, bytes: 9e8, mode: "webrtc" } },
   decode: { type: "webrtc", supported: true, smooth: true, powerEfficient: true },
@@ -28,6 +28,16 @@ test("a good report normalises to a row", () => {
   assert.deepEqual(r.frames, { fps: 60, costMs: 0.3 });
   assert.deepEqual(r.anim, { running: 6, idle: 30 });
   assert.equal((r.decode as { powerEfficient: boolean }).powerEfficient, true);
+});
+
+test("socket counts: attempts and real connections are stored apart; an older page's report has no opens", () => {
+  const r = normalizeReport(fixture())!;
+  assert.equal(r.socketReconnects, 5);
+  assert.equal(r.socketOpens, 2);
+  const old = normalizeReport({ ...fixture(), sock: { reconnects: 3 } })!;
+  assert.equal(old.socketReconnects, 3);
+  assert.equal(old.socketOpens, null, "not reported is not zero — zero would read as never connected");
+  assert.equal(normalizeReport({ ...fixture(), sock: { reconnects: 1, opens: -4 } })!.socketOpens, 0);
 });
 
 test("rejects a bad uuid, a seq out of range, and non-reports", () => {

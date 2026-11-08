@@ -1,0 +1,1 @@
+{"kind":"youtube#videoListResponse","etag":"etag-upcoming","items":[{"kind":"youtube#video","etag":"etag-item","id":"abcdefghijk","snippet":{"liveBroadcastContent":"upcoming"},"liveStreamingDetails":{"scheduledStartTime":"2026-10-24T20:00:00Z"}}],"pageInfo":{"totalResults":1,"resultsPerPage":1}}

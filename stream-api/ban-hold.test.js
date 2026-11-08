@@ -13,6 +13,7 @@ const path = require('node:path');
 const { createChat } = require('./chat');
 const { createBanHold, PLATFORM_HOLD_MS } = require('./ban-hold');
 const { _resetIngestPause } = require('./ingest-pause');
+const { CANONICAL_STANDING } = require('./canonicalStanding.generated');
 
 const KICK_BOT = 'aaaaaaaaaaaa';   // a platform-only chatter's canonical id
 const LINKED = 'bbbbbbbbbbbb';     // the canonical of a site account's linked platform identity
@@ -128,21 +129,24 @@ test('a site ban holds every linked identity until it expires; a timeout ends on
   assert.equal(banHold.isHeld(LINKED), false, 'held past the timeout');
 });
 
-test('RESTART: the holds are rebuilt from site.bans and the bridge window of site.mod_log; an unban as the last action is not held', async () => {
+test('RESTART: the holds are rebuilt from site.bans and each canonical\'s standing inside the bridge window', async () => {
   const clock = Date.parse('2026-10-20T12:00:00Z');
   const { pool, state } = db();
   state.bans = [{ matrix_id: '@casey:site.test', expires_at: null }];
+  // The standing read's rows (which canonicals stand is the SQL's — ban-standing.db.test.js runs it).
   state.modLog = [
-    { target_id: KICK_BOT, action: 'ban', expires_at: null, created_at: new Date(clock - 60_000).toISOString() },
-    { target_id: 'cccccccccccc', action: 'unban', expires_at: null, created_at: new Date(clock - 30_000).toISOString() },
+    { target_id: KICK_BOT, expires_at: null, created_at: new Date(clock - 60_000).toISOString() },
+    { target_id: 'cccccccccccc', expires_at: new Date(clock + 60_000).toISOString(), created_at: new Date(clock - 30_000).toISOString() },
   ];
   // A fresh process: nothing pushed, everything from the database.
   const banHold = createBanHold({ pool, log: quiet, now: () => clock });
   await banHold.refresh();
   assert.equal(banHold.isHeld(LINKED), true, 'a site ban was lost across the restart');
   assert.equal(banHold.isHeld(KICK_BOT), true, 'a platform-only ban inside its bridge was lost across the restart');
-  assert.equal(banHold.isHeld('cccccccccccc'), false, 'an unbanned chatter was held');
-  assert.ok(state.queries.some((q) => /now\(\) - make_interval\(secs => \$1\)/.test(q)), 'the mod_log read is not bounded to the bridge window');
+  assert.equal(banHold.isHeld('cccccccccccc'), true, 'a running timeout was not held');
+  const standing = state.queries.find((q) => q.includes(CANONICAL_STANDING));
+  assert.ok(standing, 'the rebuild does not read the shared standing rule');
+  assert.match(standing, /HAVING max\(s\.created_at\) > now\(\) - make_interval\(secs => \$1\)/, 'the standing read is not bounded to the bridge window');
 });
 
 test('RETRY: a rebuild that read the database before an unban push does not put the hold back', async () => {
@@ -183,7 +187,7 @@ test('wiring: index.js builds one hold, registers POST /chat/ban, starts it, han
   const iStop = src.indexOf('await banHold.stop()');
   assert.ok(iStop > 0 && iStop < src.indexOf('await pool.end()'), 'the hold\'s rebuild is not stopped before the pool ends');
   const chatSrc = fs.readFileSync(path.join(__dirname, 'chat.js'), 'utf8');
-  assert.match(chatSrc, /banHold\.isHeld\(canonicalId\)/, 'POST /chat no longer asks the hold');
+  assert.match(chatSrc, /banHold\.isHeld\(canonicalId, platform, userId\)/, 'POST /chat no longer asks the hold');
   assert.match(chatSrc.slice(-120), /module\.exports = \{ createChat \};\s*$/, 'END anchor: chat.js read whole');
 });
 

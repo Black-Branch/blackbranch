@@ -17,7 +17,7 @@ test("row tints are classes, not Tailwind colours, so the switches can hide them
   const rowBg = msgSrc.slice(msgSrc.indexOf("const rowBg"), msgSrc.indexOf("const eventBgColor"));
   // Every applicable tint is added (not an either/or chain), so a switched-off
   // higher tint reveals the lower one instead of nothing.
-  assert.match(rowBg, /\[highlight && "chat-row-mention", !isEventRow && score > 0 && "chat-row-up", own && "chat-row-own"\]\.filter\(Boolean\)\.join\(" "\)/);
+  assert.match(rowBg, /\[highlight && "chat-row-mention", wordHighlight && "chat-row-word", !isEventRow && score > 0 && "chat-row-up", own && "chat-row-own"\]\.filter\(Boolean\)\.join\(" "\)/);
   assert.doesNotMatch(rowBg, /rgba\(240,180,100|rgba\(153,193,241/, "a tint is still a Tailwind class the switch cannot reach");
   // The reply line's "to you" colour follows the mention switch too.
   assert.doesNotMatch(msgSrc, /#f0b464/);

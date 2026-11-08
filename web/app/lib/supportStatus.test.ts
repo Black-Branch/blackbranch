@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { subscriptionStatusLine, giftPurchaseLine, giftReceivedLine } from "./supportStatus.ts";
+import { subscriptionStatusLine, giftPurchaseLine, giftReceivedLine, queuedGiftLine } from "./supportStatus.ts";
 
 const NOW = new Date("2026-09-14T12:00:00Z");
 // A fixed formatter so the assertions don't depend on the machine's locale.
@@ -93,6 +93,11 @@ test("a direct gift names the recipient, the length, and that it is active until
   assert.equal(giftPurchaseLine({ ...direct, months: 1 }, fmt), "1 month to cleo · active until 2026-12-13", "singular month");
 });
 
+test("a gift queued behind its recipient's subscription says queued, with no date (review R5)", () => {
+  const queued = { ...direct, months: 1, recipients: [{ name: "cleo", expiresAt: null, active: false, queued: true }] };
+  assert.equal(giftPurchaseLine(queued, fmt), "1 month to cleo · queued after their current subscription");
+});
+
 test("a direct gift that ran out says ended, with the date", () => {
   const ended = { ...direct, recipients: [{ name: "cleo", expiresAt: "2026-09-01T20:00:00Z", active: false }] };
   assert.equal(giftPurchaseLine(ended, fmt), "3 months to cleo · ended 2026-09-01");
@@ -165,4 +170,13 @@ test("a received gift names the giver (or Anonymous), the length, and until when
     giftReceivedLine({ from: null, months: 1, expiresAt: "2026-07-01T20:00:00Z", active: false }, fmt),
     "1 month from Anonymous · ended 2026-07-01"
   );
+});
+
+// A1-03 / P08 (k 2026-10-25): a gift to someone already paying monthly starts after their paid term,
+// and they are told when.
+test("a gift queued behind the viewer's subscription says when it starts", () => {
+  assert.equal(queuedGiftLine({ ...base, tier: "supporter", subRenewsAt: "2026-10-27T05:50:33Z", giftStartsAt: "2026-10-27T05:50:33Z" }, fmt),
+    "Your gift starts on 2026-10-27, after your current subscription.");
+  assert.equal(queuedGiftLine({ ...base, giftStartsAt: null }, fmt), null);
+  assert.equal(queuedGiftLine({ ...base }, fmt), null, "an older /api/me without the field says nothing");
 });

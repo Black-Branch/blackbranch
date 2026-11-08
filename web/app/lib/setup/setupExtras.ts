@@ -11,6 +11,7 @@
 //   FIELD_FORMATS   the shape of every value a page takes, checked before it is saved.
 //
 // Every key named here is a settings key (setupExtras.test.ts holds each to the schema).
+import { DOCTOR } from "../doctor.generated.mjs";
 
 export type RawStep = {
   id: string; title: string; need: "required" | "optional"; explain: string;
@@ -128,13 +129,13 @@ export const PAGE_DOCS: Record<string, string> = {
   youtube: "platforms/youtube", stripe: "platforms/stripe", paypal: "platforms/paypal",
   twitch: "platforms/twitch", kick: "platforms/kick", streamplace: "platforms/streamplace",
   kofi: "platforms/donations", patreon: "platforms/donations", streamlabs: "platforms/donations",
-  voice: "features/alerts-and-tts",
+  voice: "features/alerts-and-tts", discord: "platforms/discord",
 };
 /** The setup pages' own guide, for every page without one of its own. */
 export const SETUP_DOCS = "install/the-setup-wizard";
-/** A guide's address. */
+/** A guide's address (the docs' base is the project's one copy, the doctor list's HELP). */
 export function docsUrl(slug: string): string {
-  return `https://blackbranch.app/docs/${slug}/`;
+  return `${DOCTOR.HELP.docs}${slug}/`;
 }
 
 /** Steps only the setup pages show, appended to a list (after `after`, else at the end). None

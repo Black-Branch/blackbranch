@@ -39,17 +39,17 @@ const thumbsUp = ev("$r3", "@casey:site.test", {
 
 test("a bridged shortcode reaction carries its image", () => {
   const agg = aggregateReactions([bridged], "@k:site.test").get("$msg")!;
-  assert.deepEqual(agg, [{ key: ":OMEGALUL:", count: 1, mine: null, mxc: MXC }]);
+  assert.deepEqual(agg, [{ key: ":OMEGALUL:", count: 1, mine: null, mxc: MXC, senders: ["@discord_100000000000000001:site.test"] }]);
 });
 
 test("the site user's mxc-keyed reaction folds into the same pile and is 'mine'", () => {
   const agg = aggregateReactions([bridged, mineViaMxc], "@k:site.test").get("$msg")!;
-  assert.deepEqual(agg, [{ key: ":OMEGALUL:", count: 2, mine: "$r2", mxc: MXC }]);
+  assert.deepEqual(agg, [{ key: ":OMEGALUL:", count: 2, mine: "$r2", mxc: MXC, senders: ["@discord_100000000000000001:site.test", "@k:site.test"] }]);
 });
 
 test("a plain unicode reaction is untouched and has no image", () => {
   const agg = aggregateReactions([thumbsUp], "@k:site.test").get("$msg")!;
-  assert.deepEqual(agg, [{ key: "👍", count: 1, mine: null, mxc: null }]);
+  assert.deepEqual(agg, [{ key: "👍", count: 1, mine: null, mxc: null, senders: ["@casey:site.test"] }]);
 });
 
 test("an mxc key with no shortcode still groups by the mxc and keeps the image", () => {
@@ -57,7 +57,32 @@ test("an mxc key with no shortcode still groups by the mxc and keeps the image",
     "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: MXC },
   });
   const agg = aggregateReactions([bare], "@k:site.test").get("$msg")!;
-  assert.deepEqual(agg, [{ key: MXC, count: 1, mine: "$r4", mxc: MXC }]);
+  assert.deepEqual(agg, [{ key: MXC, count: 1, mine: "$r4", mxc: MXC, senders: ["@k:site.test"] }]);
+});
+
+test("senders per key", () => {
+  // Who reacted, per pile, in the order they reacted — the who-reacted list and the pill's title.
+  const up2 = ev("$r6", "@dana:site.test", { "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" } });
+  const heart = ev("$r7", "@k:site.test", { "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "❤️" } });
+  const agg = aggregateReactions([thumbsUp, heart, up2], "@k:site.test").get("$msg")!;
+  assert.deepEqual(agg.map((r) => [r.key, r.senders]), [
+    ["👍", ["@casey:site.test", "@dana:site.test"]],
+    ["❤️", ["@k:site.test"]],
+  ]);
+});
+
+test("both spellings fold, both senders kept", () => {
+  // The bridged ":NAME:" reaction and the site user's mxc-keyed one are one pile — and the pile
+  // names both people, not only the first spelling's.
+  const agg = aggregateReactions([bridged, mineViaMxc], "@k:site.test").get("$msg")!;
+  assert.equal(agg.length, 1);
+  assert.deepEqual(agg[0]!.senders, ["@discord_100000000000000001:site.test", "@k:site.test"]);
+});
+
+test("a redacted reaction drops its sender", () => {
+  const gone = ev("$r8", "@dana:site.test", { "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" } }, true);
+  const agg = aggregateReactions([thumbsUp, gone], "@k:site.test").get("$msg")!;
+  assert.deepEqual(agg[0]!.senders, ["@casey:site.test"]);
 });
 
 test("a redacted reaction does not count", () => {

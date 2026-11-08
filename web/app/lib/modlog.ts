@@ -1,6 +1,6 @@
 import pool from "@/lib/db";
 
-type ModLogEntry = {
+export type ModLogEntry = {
   // No DB CHECK backs this column — the union IS the contract, so anything
   // added here must also be understood by the mod-log readers.
   action:
@@ -55,7 +55,23 @@ type ModLogEntry = {
     // The mod role granted or removed (/mod, /unmod, the user card, the Admin Panel's
     // moderator list, or a permanent ban of a mod — reason "banned"). The newest of the two
     // per account is what the owner's client reads to take community room powers back.
-    | "mod_granted" | "mod_revoked";
+    | "mod_granted" | "mod_revoked"
+    // The Staff role (site.users.is_staff) given or taken on the Admin Panel's Staff list.
+    | "staff_granted" | "staff_revoked"
+    // The admin role given or taken (Admin Panel › Moderators › Admins, or `blackbranch user admin`
+    // on the server, performed_by "blackbranch"). Never the last admin (adminRole.ts).
+    | "admin_granted" | "admin_revoked"
+    // An installed plugin's runtime switch moved by a mod (a bot paused or resumed). Site-wide:
+    // target "site"; the plugin, the switch and its new value ride in the reason, written by the
+    // plugin's own route — core never names a plugin.
+    | "plugin_switch_set"
+    // Two chat identities folded into one (Identity links): target = the survivor; the merged-away
+    // identity (gone after the merge) rides in the reason. A report resolved: target = who it was
+    // about. A held line released into chat: target = its sender. Rows built by modlogActions.ts.
+    | "identity_merged" | "report_resolved" | "held_released"
+    // A ban's "Delete message history" (banHistory.ts): target = the person; the window and the
+    // community and site-chat counts ride in the reason ("1h · 3 community · 2 site chat").
+    | "history_deleted";
   target: string;
   by: string;
   durationMinutes?: number | null;

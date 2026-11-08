@@ -73,3 +73,14 @@ export function decideWatchdog({
   if (next >= stallTicks) return { action: 'rebuild', stallCount: 0, reason };
   return { action: 'count', stallCount: next, reason };
 }
+
+/**
+ * The journal line for one counted strike, built from decideWatchdog's own result so the reason
+ * and strike number cannot be read off some other decision (0133 review: they printed `undefined`).
+ * @param {string} tag
+ * @param {{ reason: string|null, stallCount: number }} wd  decideWatchdog's result
+ * @param {number} deadS  seconds without a successful poll
+ */
+export function stallStrikeLine(tag, wd, deadS, stallTicks = STALL_TICKS) {
+  return `[${tag}] api poller looks stalled (${wd.reason}, ${deadS}s) — strike ${wd.stallCount}/${stallTicks}`;
+}

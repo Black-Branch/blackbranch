@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { stripComments } from "./testSource.ts";
 import {
   serverAllowed, serverNameOf, normalizeServerName, federatedPolicyVersion, policyGatedSession,
-  federatedServerAllowed, FEDERATED_SIGNIN_REFUSED, type FederatedPolicy,
+  federatedServerAllowed, federatedEntryRefusal, FEDERATED_SIGNIN_REFUSED, OWN_SERVER_SIGN_IN, type FederatedPolicy,
 } from "./federatedSignInSwitch.ts";
 import { completeFederatedCallback, signFedState, type FedState, type Fetcher } from "./federatedSignIn.ts";
 import { sessionFromToken } from "./siteSession.ts";
@@ -148,14 +148,18 @@ test("off refuses at discover and initiate, on the server asked for, before anyt
   assert.match(discover, /\}, \{ headers: \{ "Cache-Control": "no-store" \} \}\);\n\}\n$/, "END of discover not read");
   const d = stripComments(discover);
   assert.match(d, /const serverName = normalizeServerName\(match\[1\]\);/);
-  assert.match(d, /if \(!federatedServerAllowed\(serverName\)\) return Response\.json\(\{ error: FEDERATED_SIGNIN_REFUSED \}, \{ status: 403 \}\);/);
-  assert.ok(d.indexOf("federatedServerAllowed(serverName)") < d.indexOf("safeFetch("), "checked before the first outbound request");
+  const REFUSE = /const refusal = federatedSignInRefusal\(serverName\);\s*if \(refusal\) return Response\.json\(\{ error: refusal \}, \{ status: refusal === OWN_SERVER_SIGN_IN \? 400 : 403 \}\);/;
+  assert.match(d, REFUSE);
+  assert.ok(d.indexOf("federatedSignInRefusal(serverName)") < d.indexOf("safeFetch("), "checked before the first outbound request");
 
   const initiate = read("app", "api", "auth", "matrix-initiate", "route.ts");
   assert.match(initiate, /return Response\.json\(\{ authorizationUrl: url\.toString\(\) \}\);\n\}\n$/, "END of initiate not read");
   const i = stripComments(initiate);
-  assert.match(i, /const serverName = normalizeServerName\(body\.serverName\);\s*if \(!serverName\) return Response\.json\(\{ error: "missing_fields" \}, \{ status: 400 \}\);\s*if \(!federatedServerAllowed\(serverName\)\) return Response\.json\(\{ error: FEDERATED_SIGNIN_REFUSED \}, \{ status: 403 \}\);/);
-  assert.ok(i.indexOf("federatedServerAllowed(serverName)") < i.indexOf("safeFetch("), "checked before registration");
+  assert.match(i, /const serverName = normalizeServerName\(body\.serverName\);\s*if \(!serverName\) return Response\.json\(\{ error: "missing_fields" \}, \{ status: 400 \}\);/);
+  assert.match(i, REFUSE);
+  assert.ok(i.indexOf("federatedSignInRefusal(serverName)") < i.indexOf("safeFetch("), "checked before registration");
+  // The entry check is the policy plus the own-server refusal: off still refuses an outside server.
+  assert.equal(federatedEntryRefusal(policy(), "gadget.test"), FEDERATED_SIGNIN_REFUSED);
   assert.match(i, /signFedState\(\{[^}]*serverName \}, secret\)/, "the server asked for is signed into the state cookie");
   assert.equal(FEDERATED_SIGNIN_REFUSED, "federated_signin_disabled");
 });
@@ -166,6 +170,7 @@ const HS = "https://matrix.gadget.test";
 const STATE: FedState = {
   state: "st4te", codeVerifier: "verifier", tokenEndpoint: "https://auth.gadget.test/oauth2/token",
   homeserver: HS, clientId: "client-1", deviceId: "DEVICEABCDEF", serverName: "gadget.test",
+  registrationEndpoint: "https://auth.gadget.test/oauth2/registration",
 };
 function stub(userId: string): { fetch: Fetcher; calls: string[] } {
   const calls: string[] = [];
@@ -189,7 +194,7 @@ function stub(userId: string): { fetch: Fetcher; calls: string[] } {
 }
 const callback = (fetch: Fetcher, serverAllowedNow: (s: string) => boolean, state: FedState = STATE) => completeFederatedCallback(
   { code: "c0de", state: state.state, cookie: signFedState(state, SECRET, T0) },
-  { fetch, secret: SECRET, now: () => T0 + 1000, redirectUri: "https://site.test/api/auth/matrix-callback", log: { error: () => {} }, serverAllowed: serverAllowedNow },
+  { fetch, secret: SECRET, now: () => T0 + 1000, redirectUri: "https://site.test/api/auth/matrix-callback", log: { error: () => {} }, serverAllowed: serverAllowedNow, isOwnServer: (s) => s === OWN },
 );
 
 test("off refuses at the callback — the authenticated account's server, under the policy as it is now", async () => {
@@ -221,8 +226,44 @@ test("a login cannot start on one server and finish as an account on another", a
 
 test("the callback route hands the policy to the callback, and the callback checks it before any write", () => {
   const route = stripComments(read("app", "api", "auth", "matrix-callback", "route.ts"));
-  assert.match(route, /serverAllowed: federatedServerAllowed \}/);
+  assert.match(route, /serverAllowed: federatedServerAllowed, isOwnServer \}/);
   assert.ok(route.indexOf("completeFederatedCallback(") < route.indexOf("INSERT INTO site.users"));
+});
+
+// ─── This install's own server, typed into the "another server" box (A2-03) ──────────────────
+// The own server always passes serverAllowed (the site's own sign-in and its sessions rely on that),
+// so the three federated steps ask a separate question first: an own-server account signed in as
+// an outside one gets a public client chain on our own MAS that fails at its first refresh.
+
+test("the federated entry check: our own server is refused with the 'use Sign in' code, whatever the policy", () => {
+  for (const mode of ["off", "on", "allowlist"] as const) {
+    const p = policy({ mode, allow: [OWN] });
+    assert.equal(federatedEntryRefusal(p, OWN), OWN_SERVER_SIGN_IN, mode);
+    assert.equal(federatedEntryRefusal(p, "SITE.test"), OWN_SERVER_SIGN_IN, `${mode}: names compare normalised`);
+  }
+  assert.equal(federatedEntryRefusal(policy({ mode: "on" }), "gadget.test"), null);
+  assert.equal(federatedEntryRefusal(policy(), "gadget.test"), FEDERATED_SIGNIN_REFUSED);
+  assert.equal(federatedEntryRefusal(policy({ mode: "on" }), "evil-site.test"), null, "a name that only ends in ours is another server");
+  assert.equal(serverAllowed(policy(), OWN), true, "the session checks still admit our own server");
+});
+
+test("discover and initiate ask the entry check before any outbound request", () => {
+  for (const r of ["matrix-discover", "matrix-initiate"]) {
+    const raw = read("app", "api", "auth", r, "route.ts");
+    const src = stripComments(raw);
+    const check = src.indexOf("federatedSignInRefusal(serverName)");
+    assert.ok(check > 0, `${r}: the entry check is missing`);
+    assert.ok(check < src.indexOf("safeFetch("), `${r}: the check must come before the first request`);
+    assert.doesNotMatch(src, /if \(!federatedServerAllowed\(serverName\)\)/, `${r}: the bare policy check would wave our own server through`);
+    assert.match(src, /\}\s*$/, `${r}: vacuity — the END of the route was read`);
+  }
+});
+
+test("the sign-in page says what to do instead, for all three steps", () => {
+  const form = stripComments(read("app", "(main)", "auth", "signin", "SignInForm.tsx"));
+  assert.match(form, /\[OWN_SERVER_SIGN_IN\]: OWN_SERVER_LINE/);
+  assert.equal((form.match(/OWN_SERVER_SIGN_IN/g) ?? []).length >= 3, true, "callback, discover and initiate answers are all mapped");
+  assert.match(read("app", "(main)", "auth", "signin", "SignInForm.tsx"), /const OWN_SERVER_LINE = "That is this server — sign in with the main button\.";/);
 });
 
 // ─── Sessions already signed in ───────────────────────────────────────────────
@@ -265,11 +306,20 @@ test("refresh: a Matrix session load is refused before it starts and after it se
 });
 
 test("getMatrixSession runs every load — the in-flight refresh map included — through the gate", () => {
+  // matrixSession.ts hands the gate to the core's getter (executed in matrixSessionCore.test.ts);
+  // the getter puts its in-flight map INSIDE the gate's load.
   const raw = read("app", "lib", "matrixSession.ts");
   assert.match(raw, /export async function destroyMatrixSession/, "END of matrixSession.ts read");
   const src = stripComments(raw);
-  assert.match(src, /return policyGatedSession\(matrixId, \(\) => \{\s*const existing = inFlight\.get\(sessionId\);\s*if \(existing\) return existing;/);
-  assert.match(src, /if \(session\?\.authState === "revoked"\) throw new RevokedSessionError\(\);/, "a refused session is not answered as revoked");
+  assert.match(src, /createSessionGetter<MatrixSession>\(\{[\s\S]*?gate: \(matrixId, load\) => policyGatedSession\(matrixId, load\),/);
+  const coreRaw = read("app", "lib", "matrixSessionCore.ts");
+  assert.match(coreRaw, /export function createSessionGetter<T>/, "vacuity: the core was read");
+  const core = stripComments(coreRaw);
+  assert.match(core, /return deps\.gate\(matrixId, \(\) => \{\s*const existing = inFlight\.get\(sessionId\);\s*if \(existing\) return existing;/);
+  // A refused server's session is signed out WITHOUT being ended: only "deleted" (and a dead row,
+  // as signed out) are mapped to an ended session; "refused" falls through to null.
+  assert.match(core, /if \(session\?\.authState === "deleted"\) \{\s*deps\.log\("[^"]*"\);\s*throw new RevokedSessionError\(\);\s*\}\s*if \(session\?\.authState === "revoked"\) throw new SignedOutSessionError\("no_row"\);/);
+  for (const s of [src, core]) assert.doesNotMatch(s, /authState === "refused"/, "a refused session is not answered as ended");
 });
 
 test("session caches compare the policy version: any change to the policy is a miss", () => {

@@ -6,6 +6,7 @@ import { decryptAttachment, type EncryptedFile } from "@/app/lib/matrixEncryptAt
 import { Download } from "@phosphor-icons/react/dist/ssr";
 import { mxcToScaled, mxcToDownload, onScaledError } from "@/app/lib/matrixMedia";
 import { fitMediaBox, MEDIA_BOX_W } from "@/app/lib/mediaFit";
+import { attachmentName } from "@/app/lib/mediaInfo";
 import { blobMediaType } from "@/app/lib/mediaHeaders";
 import { videoPlaybackMode } from "@/app/lib/videoPlayback";
 import { pushDismissLayer } from "@/app/lib/chrome/dismissStack";
@@ -179,19 +180,29 @@ export function MatrixImage({ content }: { content: Record<string, unknown> }) {
   const displayUrl = enc ? decUrl : isGif ? mxcToDownload(mxcUrl) : mxcToScaled(mxcUrl);
   const fullUrl = enc ? decUrl : mxcToDownload(mxcUrl) ?? displayUrl;
 
-  if (enc && !decUrl) return <span className="text-muted italic mt-1 inline-block">🔒 decrypting image…</span>;
-  if (!displayUrl) return <span className="text-secondary italic">[image]</span>;
   // The event's info gives the source size; the box is Discord's (fit inside
   // 550×350, never upscale) and is reserved via aspect-ratio before the bitmap
   // loads, so nothing shifts. Without usable dims, fall back to CSS caps.
   const fit = fitMediaBox(info?.w, info?.h);
+  // An encrypted picture holds that same box while its blob is fetched and decrypted, so the
+  // decrypt swaps what is in the box, never the row's height (client polish Task 11: a one-line
+  // placeholder made every line above it jump by the picture's height).
+  if (enc && !decUrl) {
+    return fit ? (
+      <span data-image-pending="" className="mt-1 flex items-center justify-center rounded-lg bg-surface-2 text-muted italic"
+        style={{ width: fit.width, aspectRatio: fit.aspect, maxWidth: "100%" }}>
+        🔒 decrypting image…
+      </span>
+    ) : <span data-image-pending="" className="text-muted italic mt-1 inline-block">🔒 decrypting image…</span>;
+  }
+  if (!displayUrl) return <span className="text-secondary italic">[image]</span>;
   const w = Number(info?.w) || undefined;
   const h = Number(info?.h) || undefined;
   return (
     <>
       <img
         src={displayUrl}
-        alt={(content.body as string) ?? "image"}
+        alt={attachmentName(content, "image")}
         width={w}
         height={h}
         className="rounded-lg mt-1 cursor-pointer hover:opacity-90 transition-opacity img-shadow-chat"
@@ -204,7 +215,7 @@ export function MatrixImage({ content }: { content: Record<string, unknown> }) {
         onError={(e) => onScaledError(e.currentTarget, mxcUrl)}
       />
       {open && fullUrl && (
-        <Lightbox src={fullUrl} alt={(content.body as string) ?? "image"} downloadName={content.body as string | undefined} onClose={() => setOpen(false)} />
+        <Lightbox src={fullUrl} alt={attachmentName(content, "image")} downloadName={attachmentName(content, "image")} onClose={() => setOpen(false)} />
       )}
     </>
   );
@@ -217,7 +228,7 @@ export function MatrixFile({ content }: { content: Record<string, unknown> }) {
   const info = content.info as Record<string, unknown> | undefined;
   const enc = content.file as EncryptedFile | undefined;
   const mxcUrl = (content.url ?? enc?.url) as string | undefined;
-  const name = (content.body as string) ?? "file";
+  const name = attachmentName(content, "file");
   const size = typeof info?.size === "number" ? info.size : undefined;
   const sizeLabel = size ? ` · ${size < 1024 * 1024 ? Math.max(1, Math.round(size / 1024)) + " KB" : (size / (1024 * 1024)).toFixed(1) + " MB"}` : "";
 
@@ -278,7 +289,7 @@ export function MatrixVideo({ content }: { content: Record<string, unknown> }) {
   const mxcUrl = (content.url ?? enc?.url) as string | undefined;
   const decUrl = useDecryptedUrl(enc, info?.mimetype as string | undefined);
   const src = enc ? decUrl : mxcToDownload(mxcUrl);
-  const name = (content.body as string) ?? "video";
+  const name = attachmentName(content, "video");
   const mode = videoPlaybackMode(info, Boolean(enc));
   if (enc && !decUrl) return <span className="text-muted italic mt-1 inline-block">🔒 decrypting video…</span>;
   if (!src) return <span className="text-secondary italic">[video]</span>;
@@ -358,7 +369,7 @@ export function MatrixAudio({ content }: { content: Record<string, unknown> }) {
   const mxcUrl = (content.url ?? enc?.url) as string | undefined;
   const decUrl = useDecryptedUrl(enc, info?.mimetype as string | undefined);
   const src = enc ? decUrl : mxcToDownload(mxcUrl);
-  const name = (content.body as string) ?? "audio";
+  const name = attachmentName(content, "audio");
   if (enc && !decUrl) return <span className="text-muted italic mt-1 inline-block">🔒 decrypting audio…</span>;
   if (!src) return <span className="text-secondary italic">[audio]</span>;
   return (

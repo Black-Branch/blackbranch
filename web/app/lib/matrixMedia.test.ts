@@ -47,7 +47,21 @@ test("mxcToScaled: rejects non-mxc and malformed input like its siblings", () =>
   assert.equal(mxcToScaled("mxc://only-server"), null);
   // The siblings' contract, pinned alongside so a refactor keeps all three aligned.
   assert.equal(mxcToDownload("mxc://a/b"), "/api/matrix/media/download/a/b");
-  assert.equal(mxcToHttp("mxc://a/b", 40), "/api/matrix/media/thumbnail/a/b?width=40&height=40&method=crop");
+  assert.equal(mxcToHttp("mxc://a/b", 40), "/api/matrix/media/thumbnail/a/b?width=96&height=96&method=crop");
+});
+
+// Ticket #194 (pictures load slowly): Synapse serves a crop thumbnail only at its configured sizes
+// (32 and 96 by default; measured on the pair: every width from 33 to 256 returned the same 96×96
+// bytes), but each surface asked with its own width (36, 40, 44, 56, 64, 80, 88, 96…), so one
+// person's picture was a separate proxied request per surface. Asking at the size Synapse serves
+// makes every surface share ONE cached response.
+test("mxcToHttp: one picture is one URL at Synapse's own crop sizes, whatever box asks for it", () => {
+  const at = (n: number) => mxcToHttp("mxc://a/b", n);
+  for (const n of [33, 36, 40, 44, 56, 64, 80, 88, 96]) assert.equal(at(n), at(96), `${n}`);
+  assert.equal(at(96), "/api/matrix/media/thumbnail/a/b?width=96&height=96&method=crop");
+  for (const n of [1, 24, 32]) assert.equal(at(n), "/api/matrix/media/thumbnail/a/b?width=32&height=32&method=crop", `${n}`);
+  assert.equal(at(256), "/api/matrix/media/thumbnail/a/b?width=256&height=256&method=crop",
+    "past 96 the request is kept: a server that makes bigger thumbnails serves the sharper one");
 });
 
 // R2-15: a stored mxc is user-influenced (a federated homeserver's upload answer, a profile's

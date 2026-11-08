@@ -38,7 +38,10 @@ const route = stripComments(readFileSync(join(process.cwd(), "app", "api", "chat
 test("the route builds every message row's ids through historyIds, and a card's stored canonical only for a mod", () => {
   assert.match(route, /\.\.\.historyIds\(r, isMod, publicIdFor\),/);
   assert.doesNotMatch(route, /canonicalId: r\.canonical_id/, "a row copies the canonical straight out");
-  assert.match(route, /\.\.\.\(isMod && typeof storedCanonical === "string" \? \{ canonicalId: storedCanonical \} : \{\}\)/);
+  // A card's fields (its stored canonical for a mod only) come from historyCardFields (eventCardName.ts).
+  assert.match(route, /\.\.\.historyCardFields\(r\.event_kind, card, r, isMod\),/);
+  const cards = stripComments(readFileSync(join(process.cwd(), "app", "lib", "eventCardName.ts"), "utf8"));
+  assert.match(cards, /\.\.\.\(isMod && typeof storedCanonical === "string" \? \{ canonicalId: storedCanonical \} : \{\}\)/);
   assert.match(route, /AND ol\.platform NOT IN \$\{NATIVE_SQL\} AND ol\.platform <> combined\.platform/,
     "a platform row's avatar is drawn only when the person has no other platform");
   assert.match(route, /return \{ messages: messages as \(ChatMsg & \{ cts: string \}\)\[\], hasMore: rows\.length >= limit \};\s*\}\s*$/,

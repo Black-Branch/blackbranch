@@ -177,16 +177,18 @@ async function deliver({ msg, raw, clean, words, isBot, isCommand, opts }) {
   // gate on the enrichment path below. Bot '!'-messages fall through to the isBot
   // return below (delivered, not dispatched, not scored).
   if (isCommand && !isBot) {
-    if (COMMANDS_ENABLED && opts.reply) {
+    if (COMMANDS_ENABLED) {
       try {
         const cmdMsg = { ...msg, canonicalId: logged.canonicalId };
         // Mod commands are not handled in platform chat — see the note at the
-        // foot of lib/commands.js. Only the PUBLIC ones are.
+        // foot of lib/commands.js. Only the PUBLIC ones are. They run on every platform
+        // (`!she` sets the pronouns); the answer is posted only where the platform gave a
+        // sender (Twitch).
         const reply = await handleKarmaCommand(cmdMsg)
           || await handlePronounCommand(cmdMsg)
           || handleDonoCommand(cmdMsg);
-        console.log(`[cmd-debug] ${logWho(msg)} cmd=${commandWord(raw)} mod=${!!msg.isMod} bc=${!!msg.isBroadcaster} -> ${replyPreview(reply)}`);
-        if (reply) await opts.reply(reply);
+        console.log(`[cmd-debug] ${logWho(msg)} cmd=${commandWord(raw)} mod=${!!msg.isMod} bc=${!!msg.isBroadcaster} reply=${!!opts.reply} -> ${replyPreview(reply)}`);
+        if (reply && opts.reply) await opts.reply(reply);
       } catch (err) {
         console.warn('[pipeline] command reply failed:', err.message);
       }

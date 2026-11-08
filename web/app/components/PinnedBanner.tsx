@@ -165,7 +165,7 @@ export default function PinnedBanner({
               <span
                 ref={nameRef}
                 className={nameAnimClass || undefined}
-                style={usernameStyleCSS(pin.usernameStyle, pin.usernameColor ?? nameColor)}
+                style={usernameStyleCSS(pin.usernameStyle, pin.usernameColor ?? nameColor, pin.username)}
               >
                 {pin.username}
               </span>

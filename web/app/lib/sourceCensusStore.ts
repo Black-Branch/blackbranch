@@ -56,14 +56,14 @@ export async function recordAndMaybeFlush(params: URLSearchParams, now: number =
     const c = countSources(census, now);
     await pool.query(
       `INSERT INTO site.player_source_snapshots
-         (native, streamplace, youtube, twitch, community, radio, folded)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (native, streamplace, youtube, twitch, kick, community, radio, folded)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       // c.none becomes the `folded` column, but the bucket also holds an
       // active VOD replay: sourceFromState (app/lib/playerSource.ts) returns
       // null on the Replay tab and StreamView maps that null to "none" the
       // same as an actually-folded player (see migrate-v117.sql). Despite the
       // column name, this is "folded OR watching a VOD", not only "folded".
-      [c.native, c.streamplace, c.youtube, c.twitch, c.community, c.radio, c.none],
+      [c.native, c.streamplace, c.youtube, c.twitch, c.kick, c.community, c.radio, c.none],
     );
   } finally {
     flushGate.finish();

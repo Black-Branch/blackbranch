@@ -101,9 +101,10 @@ Restores, rollback, password resets and moving to a bigger server: [docs/public/
 
 ## Known limits
 
-The site sends no email yet; YouTube chat is read, not posted to; the Discord bridge comes later; and
-neither front door (tunnel or direct) has been rehearsed end to end on a fresh public server by the
-project. The full list: [install — known limits](docs/public/install.md#known-limits-of-this-preview).
+Mail is optional: with a mail server set (Admin Panel → Site → Site, card Mail) the sign-in page
+offers "Forgot password?"; without one, a forgotten password is reset on the server. YouTube chat is
+read, not posted to; the Discord bridge comes later; and neither front door (tunnel or direct) has
+been rehearsed end to end on a fresh public server by the project. The full list: [install — known limits](docs/public/install.md#known-limits-of-this-preview).
 
 ## Getting help
 

@@ -76,7 +76,7 @@ test("schema entries are well-formed (vacuity floor on the key count)", () => {
   for (const e of INSTANCE_KEYS) {
     assert.ok(!seen.has(e.key), `duplicate key ${e.key}`);
     seen.add(e.key);
-    assert.ok(["string", "list", "origin", "wsOrigin", "url", "serverName", "matrixId", "localpartTemplate", "enum", "secret", "backupRepository",
+    assert.ok(["string", "list", "origin", "wsOrigin", "url", "serverName", "matrixId", "localpart", "localpartTemplate", "enum", "secret", "backupRepository",
       "bool", "number", "aiRoute", "aiTasks", "aiConnections", "memoryState", "setupState"].includes(e.kind), `${e.key}: kind`);
     assert.ok(["install", "instance", "secret"].includes(e.tier), `${e.key}: tier`);
     assert.equal(e.secret, e.tier === "secret", `${e.key}: secret flag and tier disagree`);
@@ -101,7 +101,9 @@ test("schema entries are well-formed (vacuity floor on the key count)", () => {
       (e.kind === "list" && e.productDefault === true && Array.isArray(e.default) && e.default.every((x) => /^[a-z][a-z-]{0,30}$/.test(x))) ||
       // A product WORD (e.g. the currency's neutral "point" / "points" / "pts", "Karma"): declared
       // as such, plain letters and spaces only — an owner's name, domain or id cannot pass it.
-      (e.kind === "string" && e.productDefault === true && typeof e.default === "string" && /^[A-Za-z][A-Za-z ]{0,30}$/.test(e.default));
+      (e.kind === "string" && e.productDefault === true && typeof e.default === "string" && /^[A-Za-z][A-Za-z ]{0,30}$/.test(e.default)) ||
+      // A product user name (the community service account's): lower-case letters only.
+      (e.kind === "localpart" && e.productDefault === true && typeof e.default === "string" && /^[a-z]{1,30}$/.test(e.default));
     assert.ok(neutral, `${e.key}: non-neutral default`);
     if (e.required) assert.equal(e.tier, "install", `${e.key}: only install-tier keys are required at boot`);
     // One env name, one key — otherwise two keys would fight over one variable.
@@ -176,10 +178,24 @@ test("Matrix kinds: url as typed, serverName lower-cased, localpartTemplate shap
   assert.equal(parseInstanceValue(base, "https://matrix.example.tv/").value, "https://matrix.example.tv", "an origin, trailing slash dropped");
   assert.equal(parseInstanceValue(base, "https://matrix.example.tv/_matrix").ok, false);
   const tpl = entry("discordBridge.usernameTemplate");
-  assert.equal(parseInstanceValue(tpl, "discord_{{.}}").ok, true);
-  for (const bad of ["discord_", "{{.}}", "{{.}}_{{.}}", "Discord_{{.}}", "dis cord_{{.}}"]) {
+  assert.equal(parseInstanceValue(tpl, "discord_{{.}}").ok, true, "mautrix-discord: the numeric Discord id");
+  assert.equal(parseInstanceValue(tpl, "_ooye_{{.Username}}").ok, true, "Out Of Your Element: the cleaned Discord name");
+  for (const bad of ["discord_", "{{.}}", "{{.}}_{{.}}", "Discord_{{.}}", "dis cord_{{.}}",
+    "_ooye_", "{{.Username}}", "_ooye_{{.Name}}", "a{{.}}b{{.Username}}", "_ooye_{{.Username}}{{.Username}}"]) {
     assert.equal(parseInstanceValue(tpl, bad).ok, false, bad);
   }
+  // The community service account's name: one Matrix user name, the product's own by default.
+  const svc = entry("community.serviceLocalpart");
+  assert.equal(svc.kind, "localpart"); assert.equal(svc.tier, "install");
+  assert.deepEqual(resolveInstanceValue(svc, {}, null), { value: "blackbranch", source: "default", envName: null, error: null });
+  assert.equal(resolveInstanceValue(svc, { COMMUNITY_LOCALPART: "community.bot" }, null).value, "community.bot");
+  for (const bad of ["Blackbranch", "a:b", "@blackbranch", ".*", "a b", "x".repeat(65)]) {
+    assert.equal(parseInstanceValue(svc, bad).ok, false, bad);
+  }
+  const keeper = entry("community.reconciler");
+  assert.equal(keeper.kind, "bool"); assert.equal(keeper.tier, "install"); assert.equal(keeper.default, false);
+  assert.equal(resolveInstanceValue(keeper, {}, null).value, false);
+  assert.equal(resolveInstanceValue(keeper, { COMMUNITY_RECONCILER: "true" }, null).value, true);
   // The client secret is a credential, never an install value.
   assert.equal(entry("matrix.oauth.clientSecret").tier, "secret");
   assert.deepEqual(entry("matrix.oauth.clientSecret").env, ["MATRIX_OAUTH_CLIENT_SECRET", "MAS_CLIENT_SECRET"]);
@@ -253,6 +269,11 @@ test("the setup lists are well-formed, and a bad shape fails check:instance-sche
     }
     const core = [{ ...SETUP_CORE[0], release: "now", steps: [] }];
     assert.equal(main(["--check", "stream-api"], { core }), 1, "a core list released now with no steps");
+    // How a list is turned on, when it is not a setup choice: two lines of words, nothing else.
+    for (const [what, turnOn] of [["a string", "on"], ["no words", { short: "on the server", words: "" }], ["an extra field", { short: "x", words: "y", when: "z" }], ["a line break", { short: "a\nb", words: "y" }]]) {
+      const bad = SETUP_CORE.map((c, i) => (i === 0 ? { ...c, turnOn } : c));
+      assert.ok(setupProblems({ modules: MODULES, core: bad, keys: INSTANCE_KEYS }).some((l) => /turnOn/.test(l)), `turnOn as ${what}: no problem reported`);
+    }
     // A step's Test must check one of its own fields.
     assert.equal(main(["--check", "web"], { modules: withStep({ test: "elevenlabs.apiKey" }) }), 1, "a test of a key the step does not fill");
   } finally { console.error = quiet; }
@@ -260,7 +281,7 @@ test("the setup lists are well-formed, and a bad shape fails check:instance-sche
 
 test("the platform and payment lists — every product list released, paste values only from this install's addresses", () => {
   const ids = SETUP_CORE.map((c) => c.id);
-  assert.deepEqual(ids, ["twitch", "kick", "streamplace", "donations", "voice"]);
+  assert.deepEqual(ids, ["twitch", "kick", "streamplace", "donations", "voice", "discord"]);
   for (const c of SETUP_CORE) assert.equal(c.release, "now", `${c.id} is released`);
   for (const id of ["youtube", "stripe", "paypal"]) {
     const m = MODULES.find((x) => x.id === id);

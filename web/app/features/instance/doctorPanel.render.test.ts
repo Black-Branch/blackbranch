@@ -71,3 +71,14 @@ test("an empty group: its count and words, no meaning line, no button", async ()
     await done();
   } finally { view.rows = saved; }
 });
+
+test("the header says where to get help: the guides, the Discord, and the report to attach (the project's one copy of each)", async () => {
+  const { el, done } = await mount();
+  const help = el.querySelector("[data-help]");
+  assert.ok(help, "a help line in the header");
+  const hrefs = [...help.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+  assert.deepEqual(hrefs, [DOCTOR.HELP.docs, DOCTOR.HELP.discord]);
+  assert.ok((help.textContent ?? "").startsWith("Need help?"));
+  assert.ok((help.textContent ?? "").includes(DOCTOR.HELP.report));
+  await done();
+});

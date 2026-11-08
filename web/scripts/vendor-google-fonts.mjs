@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 // Vendors the site's Google fonts into the repo, so `next build` needs no network.
 //
-//   node scripts/vendor-google-fonts.mjs     (from web/; needs the network, once)
+//   node scripts/vendor-google-fonts.mjs              (from web/; needs the network, once)
+//   node scripts/vendor-google-fonts.mjs --licences   only the licence texts; the fonts stay as they are
 //
-// Writes app/fonts/google/files/*.woff2 and app/fonts/google/fonts.css. The build then reads
+// Writes app/fonts/google/files/*.woff2, app/fonts/google/fonts.css, and each family's licence text in
+// app/fonts/google/licenses/<family>.txt (plus app/fonts/licenses/ for the two fonts layout.tsx bundles
+// itself): OFL-1.1 and Apache-2.0 both require the licence to travel with every copy, and the public
+// repo and every release are copies. The text comes from the google/fonts repository at one commit:
+// the family's METADATA.pb names its licence, and the licence file beside it is copied verbatim
+// under a header naming the family, the licence and that file. The build then reads
 // only those files: next/font/google fetched every family from Google on every build, and that
 // fetch failed intermittently — a fresh install has to build with no network at all.
 //
@@ -125,8 +131,15 @@ const FONTS = [
   { fn: "Jersey_25", variable: "--font-jersey", weight: "400" },
 ];
 
+// The fonts layout.tsx bundles from app/fonts/ itself (next/font/local): their files start with `prefix`.
+const LOCAL_FONTS = [
+  { family: "Atkinson Hyperlegible Next", prefix: "atkinson-hyperlegible-next" },
+  { family: "M PLUS Rounded 1c", prefix: "mplus-rounded-1c" },
+];
+
 const here = path.dirname(fileURLToPath(import.meta.url));
-const outDir = path.join(here, "..", "app", "fonts", "google");
+const fontsDir = path.join(here, "..", "app", "fonts");
+const outDir = path.join(fontsDir, "google");
 const filesDir = path.join(outDir, "files");
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -210,12 +223,87 @@ function render(results) {
   return out.join("\n");
 }
 
-rmSync(filesDir, { recursive: true, force: true });
-mkdirSync(filesDir, { recursive: true });
-const results = [];
-for (const entry of FONTS) {
-  results.push(await vendor(entry));
-  process.stdout.write(".");
+// Each family's licence, from google/fonts at one commit (the same text for every run of that commit).
+const FONTS_REPO = "google/fonts";
+const LICENCE_FILES = { OFL: ["ofl", "OFL.txt", "SIL Open Font License 1.1"], APACHE2: ["apache", "LICENSE.txt", "Apache License 2.0"], UFL: ["ufl", "UFL.txt", "Ubuntu Font Licence 1.0"] };
+
+const OFL_TEXT = "https://openfontlicense.org/documents/OFL.txt";
+
+async function fetchText(url, headers = {}) {
+  const res = await fetch(url, { headers });
+  return res.ok ? res.text() : null;
 }
-writeFileSync(path.join(outDir, "fonts.css"), render(results));
-console.log(`\n${results.length} families, ${readdirSync(filesDir).length} files → ${path.relative(process.cwd(), outDir)}`);
+
+async function licenceOf(family, commit) {
+  const dir = family.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const raw = (p) => `https://raw.githubusercontent.com/${FONTS_REPO}/${commit}/${p}`;
+  for (const [folder] of Object.values(LICENCE_FILES)) {
+    const meta = await fetchText(raw(`${folder}/${dir}/METADATA.pb`));
+    if (!meta) continue;
+    const id = /^license: "([A-Z0-9]+)"/m.exec(meta)?.[1];
+    const spec = LICENCE_FILES[id];
+    if (!spec) throw new Error(`${family}: METADATA.pb names no licence this script knows (${id})`);
+    const file = `${spec[0]}/${dir}/${spec[1]}`;
+    let text = await fetchText(raw(file));
+    let source = `Source: https://github.com/${FONTS_REPO}/blob/${commit}/${file}`;
+    // A few OFL families' folders carry no OFL.txt (M PLUS Rounded 1c): the licence is then the
+    // family's own copyright lines from METADATA.pb above SIL's published OFL text.
+    if (!text && id === "OFL") {
+      const owners = [...new Set([...meta.matchAll(/^\s*copyright: "(.+)"$/gm)].map((m) => m[1]))];
+      const ofl = await fetchText(OFL_TEXT);
+      const body = ofl?.slice(ofl.indexOf("This Font Software is licensed under the SIL Open Font License"));
+      if (!owners.length || !body?.startsWith("This Font Software")) throw new Error(`${family}: no ${file}, and no OFL text to build it from`);
+      text = `${owners.join("\n")}\n\n${body}`;
+      source = `Source: the copyright in https://github.com/${FONTS_REPO}/blob/${commit}/${folder}/${dir}/METADATA.pb (the folder has no ${spec[1]}), and SIL's text at ${OFL_TEXT}`;
+    }
+    if (!text) throw new Error(`${family}: ${file} is missing`);
+    return [
+      `${family} — ${spec[2]}`,
+      source,
+      "Vendored by web/scripts/vendor-google-fonts.mjs; the licence text below is copied unchanged.",
+      "",
+      text.trimEnd(),
+      "",
+    ].join("\n");
+  }
+  throw new Error(`${family}: not found in ${FONTS_REPO}`);
+}
+
+async function writeLicences(googleFamilies) {
+  const commit = (await fetchText(`https://api.github.com/repos/${FONTS_REPO}/commits/main`, { Accept: "application/vnd.github.sha" }))?.trim();
+  if (!commit || !/^[0-9a-f]{40}$/.test(commit)) throw new Error(`could not read ${FONTS_REPO}'s current commit`);
+  const sets = [
+    { dir: path.join(outDir, "licenses"), families: googleFamilies.map((family) => ({ family, name: slug(family) })) },
+    { dir: path.join(fontsDir, "licenses"), families: LOCAL_FONTS.map((f) => ({ family: f.family, name: f.prefix })) },
+  ];
+  for (const { dir, families } of sets) {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    for (const { family, name } of families) {
+      writeFileSync(path.join(dir, `${name}.txt`), await licenceOf(family, commit));
+      process.stdout.write("+");
+    }
+  }
+  console.log(`\nlicences from ${FONTS_REPO}@${commit.slice(0, 12)}`);
+}
+
+/** A family's name as Google serves it, from the same validator the vendoring calls (no network). */
+const familyOf = (entry) => validateGoogleFontFunctionCall(entry.fn, {
+  variable: entry.variable, subsets: [PRELOAD_SUBSET], display: "swap",
+  ...(entry.weight !== undefined ? { weight: entry.weight } : {}), preload: !!entry.preload,
+}).fontFamily;
+
+if (process.argv.includes("--licences")) {
+  await writeLicences(FONTS.map(familyOf));
+} else {
+  rmSync(filesDir, { recursive: true, force: true });
+  mkdirSync(filesDir, { recursive: true });
+  const results = [];
+  for (const entry of FONTS) {
+    results.push(await vendor(entry));
+    process.stdout.write(".");
+  }
+  writeFileSync(path.join(outDir, "fonts.css"), render(results));
+  console.log(`\n${results.length} families, ${readdirSync(filesDir).length} files → ${path.relative(process.cwd(), outDir)}`);
+  await writeLicences(results.map((r) => r.family));
+}

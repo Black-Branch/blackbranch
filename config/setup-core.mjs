@@ -26,6 +26,10 @@ export const SETUP_PLACEHOLDERS = ['origin', 'apiOrigin', 'domain', 'matrixOrigi
 // modules page ("where you stream"), and the Admin Panel shows each on its own tab. YouTube, Stripe
 // and PayPal are module switches with their own `setup` in config/modules.mjs.
 // release 'later': the page says the part arrives in a later release.
+// turnOn (optional) { short, words }: a list that is neither a setup choice nor a module switch
+// (Discord: the bundle's `discord` profile, switched on on the server) says how it is turned on —
+// `short` in the public docs' index, `words` on its page. Its steps are then shown on its own
+// Admin Panel page only, never on the setup pages.
 export const SETUP_CORE = [
   {
     id: 'twitch', label: 'Twitch', release: 'now',
@@ -124,10 +128,39 @@ export const SETUP_CORE = [
       },
     ],
   },
+  {
+    // The Discord side of Admin Panel → Site → Discord, step 1 (web DiscordBotStep shows these
+    // steps). The token is pasted into that page and kept by the server, never a settings key, so
+    // the steps fill no field. All three privileged intents, as OOYE's own setup asks ("enable all
+    // switches", scripts/setup.js at v3.7): the bundle's registration sets receive_presences false,
+    // so the gateway asks for Server Members and Message Content only (src/d2m/discord-client.js),
+    // and those two are what the panel checks.
+    id: 'discord', label: 'Discord', release: 'now',
+    description: 'Links your Discord server\'s channels with your community rooms through the Discord bridge (Out Of Your Element), so a message in one shows in the other, and imports the server\'s categories, channels and roles into your community once.',
+    turnOn: {
+      short: 'on the server: `sudo blackbranch discord on`',
+      words: 'The Discord bridge is part of the install and off on a new one. Do the steps below, the first step of Admin Panel → Site → Discord, then switch the bridge on on the server with `sudo blackbranch discord on` (it refuses until the bot token is saved). The same page then adds the bot to your Discord server, imports the server into your community and links its channels with your rooms.',
+    },
+    steps: [
+      {
+        id: 'app', title: 'A Discord application for this server only', need: 'required',
+        explain: 'In Discord\'s Developer Portal press New Application and make one for this install alone. The bridge takes over the application\'s commands, so it cannot share an application with another bot or another install. Put the words below somewhere in its description: the bridge\'s author asks for it.',
+        links: [{ label: 'Discord: Developer Portal', url: 'https://discord.com/developers/applications' }],
+        paste: [{ label: 'Description (somewhere in it)', value: 'Powered by OOYE' }],
+        fields: [], test: null,
+      },
+      {
+        id: 'token', title: 'Its intents and its bot token', need: 'required',
+        explain: 'On the application\'s Bot page, switch on Presence Intent, Server Members Intent and Message Content Intent (under Privileged Gateway Intents) and save, then press Reset Token and paste the token into the bot step\'s token field. The bridge needs Server Members and Message Content to see who is in your server and what they write; the bot step warns while either is off. The server writes the token into the bridge\'s own settings file and restarts the bridge; the site keeps no copy and never shows it again. Above 10,000 people in a server, Discord asks for a yearly review before a bot may keep these intents.',
+        links: [{ label: 'Discord: gateway intents', url: 'https://discord.com/developers/docs/events/gateway' }],
+        paste: [], fields: [], test: null,
+      },
+    ],
+  },
 ];
 
 const STEP_PROPS = ['id', 'title', 'need', 'explain', 'links', 'paste', 'fields', 'test', 'ownerOnly'];
-const LIST_PROPS = ['id', 'label', 'description', 'release', 'steps'];
+const LIST_PROPS = ['id', 'label', 'description', 'release', 'steps', 'turnOn'];
 
 /**
  * Every problem with the setup lists, as readable lines ([] = fine).
@@ -201,6 +234,12 @@ export function setupProblems({ modules, core, keys }) {
     if (!text(c.label, 60)) out.push(`${at}: label (one line)`);
     if (typeof c.description !== 'string' || !c.description.trim()) out.push(`${at}: description`);
     if (c.release !== 'now' && c.release !== 'later') out.push(`${at}: release must be "now" or "later"`);
+    if (c.turnOn !== undefined) {
+      const t = c.turnOn;
+      if (!isObj(t) || Object.keys(t).some((k) => k !== 'short' && k !== 'words') || !text(t.short, 80) || !text(t.words, 600)) {
+        out.push(`${at}: turnOn is { short, words }: one line for the docs' index (1–80 characters) and one for the page (1–600)`);
+      }
+    }
     steps(at, c.steps);
     if (c.release === 'now' && Array.isArray(c.steps) && !c.steps.length) out.push(`${at}: released now with no steps`);
   }

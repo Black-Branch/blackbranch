@@ -46,7 +46,8 @@ export function timeoutLabel(mins: number): string {
   return `${mins}m`;
 }
 
-export type ModResult = { ok: true } | { ok: false; error: string };
+/** A ban's success also carries what its site-chat purge removed and its batch (banHistory.ts). */
+export type ModResult = { ok: true; purged?: number | null; batchId?: string | null } | { ok: false; error: string };
 
 async function answer(res: Response | null, what: string): Promise<ModResult> {
   if (!res) return { ok: false, error: `${what} failed (network)` };
@@ -85,31 +86,36 @@ export function undoPlan(previous: BanPrevious | undefined, now = Date.now()): {
   return left > 0 ? { kind: "restore", minutes: Math.ceil(left / 60_000) } : { kind: "lift" };
 }
 
-/** Time out (minutes) or ban the sender AT ONCE and offer an Undo. The
- *  message is removed only when the Undo window closes — a removal cannot be taken back. */
-export async function modBanAtOnce(msg: ModTargetMsg, minutes?: number): Promise<ModResult> {
+/** Time out (minutes) or ban the sender AT ONCE, and offer an Undo that lifts the ban only — a
+ *  removal cannot be taken back. Their lines of the last 24 hours go with the ban (the ban route's
+ *  purge), and the clicked line by its id whatever its age; with `purge: false` only the clicked line goes. */
+export async function modBanAtOnce(msg: ModTargetMsg, minutes?: number, opts: { purge?: boolean } = {}): Promise<ModResult> {
   const target = banTargetOf(msg);
   const what = minutes ? `Timeout ${timeoutLabel(minutes)}` : "Ban";
   if (!target) return { ok: false, error: `${what} unavailable — this message has no resolvable identity` };
-  const res = await postJson("/api/mod/ban", minutes ? { ...target, durationMinutes: minutes } : target).catch(() => null);
+  const purge = opts.purge !== false;
+  // With the purge on, the clicked line rides in the ban (removed by id, in the purge's one mod-log
+  // row, whatever its age); with it off, it is deleted on its own below.
+  const message = { id: msg.id, platform: msg.platform };
+  const res = await postJson("/api/mod/ban", { ...target, ...(minutes ? { durationMinutes: minutes } : {}), purge, ...(purge ? { message } : {}) }).catch(() => null);
   const r = await answer(res, what);
   if (!r.ok || !res) return r;
   const d = (await res.json().catch(() => ({}))) as { previous?: BanPrevious } & FanOut;
   trackPropagation(what, d);
   siteBansChanged();
+  if (!purge) void postJson("/api/mod/delete", { messageId: message.id, platform: message.platform }).catch(() => {});
   const plan = undoPlan(d.previous);
   offerUndo(
-    `${what}: done.`,
+    `${what}: done. Undo lifts the ${minutes ? "timeout" : "ban"}. Removed messages stay removed.`,
     async () => {
       const r = plan.kind === "lift"
         ? await answer(await postJson("/api/mod/ban", target, "DELETE").catch(() => null), "Undo")
         : await answer(await postJson("/api/mod/ban", {
-          ...target, ...(plan.minutes ? { durationMinutes: plan.minutes } : {}), override: true, reason: "Undo: the earlier ban put back",
+          ...target, ...(plan.minutes ? { durationMinutes: plan.minutes } : {}), override: true, purge: false, reason: "Undo: the earlier ban put back",
         }).catch(() => null), "Undo");
       siteBansChanged();
       return r;
     },
-    (leaving) => { void postJson("/api/mod/delete", { messageId: msg.id, platform: msg.platform }, "POST", { keepalive: leaving }).catch(() => {}); },
   );
-  return { ok: true };
+  return { ok: true, purged: typeof d.purged === "number" ? d.purged : null, batchId: d.batchId ?? null };
 }

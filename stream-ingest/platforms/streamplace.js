@@ -14,6 +14,7 @@ import WebSocket from 'ws';
 import { processMessage } from '../lib/pipeline.js';
 import { instanceConfig } from '../lib/instanceConfig.js';
 import { payloadShape } from '../lib/logShape.js';
+import { noteHint } from '../lib/liveHints.js';
 
 const CHAT_MSG = 'place.stream.chat.defs#messageView';
 
@@ -49,24 +50,32 @@ const NO_RECORD_AFTER_MS = 20_000;
 const QUIET_MS = 90_000;
 
 /**
- * Pure: live / offline / unknown from what the socket has shown.
- * @param {{ connected: boolean, connectedAt: number, lastFrameAt: number, record: object|null, now: number }} s
- * @returns {'live'|'offline'|'unknown'}
+ * Pure: the poller's observation from what the socket has shown — live / offline / unknown, with
+ * the evidence code. Only the ended stamp is CERTAIN ("not supposed to start up again"); an idle
+ * record still needs the poller's second reading. `uri` is the livestream record's own uri, the
+ * broadcast's key.
+ * @param {{ connected: boolean, connectedAt: number, lastFrameAt: number, record: object|null, uri?: string, now: number }} s
+ * @returns {{ raw: 'live'|'offline'|'unknown', certain: boolean, key: string, evidence: string }}
  */
-export function streamplaceLiveness({ connected, connectedAt, lastFrameAt, record, now }) {
-  if (!connected || now - lastFrameAt > QUIET_MS) return 'unknown';
-  if (!record) return now - connectedAt >= NO_RECORD_AFTER_MS ? 'offline' : 'unknown';
-  if (record.endedAt) return 'offline';
+export function streamplaceObservation({ connected, connectedAt, lastFrameAt, record, uri = '', now }) {
+  const o = (raw, evidence) => ({ raw, certain: evidence === 'ended-stamp', key: record ? uri || '' : '', evidence });
+  if (!connected || now - lastFrameAt > QUIET_MS) return o('unknown', 'socket-quiet');
+  if (!record) return o(now - connectedAt >= NO_RECORD_AFTER_MS ? 'offline' : 'unknown', 'no-record');
+  if (record.endedAt) return o('offline', 'ended-stamp');
   const seen = Date.parse(record.lastSeenAt || '');
-  if (!Number.isFinite(seen)) return 'unknown';
+  if (!Number.isFinite(seen)) return o('unknown', 'no-record');
   const idleS = Number(record.idleTimeoutSeconds) > 0 ? Number(record.idleTimeoutSeconds) : DEFAULT_IDLE_S;
-  return now - seen <= idleS * 1000 ? 'live' : 'offline';
+  return now - seen <= idleS * 1000 ? o('live', 'record-live') : o('offline', 'record-idle');
 }
 
-export async function startStreamplace() {
+/**
+ * @param {object} [opts]
+ * @param {string} [opts.socketUrl] the channel socket (default: stream.place's own for the DID)
+ */
+export async function startStreamplace(opts = {}) {
   const did = instanceConfig.get('platform.streamplace.did');
-  if (!did) { console.warn('[streamplace] platform.streamplace.did is not set (STREAMPLACE_STREAMER_DID) — not connecting'); return { stop() {}, getViewers: () => null, getLiveState: () => null }; }
-  const url = `wss://stream.place/api/websocket/${did}`;
+  if (!did) { console.warn('[streamplace] platform.streamplace.did is not set (STREAMPLACE_STREAMER_DID) — not connecting'); return { stop() {}, getViewers: () => null, getObservation: () => null }; }
+  const url = opts.socketUrl || `wss://stream.place/api/websocket/${did}`;
   let ws = null;
   let stopped = false;
   let backoff = 1000;
@@ -80,9 +89,15 @@ export async function startStreamplace() {
   let loggedViewerFrame = false;
   // The latest livestream record this socket has shown, and when any frame last arrived.
   let liveRecord = null;
+  let liveUri = '';
   let lastFrameAt = 0;
   let connected = false;
   let loggedLiveness = null;
+  // Push hints (lib/liveHints.js), from the livestream frames as read: the first frame whose record
+  // is stamped ended → stop; a live reading after a non-live one → live. Kept across reconnects, so
+  // the record a reconnect replays is not a new end.
+  let hintEnded = false;
+  let hintLive = false;
   const VIEWER_STALE_MS = 5 * 60 * 1000;
 
   // Half-open-socket watchdog: reconnect-on-close alone cannot notice a socket
@@ -109,6 +124,7 @@ export async function startStreamplace() {
       connectedAt = Date.now();
       connected = true;
       liveRecord = null; // a reconnect re-sends it; an old one must not outlive the socket
+      liveUri = '';
       lastActiveAt = Date.now();
       console.log(`[streamplace] connected (${did})`);
       backoff = 1000;
@@ -153,13 +169,22 @@ export async function startStreamplace() {
       }
       if (typeof e.$type === 'string' && e.$type.endsWith('#livestreamView')) {
         // Only this channel's own record counts (the socket is per channel; checked anyway).
-        if (!e.author?.did || e.author.did === did) liveRecord = e.record && typeof e.record === 'object' ? e.record : null;
+        if (!e.author?.did || e.author.did === did) {
+          liveRecord = e.record && typeof e.record === 'object' ? e.record : null;
+          liveUri = typeof e.uri === 'string' ? e.uri : '';
+        }
         // One line per change, so the journal shows what the live vote saw (the poller votes on it).
-        const seen = streamplaceLiveness({ connected, connectedAt, lastFrameAt, record: liveRecord, now: Date.now() });
+        const seen = streamplaceObservation({ connected, connectedAt, lastFrameAt, record: liveRecord, now: Date.now() }).raw;
         if (seen !== loggedLiveness) {
           loggedLiveness = seen;
           console.log(`[streamplace] livestream record says ${seen}${liveRecord?.endedAt ? ' (ended)' : ''}`);
         }
+        const ended = Boolean(liveRecord?.endedAt);
+        const live = seen === 'live';
+        if (ended && !hintEnded) noteHint('streamplace', 'stop');
+        if (live && !hintLive) noteHint('streamplace', 'live');
+        hintEnded = ended;
+        hintLive = live;
         return;
       }
       if (e.$type !== CHAT_MSG) return; // ignore livestreamView / segment / other non-chat frames
@@ -218,7 +243,7 @@ export async function startStreamplace() {
     // Latest viewer count, or null if none seen within the staleness window.
     getViewers: () =>
       lastViewers && Date.now() - lastViewers.at < VIEWER_STALE_MS ? lastViewers.count : null,
-    // The live vote for lib/poller.js (see streamplaceLiveness).
-    getLiveState: () => streamplaceLiveness({ connected, connectedAt, lastFrameAt, record: liveRecord, now: Date.now() }),
+    // The live observation for lib/poller.js (see streamplaceObservation).
+    getObservation: () => streamplaceObservation({ connected, connectedAt, lastFrameAt, record: liveRecord, uri: liveUri, now: Date.now() }),
   };
 }

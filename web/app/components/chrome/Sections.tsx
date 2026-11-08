@@ -37,7 +37,15 @@
 //
 // Overflow: the list scrolls sideways with no scrollbar, so the strip has to
 // SAY when tabs sit past an
-// edge. Effect A's same listeners mark the wrapper `data-more` = start / end /
+// edge. And it never shows a one-letter tab or a blank stretch (Task 5b): the
+// list snaps to item starts, a chevron press pages to one (stripOverflow
+// pageTarget), a selection change brings the tab into full view
+// (revealTarget), a tab that does not fit peeks under the end fade, and a label
+// that cannot show three characters clear of either fade band is covered
+// completely (fadeCovers → the --strip-{start,end}-{t,o} mask stops on the
+// wrapper), so the strip never reads "S›" or "‹e". `trail` (the chat bar's "+" on a phone)
+// scrolls as the list's last item, OUTSIDE the tablist, which owns only tabs.
+// Effect A's same listeners mark the wrapper `data-more` = start / end /
 // both (app/lib/chrome/stripOverflow.ts); chrome.css turns that into a fade
 // plus a chevron on exactly the sides that have more, and nothing at all when
 // everything fits — no layout shift, the chevrons are absolutely positioned
@@ -50,12 +58,12 @@
 // horizontal pane scroller. When present the cap and hole follow it instead
 // of `value`; clicks still call onChange.
 
-import { useContext, useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent } from "react";
+import { useContext, useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { CaretLeft, CaretRight, X } from "@phosphor-icons/react/dist/ssr";
 import { useTabList, type TabItem } from "@/app/lib/chrome/useTabList";
 import { interpolateBox, type Box } from "@/app/lib/chrome/indicatorBox";
 import { BandContext } from "@/app/lib/chrome/bandContext";
-import { overflowEdges, pageStep, revealDelta } from "@/app/lib/chrome/stripOverflow";
+import { fadeCovers, overflowEdges, pageTarget, revealTarget, PEEK_MIN_CHARS, STRIP_EDGE_PX, type LabelSpan, type TabSpan } from "@/app/lib/chrome/stripOverflow";
 import { Band } from "./Band";
 
 export type SectionsProps<K extends string> = {
@@ -69,7 +77,48 @@ export type SectionsProps<K extends string> = {
   progress?: number;
   /** Called from the ✕ on an active `closable` item. */
   onClose?: (key: K) => void;
+  /** A control that scrolls WITH the tabs, after the last one (the chat bar's "+" on a phone). */
+  trail?: ReactNode;
 };
+
+/** The strip's items in order: its tabs, then the trailing control's slot when there is one. */
+function items(list: HTMLElement): HTMLElement[] {
+  return Array.from(list.querySelectorAll<HTMLElement>('[role="tab"], .chrome-sections-trail'));
+}
+
+/** Each item's span in the list's SCROLL coordinates (a rect delta plus scrollLeft — right under a leading slot and a scrolled list alike). */
+function spansOf(list: HTMLElement, els: readonly HTMLElement[]): TabSpan[] {
+  const left = list.getBoundingClientRect().left - list.scrollLeft;
+  return els.map((t) => { const r = t.getBoundingClientRect(); return { x: r.left - left, w: r.width }; });
+}
+
+/**
+ * Each tab label's GLYPHS in scroll coordinates (fadeCovers): a Range over its
+ * text, never the label's box — the box is as wide as the bold reserve, wider
+ * than a non-selected label's letters.
+ */
+function labelsOf(list: HTMLElement): LabelSpan[] {
+  // Every browser has Range.getBoundingClientRect (CSSOM View); jsdom does not,
+  // and a mount there (other render tests) gets the standard fades.
+  if (typeof document.createRange().getBoundingClientRect !== "function") return [];
+  const left = list.getBoundingClientRect().left - list.scrollLeft;
+  const out: LabelSpan[] = [];
+  for (const el of Array.from(list.querySelectorAll<HTMLElement>(".chrome-tab-label > span"))) {
+    const text = el.firstChild;
+    const n = text?.textContent?.length ?? 0;
+    if (!text || !n) continue;
+    const glyphs = (a: number, b: number) => {
+      const range = document.createRange();
+      range.setStart(text, a);
+      range.setEnd(text, b);
+      return range.getBoundingClientRect();
+    };
+    const k = Math.min(PEEK_MIN_CHARS, n);
+    const all = glyphs(0, n);
+    out.push({ x: all.left - left, w: all.width, head: glyphs(0, k).right - left, tail: glyphs(n - k, n).left - left });
+  }
+  return out;
+}
 
 export function Sections<K extends string>(props: SectionsProps<K>) {
   const band = useContext(BandContext);
@@ -81,13 +130,13 @@ export function Sections<K extends string>(props: SectionsProps<K>) {
 }
 
 function Strip<K extends string>({
-  items, value, onChange, label, density = "band", progress, onClose,
+  items: tabItems, value, onChange, label, density = "band", progress, onClose, trail,
 }: SectionsProps<K>) {
   // Floating density renders no Band and adopts none: a folded chat pill that
   // happened to sit inside a Bar's Band would otherwise punch that bar's hole.
   const ctx = useContext(BandContext);
   const band = density === "floating" ? null : ctx;
-  const { active, listProps, tabProps } = useTabList({ items, value, onChange, label });
+  const { active, listProps, tabProps } = useTabList({ items: tabItems, value, onChange, label });
   const listRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   // Holds the latest `apply` so effect A's listeners always call the current
@@ -100,19 +149,28 @@ function Strip<K extends string>({
   const programmatic = useRef(false);
   // Re-measure when the SET of keys changes, not when the array identity does
   // (a consumer mapping items inline would otherwise re-run this every render).
-  const keySig = items.map((t) => t.key).join("|");
+  // The trailing slot is part of the set: its arrival changes the scroll width.
+  const keySig = tabItems.map((t) => t.key).join("|") + (trail ? "|+trail" : "");
 
   // Effect A: wire the passive listeners once per key set.
   useLayoutEffect(() => {
     const list = listRef.current;
     const wrap = wrapRef.current;
     if (!list || !wrap) return;
-    const tabs = Array.from(list.querySelectorAll<HTMLElement>('[role="tab"]'));
+    const els = items(list);
     // Written to the DOM, not to state: a scroll must not re-render the strip.
+    // Each side's fade is the standard ramp, or a hard stop that covers a
+    // label unable to show three characters clear of the band.
     const mark = () => {
       const more = overflowEdges(list.scrollLeft, list.clientWidth, list.scrollWidth);
       if (more) wrap.dataset.more = more;
       else delete wrap.dataset.more;
+      const cover = fadeCovers(labelsOf(list), list.scrollLeft, list.clientWidth, list.scrollWidth);
+      for (const side of ["start", "end"] as const) {
+        const c = cover[side];
+        wrap.style.setProperty(`--strip-${side}-t`, `${c ?? STRIP_EDGE_PX / 2}px`);
+        wrap.style.setProperty(`--strip-${side}-o`, `${c ?? STRIP_EDGE_PX}px`);
+      }
     };
     const follow = () => {
       mark();
@@ -123,7 +181,7 @@ function Strip<K extends string>({
     list.addEventListener("scroll", follow, { passive: true });
     const ro = new ResizeObserver(follow);
     ro.observe(list);
-    for (const el of tabs) ro.observe(el);
+    for (const el of els) ro.observe(el);
     return () => { list.removeEventListener("scroll", follow); ro.disconnect(); };
   }, [keySig]);
 
@@ -162,15 +220,14 @@ function Strip<K extends string>({
     // scroll the viewer is doing by hand). The flag is raised only when the
     // write really moved the list: a clamped no-op fires no scroll event, and a
     // flag left standing would hand the viewer's NEXT hand-scroll the animation.
-    const t = tabs[active];
-    if (t) {
-      const left = t.offsetLeft - list.scrollLeft;
-      const d = revealDelta(left, left + t.offsetWidth, list.scrollLeft, list.clientWidth, list.scrollWidth);
-      if (d !== 0) {
-        const before = list.scrollLeft;
-        list.scrollLeft += d;
-        if (list.scrollLeft !== before) programmatic.current = true;
-      }
+    // The answer is a rest position (a tab start, 40px in), so the list's
+    // mandatory snap has nothing to correct and the tab stays whole. (Tabs come
+    // first in items(), so `active` indexes the same tab there.)
+    const target = revealTarget(spansOf(list, items(list)), active, list.scrollLeft, list.clientWidth, list.scrollWidth);
+    if (target !== null) {
+      const before = list.scrollLeft;
+      list.scrollLeft = target;
+      if (list.scrollLeft !== before) programmatic.current = true;
     }
     // A pager-driven tick (`progress` defined) must not lag a finger.
     apply(progress === undefined);
@@ -201,37 +258,43 @@ function Strip<K extends string>({
 
   // A chevron press is a hand-scroll by proxy: no `programmatic` flag, so the
   // hole follows the tabs without lag, exactly as under a finger.
+  // It pages to an item START (stripOverflow pageTarget): the next item not
+  // shown whole lands flush at the start, so a page never ends inside a tab.
   const page = (dir: 1 | -1) => {
     const list = listRef.current;
     if (!list) return;
+    const target = pageTarget(spansOf(list, items(list)), list.scrollLeft, list.clientWidth, list.scrollWidth, dir);
     const smooth = !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    list.scrollBy({ left: dir * pageStep(list.clientWidth), behavior: smooth ? "smooth" : "auto" });
+    list.scrollTo({ left: target, behavior: smooth ? "smooth" : "auto" });
   };
 
   return (
     <div ref={wrapRef} className="chrome-sections-wrap">
-      <div ref={listRef} {...listProps} className={`chrome-sections chrome-sections-${density}`}>
-        {items.map((t, i) => (
-          <button key={t.key} {...tabProps(i)} className="chrome-tab">
-            <span className="chrome-tab-label" data-l={t.label}><span>{t.label}</span></span>
-            {t.dot && <span aria-hidden className="chrome-tab-dot" />}
-            {t.dot && <span className="sr-only">unread</span>}
-            {t.closable && i === active && onClose && (
-              <span
-                role="button"
-                tabIndex={0}
-                aria-label={`Close ${t.label}`}
-                className="chrome-tab-close"
-                onClick={(e) => close(e, t.key)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(e, t.key); }
-                }}
-              >
-                <X size={11} weight="bold" />
-              </span>
-            )}
-          </button>
-        ))}
+      <div ref={listRef} className={`chrome-sections chrome-sections-${density}`}>
+        <div {...listProps} className="chrome-sections-tabs">
+          {tabItems.map((t, i) => (
+            <button key={t.key} {...tabProps(i)} className="chrome-tab">
+              <span className="chrome-tab-label" data-l={t.label}><span>{t.label}</span></span>
+              {t.dot && <span aria-hidden className="chrome-tab-dot" />}
+              {t.dot && <span className="sr-only">unread</span>}
+              {t.closable && i === active && onClose && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Close ${t.label}`}
+                  className="chrome-tab-close"
+                  onClick={(e) => close(e, t.key)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(e, t.key); }
+                  }}
+                >
+                  <X size={11} weight="bold" />
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        {trail && <div className="chrome-sections-trail">{trail}</div>}
       </div>
       <button type="button" tabIndex={-1} aria-hidden className="chrome-more chrome-more-start" onClick={() => page(-1)}>
         <CaretLeft size={12} weight="bold" />

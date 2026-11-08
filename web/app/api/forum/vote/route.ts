@@ -1,6 +1,6 @@
 import { auth } from "@/auth";
 import pool from "@/lib/db";
-import { getMatrixSession, RevokedSessionError } from "@/app/lib/matrixSession";
+import { getMatrixSession, endedSessionResponse } from "@/app/lib/matrixSession";
 import { resolveIdentities } from "@/lib/socialCredit";
 import { createSlidingWindowLimiter } from "@/app/lib/rateLimit";
 import { forumReader, ForumReaderUnavailable } from "@/app/lib/forumReader";
@@ -68,7 +68,8 @@ export async function POST(req: NextRequest) {
   try {
     session = await getMatrixSession();
   } catch (e) {
-    if (e instanceof RevokedSessionError) return Response.json({ error: "revoked" }, { status: 401 });
+    const ended = endedSessionResponse(e);
+    if (ended) return ended;
     throw e;
   }
   if (!session) return new Response("Unauthorized", { status: 401 });

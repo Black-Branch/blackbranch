@@ -9,6 +9,9 @@
 // MX_SPACE_NAME (the space's display name — the site's name), and the room ids already recorded in
 // instance config, if any: MX_STORED_HUB, MX_STORED_GENERAL. A recorded room that is gone is
 // REPORTED, not silently replaced by a second one; MX_RECREATE=1 allows making a new one.
+// MX_COMMUNITY_USER (the community service account, when this install has one): invited into the
+// three rooms and granted 100 in each, so the community reconciler can read and keep them (its own
+// first run accepts the invites). The rooms stay the owner's: a creator's power is permanent.
 // Output: one JSON line on stdout, {"hub","general","forum","created":[…]}; progress on stderr.
 // (The forum room is found by its alias on a re-run: it has no instance-config key of its own.)
 //
@@ -17,54 +20,44 @@
 // the maintainers' disposable test install (on the host). It writes Matrix's m.* state, and one
 // state event of the PRODUCT's namespace — the forum flag (web matrixNamespace.ts ROOM_TYPE, the same
 // name on every install) — never an install's own prefix.
+import { makeClient } from "./homeserver.mjs";
+import { FORUM_ORDER, GENERAL_ORDER, ROOM_VERSION, forumBody, generalBody, hubBody } from "./community-rooms.mjs";
 
 const env = process.env;
 const BASE = (env.MX_BASE ?? "").replace(/\/+$/, "");
 const SERVER = env.MX_SERVER_NAME ?? "";
 const SPACE_NAME = env.MX_SPACE_NAME || SERVER;
 const RECREATE = env.MX_RECREATE === "1";
+const COMMUNITY = env.MX_COMMUNITY_USER ?? "";
+const COMMUNITY_LEVEL = 100;
 const HUB_ALIAS = "community-hub";
 const GENERAL_ALIAS = "general";
 const FORUM_ALIAS = "forum";
-// The forum flag: an ordinary room with this state event is a forum to the site (web
-// matrixRooms.ts isForumRoom, forumReader.ts); other Matrix apps show a normal room.
-const FORUM_FLAG = "app.blackbranch.room_type";
-// #general keeps 30 days of messages (the server's allowed range is 1 day – 1 year).
-const GENERAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// The rooms' bodies, join rule and places in the space: community-rooms.mjs (what the reconciler keeps).
 
 const log = (m) => process.stderr.write(`   ${m}\n`);
 const fail = (m) => { process.stderr.write(`bootstrap: ${m}\n`); process.exit(1); };
 
 if (!BASE || !SERVER) fail("MX_BASE and MX_SERVER_NAME are required");
+if (COMMUNITY && !COMMUNITY.endsWith(`:${SERVER}`)) fail(`MX_COMMUNITY_USER ${COMMUNITY} is not an account on ${SERVER}`);
 
 let token = "";
 for await (const c of process.stdin) token += c;
 token = token.trim();
 if (!token) fail("no access token on stdin");
 
-async function call(method, path, body) {
-  const res = await fetch(`${BASE}/_matrix/client/v3${path}`, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let json = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
-  return { status: res.status, json, text };
-}
+// The shared client (homeserver.mjs): `call` here is its request() — the answer whatever the status,
+// since a 404 is an answer to this script — and `must` fails the run on anything but a 2xx.
+const hs = makeClient({ base: BASE, token });
+const call = (method, path, body) => hs.request(method, path, body);
 const must = async (what, method, path, body) => {
-  const r = await call(method, path, body);
-  if (r.status < 200 || r.status > 299) fail(`${what}: ${r.status} ${r.text.slice(0, 200)}`);
-  return r.json ?? {};
+  try { return (await hs.must(what, hs.call(method, path, body))) ?? {}; } catch (e) { return fail(e.message); }
 };
 const enc = encodeURIComponent;
 
 const me = (await must("whoami", "GET", "/account/whoami")).user_id;
 if (!me || !me.endsWith(`:${SERVER}`)) fail(`the token belongs to ${me ?? "nobody"}, not an account on ${SERVER}`);
 log(`signed in as ${me}`);
-
-const ROOM_VERSION = "12";
 
 /** Who made the room — its m.room.create's sender plus the content's additional_creators (room
  *  v12: every one of them holds permanent, undemotable power) — and its version, when the owner can
@@ -141,35 +134,27 @@ async function ensureRoom({ label, alias, stored, body }) {
 
 const hub = await ensureRoom({
   label: "community space", alias: HUB_ALIAS, stored: env.MX_STORED_HUB,
-  body: { name: SPACE_NAME, preset: "public_chat", visibility: "public", room_version: ROOM_VERSION, creation_content: { type: "m.space" } },
+  body: hubBody(SPACE_NAME),
 });
-const general = await ensureRoom({
-  label: "#general", alias: GENERAL_ALIAS, stored: env.MX_STORED_GENERAL,
-  body: {
-    name: "general", preset: "public_chat", visibility: "public", room_version: ROOM_VERSION,
-    initial_state: [{ type: "m.room.retention", state_key: "", content: { max_lifetime: GENERAL_RETENTION_MS } }],
-  },
-});
+const general = await ensureRoom({ label: "#general", alias: GENERAL_ALIAS, stored: env.MX_STORED_GENERAL, body: generalBody(hub) });
 
-// The space ⇄ room links, each written only when it is not already there with a `via`.
-async function ensureLink(roomId, type, stateKey) {
+// The space ⇄ room links, each written only when it is not already there with a `via` (and, for a
+// child, an `order`: #general before #forum, so every reader, the community import included, lists
+// them the same way). An order already there is the panel's from then on, and is left as it is.
+async function ensureLink(roomId, type, stateKey, order) {
   const r = await call("GET", `/rooms/${enc(roomId)}/state/${type}/${enc(stateKey)}`);
-  if (r.status === 200 && Array.isArray(r.json?.via) && r.json.via.length) return;
-  await must(`${type} link`, "PUT", `/rooms/${enc(roomId)}/state/${type}/${enc(stateKey)}`, { via: [SERVER] });
+  const have = r.status === 200 && r.json && typeof r.json === "object" ? r.json : null;
+  if (have && Array.isArray(have.via) && have.via.length && (order === undefined || typeof have.order === "string")) return;
+  const content = { ...(have && Array.isArray(have.via) && have.via.length ? have : { via: [SERVER] }), ...(order === undefined ? {} : { order }) };
+  await must(`${type} link`, "PUT", `/rooms/${enc(roomId)}/state/${type}/${enc(stateKey)}`, content);
   created.push(type);
   log(`linked: ${type}`);
 }
-const forum = await ensureRoom({
-  label: "#forum", alias: FORUM_ALIAS, stored: undefined,
-  body: {
-    name: "forum", topic: "Posts and discussion", preset: "public_chat", visibility: "public", room_version: ROOM_VERSION,
-    initial_state: [{ type: FORUM_FLAG, state_key: "", content: { type: "forum" } }],
-  },
-});
+const forum = await ensureRoom({ label: "#forum", alias: FORUM_ALIAS, stored: undefined, body: forumBody(hub) });
 
-await ensureLink(hub, "m.space.child", general);
+await ensureLink(hub, "m.space.child", general, GENERAL_ORDER);
 await ensureLink(general, "m.space.parent", hub);
-await ensureLink(hub, "m.space.child", forum);
+await ensureLink(hub, "m.space.child", forum, FORUM_ORDER);
 await ensureLink(forum, "m.space.parent", hub);
 
 // The rooms in the server's public room list, so a Matrix app can find them. The rendered Synapse
@@ -186,5 +171,30 @@ async function ensurePublished(label, roomId) {
 await ensurePublished("community space", hub);
 await ensurePublished("#general", general);
 await ensurePublished("#forum", forum);
+
+// The community service account: 100 in each room (written only when it is not already), then
+// invited (only when it is neither in nor invited). Granted first, so its first run can act at once.
+async function ensureCommunity(label, roomId) {
+  const pl = await call("GET", `/rooms/${enc(roomId)}/state/m.room.power_levels/`);
+  const content = pl.status === 200 && pl.json && typeof pl.json === "object" ? pl.json : {};
+  if (content.users?.[COMMUNITY] !== COMMUNITY_LEVEL) {
+    await must(`grant the community account 100 in ${label}`, "PUT", `/rooms/${enc(roomId)}/state/m.room.power_levels/`,
+      { ...content, users: { ...(content.users ?? {}), [COMMUNITY]: COMMUNITY_LEVEL } });
+    created.push(`community account power in ${label}`);
+    log(`${label}: the community account holds 100`);
+  }
+  const m = await call("GET", `/rooms/${enc(roomId)}/state/m.room.member/${enc(COMMUNITY)}`);
+  const membership = m.status === 200 ? m.json?.membership : null;
+  if (membership !== "join" && membership !== "invite") {
+    await must(`invite the community account to ${label}`, "POST", `/rooms/${enc(roomId)}/invite`, { user_id: COMMUNITY });
+    created.push(`community account invited to ${label}`);
+    log(`${label}: the community account is invited`);
+  }
+}
+if (COMMUNITY) {
+  await ensureCommunity("community space", hub);
+  await ensureCommunity("#general", general);
+  await ensureCommunity("#forum", forum);
+}
 
 process.stdout.write(`${JSON.stringify({ hub, general, forum, created })}\n`);

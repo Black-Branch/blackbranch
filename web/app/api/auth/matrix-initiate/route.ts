@@ -2,9 +2,10 @@ import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { safeFetch } from "@/app/lib/ssrf";
 import { readBodyPrefix, readJsonCapped, ERROR_LOG_MAX_BYTES, OAUTH_REPLY_MAX_BYTES } from "@/app/lib/boundedBody";
-import { initiateEndpointsProblem, signFedState, fedStateSecret, FED_STATE_COOKIE, FED_STATE_TTL_S } from "@/app/lib/federatedSignIn";
+import pool from "@/lib/db";
+import { initiateEndpointsProblem, signFedState, fedStateSecret, federatedClientId, discoverServer, FED_STATE_COOKIE, FED_STATE_TTL_S } from "@/app/lib/federatedSignIn";
 import { pkcePair, randomToken } from "@/app/lib/pkce";
-import { federatedServerAllowed, normalizeServerName, FEDERATED_SIGNIN_REFUSED } from "@/app/lib/federatedSignInSwitch";
+import { federatedSignInRefusal, normalizeServerName, OWN_SERVER_SIGN_IN } from "@/app/lib/federatedSignInSwitch";
 import { createSlidingWindowLimiter, ipKey } from "@/app/lib/rateLimit";
 import { authOrigin } from "@/app/lib/authOrigin";
 import { installValue } from "@/app/lib/installValues";
@@ -30,19 +31,14 @@ export async function POST(req: NextRequest) {
   }
   const body = await req.json().catch(() => null);
   if (!body) return Response.json({ error: "invalid_body" }, { status: 400 });
-  const { homeserver, authorizationEndpoint, tokenEndpoint, registrationEndpoint, deviceId } = body;
+  const { deviceId } = body;
 
-  if (typeof homeserver !== "string" || !homeserver || !tokenEndpoint || !authorizationEndpoint) {
-    return Response.json({ error: "missing_fields" }, { status: 400 });
-  }
   // The server the visitor asked to sign in with (discover named it): checked against the sign-in
   // policy here, and signed into the state cookie so the callback can hold the account to it.
   const serverName = normalizeServerName(body.serverName);
   if (!serverName) return Response.json({ error: "missing_fields" }, { status: 400 });
-  if (!federatedServerAllowed(serverName)) return Response.json({ error: FEDERATED_SIGNIN_REFUSED }, { status: 403 });
-  if (!registrationEndpoint) {
-    return Response.json({ error: "no_registration_endpoint" }, { status: 422 });
-  }
+  const refusal = federatedSignInRefusal(serverName);
+  if (refusal) return Response.json({ error: refusal }, { status: refusal === OWN_SERVER_SIGN_IN ? 400 : 403 });
 
   // Device ID is mandatory — a session without one cannot maintain a coherent
   // crypto identity (see deviceId.ts invariant).
@@ -51,9 +47,17 @@ export async function POST(req: NextRequest) {
   }
   const effectiveDeviceId = deviceId;
 
-  // The endpoints come from the browser: https only, one origin (federatedSignIn.ts). The
-  // authorize URL is where the sign-in page sends the browser next — a `javascript:` one ran
-  // script on this origin.
+  // The endpoints are the named server's OWN, discovered here from its name (federatedSignIn.ts
+  // discoverServer) — never what the browser sent, so the client registered and the registry entry
+  // it keys belong to that server. Still checked: https only, one origin — the authorize URL is
+  // where the sign-in page sends the browser next, and a `javascript:` one ran script on this origin.
+  const found = await discoverServer(serverName, (url, init) => safeFetch(url, init));
+  if (!found.ok) return Response.json({ error: found.error }, { status: found.error === "no_oidc" ? 422 : 502 });
+  const homeserver = found.homeserver;
+  const { authorizationEndpoint, tokenEndpoint, registrationEndpoint } = found.metadata;
+  if (!registrationEndpoint) {
+    return Response.json({ error: "no_registration_endpoint" }, { status: 422 });
+  }
   const problem = initiateEndpointsProblem({ authorizationEndpoint, tokenEndpoint, registrationEndpoint });
   if (problem) return Response.json({ error: "invalid_endpoints", detail: problem }, { status: 400 });
   // The state cookie is signed; without the secret it cannot be, and is never set unsigned.
@@ -63,9 +67,10 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "unavailable" }, { status: 503 });
   }
 
-  // Dynamic client registration (RFC 7591) — register this site as a public client
-  let clientId: string;
-  try {
+  // This site's public client at that server: registered (RFC 7591) by the first sign-in there,
+  // then reused (federatedSignIn.ts federatedClientId) — a new client per sign-in knocked the
+  // account's other devices out.
+  const register = async (): Promise<string> => {
     const reg = await safeFetch(registrationEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -86,8 +91,12 @@ export async function POST(req: NextRequest) {
       throw new Error(`registration failed: ${reg.status} — ${body.slice(0, 200)}`);
     }
     const regData = (await readJsonCapped(reg, OAUTH_REPLY_MAX_BYTES)) as { client_id?: unknown } | null;
-    if (typeof regData?.client_id !== "string") throw new Error("registration returned no client_id");
-    clientId = regData.client_id;
+    if (typeof regData?.client_id !== "string" || !regData.client_id) throw new Error("registration returned no client_id");
+    return regData.client_id;
+  };
+  let clientId: string;
+  try {
+    clientId = await federatedClientId({ query: (sql, params) => pool.query(sql, params), register }, registrationEndpoint, REDIRECT_URI);
   } catch (e) {
     return Response.json({ error: "registration_failed", detail: String(e) }, { status: 502 });
   }
@@ -98,7 +107,7 @@ export async function POST(req: NextRequest) {
   // State cookie: HttpOnly, Secure, 5 minutes — and SIGNED with its issued-at, which the callback
   // verifies before it reads a field or makes a request.
   const cookieStore = await cookies();
-  cookieStore.set(FED_STATE_COOKIE, signFedState({ state, codeVerifier, tokenEndpoint, homeserver, clientId, deviceId: effectiveDeviceId, serverName }, secret), {
+  cookieStore.set(FED_STATE_COOKIE, signFedState({ state, codeVerifier, tokenEndpoint, homeserver, clientId, deviceId: effectiveDeviceId, registrationEndpoint, serverName }, secret), {
     httpOnly: true,
     secure: true,
     sameSite: "lax",

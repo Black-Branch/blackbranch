@@ -1,7 +1,7 @@
 import StreamView from "@/app/components/StreamView";
 import { auth } from "@/auth";
 import { streamApiFetch } from "@/app/lib/streamApi";
-import { getChannelAvatar } from "@/app/lib/streamStatus";
+import { getChannelAvatar } from "@/app/lib/communityLive";
 import { getVods } from "@/app/lib/vods";
 import { getHomePayloadWithin } from "@/app/lib/homeCache";
 import { twitchAppToken, twitchClientId } from "@/app/lib/twitch";
@@ -202,6 +202,7 @@ export default async function StreamPage() {
         streamTitle={streamTitle}
         viewerCount={viewerCount}
         initialYtVideoId={isLive && typeof status?.ytVideoId === "string" && status.ytVideoId ? status.ytVideoId : null}
+        initialLiveness={status?.liveness ?? { at: 0, platforms: {} }}
         followerCount={followerCount}
         // Contract 7: a provider on → /donate; else the streamer's https donate link; else null (no button).
         donateUrl={donateTarget({ providerOn: stripeConfigured() || paypalConfigured(), donateUrl: instanceString("site.donateUrl") })}
@@ -226,6 +227,7 @@ export default async function StreamPage() {
           youtubeChannelId: instanceString("platform.youtube.channelId") ?? "",
           youtubeShown: !off.includes("youtube"),
           twitchChannel: instanceString("platform.twitch.channel") ?? "",
+          kickSlug: instanceString("platform.kick.slug") ?? "",
         })}
         kickChannel={instanceString("platform.kick.slug") ?? ""}
       />

@@ -171,8 +171,90 @@ test("columns form only where they have 17rem of room — never a breakpoint-for
   // min(17rem,100%): a track never wider than the cell, or a pane under ~616px
   // (a 900px window with the default chat) scrolled SIDEWAYS.
   assert.match(out, /grid-cols-\[repeat\(auto-fit,minmax\(min\(17rem,100%\),1fr\)\)\]/);
-  assert.match(out, /data-widget="status" class="[^"]*\bcol-span-full\b/);
   assert.doesNotMatch(out, /lg:grid-cols-|lg:col-span/);
+});
+
+// ── #237: the page reflows with the PANE, never squishes ────────────────────────────────────
+// jsdom has no layout engine, so these read the rendered classes and evaluate the CSS rules they
+// declare at a pane width (the real-browser measurement at 1600/1200/900/600/390 is the look run on
+// the throwaway pair). The terms are the ones the layout is built from: the card column at most
+// 300px (min 240), a 12px gap (gap-3), a widget never under 17rem.
+const REM = 16, GAP = 12, CARD_MAX = 300, WIDGET_MIN = 17 * REM;
+const outerClasses = (out: string) => out.match(/<div class="(grid gap-3 [^"]*)">/)?.[1]?.split(/\s+/) ?? null;
+/** What the declared rules give at a pane content width `w` (px): does the card column form, and how
+ *  many widget columns the auto-fit list grid makes for `lists` list widgets, and how wide each is. */
+function columnsAt(out: string, w: number, lists: number): { card: boolean; widgetCols: number; widgetW: number } {
+  const outer = outerClasses(out);
+  assert.ok(outer, "the outer grid renders");
+  const two = outer!.find((c) => c.endsWith(":grid-cols-[minmax(240px,300px)_1fr]"));
+  assert.ok(two, "the outer grid has a two-column rule");
+  // A container query (@[Nrem]:) answers to the PANE; a viewport prefix (md:) cannot be evaluated
+  // from the pane at all — that was the squish: the viewport said "two columns" while the chat had
+  // left the pane 544px wide, so the widgets got the leftover 200px.
+  const m = two!.match(/^@\[(\d+(?:\.\d+)?)rem\]:/);
+  assert.ok(m, `the card column must be decided by the pane (a container query), not the viewport: ${two}`);
+  const card = w >= Number(m![1]) * REM;
+  const rest = card ? w - CARD_MAX - GAP : w;
+  // auto-fit collapses empty tracks, so the lists share the row — but only when nothing spans every
+  // track (a col-span-full item keeps the empty tracks alive).
+  assert.doesNotMatch(out, /col-span-full/, "a full-span item inside the auto-fit grid keeps its empty tracks");
+  const tracks = Math.max(1, Math.floor((rest + GAP) / (WIDGET_MIN + GAP)));
+  const widgetCols = Math.min(tracks, lists);
+  return { card, widgetCols, widgetW: Math.floor((rest - GAP * (widgetCols - 1)) / widgetCols) };
+}
+
+test("#237: the card column forms only where the card AND one 17rem widget fit beside it — the pane decides, never the viewport", () => {
+  for (const signedIn of [false, true]) {
+    const out = html({ signedIn });
+    assert.match(out, /<div class="h-full overflow-y-auto p-3 md:p-4 @container">/, "the scroller is the size container");
+    const two = outerClasses(out)!.find((c) => c.endsWith(":grid-cols-[minmax(240px,300px)_1fr]"));
+    // Derived, not eyeballed: 300 (card) + 12 (gap) + 272 (17rem widget) = 584px = 36.5rem.
+    assert.equal(two, `@[${(CARD_MAX + GAP + WIDGET_MIN) / REM}rem]:grid-cols-[minmax(240px,300px)_1fr]`);
+    assert.doesNotMatch(out, /md:grid-cols-\[minmax/, "no viewport breakpoint decides the card column");
+  }
+});
+
+test("#237: the grid column count at three pane widths — wide: card + three; mid: card + one; narrow: stacked, every card full width — and no widget ever under 17rem", () => {
+  const out = html({});
+  const lists = HOME_WIDGETS.filter((d) => !d.full).length; // vods, threads, boards, news
+  assert.equal(lists, 4, "vacuity: the fixture shows four list widgets");
+  // 1600 window, chat folded (pane content 1244) · 1200 with the chat open (844) · 900 with it open (544).
+  assert.deepEqual(columnsAt(out, 1244, lists), { card: true, widgetCols: 3, widgetW: 302 });
+  assert.deepEqual(columnsAt(out, 844, lists), { card: true, widgetCols: 1, widgetW: 532 });
+  assert.deepEqual(columnsAt(out, 544, lists), { card: false, widgetCols: 1, widgetW: 544 });
+  // A wide pane with two lists: they share the row instead of sitting beside empty tracks.
+  assert.deepEqual(columnsAt(out, 1244, 2), { card: true, widgetCols: 2, widgetW: 460 });
+  for (let w = 300; w <= 2400; w += 4) {
+    const c = columnsAt(out, w, lists);
+    assert.ok(c.widgetW >= Math.min(WIDGET_MIN, w), `pane ${w}: a widget squished to ${c.widgetW}px`);
+  }
+});
+
+test("#237: the status card sits on its own row above the list grid, not inside it", () => {
+  for (const variant of ["grid", "compact"] as const) {
+    const out = html({ variant });
+    const status = out.indexOf('data-widget="status"');
+    const grid = out.indexOf('<div class="grid grid-cols-[repeat(auto-fit');
+    assert.ok(status >= 0 && grid > status, `${variant}: status (${status}) comes before the list grid (${grid})`);
+    assert.doesNotMatch(out, /col-span-full/, `${variant}: nothing spans the auto-fit tracks`);
+    for (const d of HOME_WIDGETS.filter((x) => !x.full)) {
+      assert.ok(out.indexOf(`data-widget="${d.id}"`) > grid, `${variant}: ${d.id} is inside the list grid`);
+    }
+  }
+});
+
+const layoutShape = (out: string) => [...out.matchAll(/<div class="((?:h-full overflow-y-auto|grid )[^"]*)"/g)].map((m) => m[1]);
+
+test("#237 restart: the first frame after a reload (no body yet) and a remembered body wear the same layout", () => {
+  const first = layoutShape(html({ data: null, loading: true, signedIn: true }));
+  assert.ok(first.length >= 3, `vacuity: the scroller, the outer grid and the list grid: ${first}`);
+  assert.deepEqual(layoutShape(html({ signedIn: true })), first);
+});
+
+test("#237 retry: a failed refresh that keeps the last body keeps the same layout", () => {
+  const retry = html({ error: true });
+  assert.match(retry, /a refresh failed/, "vacuity: the retry state rendered");
+  assert.deepEqual(layoutShape(retry), layoutShape(html({})));
 });
 
 test("the widget order: what's going on → VODs → threads → leaderboard → news", () => {

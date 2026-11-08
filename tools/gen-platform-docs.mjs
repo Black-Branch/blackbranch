@@ -43,7 +43,7 @@ const fill = (v) => v.replace(/\{([a-zA-Z]+)\}/g, (_, k) => EXAMPLE[k] ?? `{${k}
 
 /**
  * Every setup list the public docs describe: each product module that has one, then the core lists.
- * @returns {{ id: string, label: string, description: string, kind: "module" | "core", release: string, defaultOn?: boolean, steps: any[] }[]}
+ * @returns {{ id: string, label: string, description: string, kind: "module" | "core", release: string, defaultOn?: boolean, turnOn?: { short: string, words: string }, steps: any[] }[]}
  */
 // Where each module's switch sits in the Admin Panel (web/app/features/instance/adminLayout.ts).
 const SWITCH_PLACE = { obs: "Utility → OBS", youtube: "Platforms → YouTube", stripe: "Payments → Connections", paypal: "Payments → Connections" };
@@ -56,6 +56,7 @@ export function setupLists() {
   }));
   const core = SETUP_CORE.map((c) => ({
     id: c.id, label: c.label, description: c.description, kind: /** @type {const} */ ("core"), release: c.release, steps: c.steps,
+    ...(c.turnOn ? { turnOn: c.turnOn } : {}),
   }));
   return [...core, ...modules];
 }
@@ -77,10 +78,16 @@ export function renderPage(list) {
       `This is a module: switch it on during setup (the **Modules** page) or later in the Admin Panel, at the top of its own page (${SWITCH_PLACE[list.id] ?? "its own page"})${list.defaultOn ? "" : ". It is off on a new install"}. Its setup steps are below.`,
       "",
     );
+  } else if (list.turnOn) {
+    // Neither a setup choice nor a switch (Discord: the bundle's profile, on the server).
+    lines.push(prose(list.turnOn.words), "");
   } else {
     lines.push("Choose it during setup on the **Modules** page; its setup page then appears with the steps below. The same steps are in the Admin Panel later.", "");
   }
-  lines.push(`The addresses below are for a site at \`${EXAMPLE.domain}\`; your setup page shows your own.`, "");
+  // Only a page with an address to paste says whose address it shows.
+  if (list.steps.some((s) => s.paste.some((p) => /\{[a-zA-Z]+\}/.test(p.value)))) {
+    lines.push(`The addresses below are for a site at \`${EXAMPLE.domain}\`; your setup page shows your own.`, "");
+  }
   list.steps.forEach((s, i) => {
     lines.push(`## ${i + 1}. ${prose(s.title)}${s.need === "optional" ? " (optional)" : ""}`, "", prose(s.explain), "");
     if (s.links.length) {
@@ -102,7 +109,7 @@ export function renderPage(list) {
 
 /** The index page. */
 export function renderIndex(lists) {
-  const rows = lists.map((l) => `| [${prose(l.label)}](${l.id}.md) | ${l.kind === "module" ? "module (switch)" : "choose on the Modules page"} | ${proseCell(l.description)} |`);
+  const rows = lists.map((l) => `| [${prose(l.label)}](${l.id}.md) | ${l.kind === "module" ? "module (switch)" : l.turnOn ? proseCell(l.turnOn.short) : "choose on the Modules page"} | ${proseCell(l.description)} |`);
   return [GENERATED, "", "# Platforms and payments", "",
     "One page per platform and payment provider, made from the same lists as the setup pages, so the two always agree.",
     "", "| Page | How it is turned on | What it is for |", "|---|---|---|", ...rows, ""].join("\n");

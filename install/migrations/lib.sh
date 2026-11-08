@@ -34,6 +34,17 @@ envm_put_line() { # envm_put_line KEY RAW — replace KEY's line, or append it
 }
 # envm_add KEY VALUE — add KEY with VALUE when .env does not hold it (an existing value is kept).
 envm_add() { envm_has "$1" || envm_put_line "$1" "$2"; }
+# envm_secret KEY BYTES — add KEY as BYTES random bytes in hex when .env does not hold it. The value
+# is checked before it is written (a failed generator never writes an empty secret) and never printed.
+envm_secret() {
+  local v
+  envm_has "$1" && return 0
+  v=$(openssl rand -hex "$2" 2>/dev/null) || v=""
+  if ! [[ "$v" =~ ^[0-9a-f]+$ ]] || [ "${#v}" -ne $(( $2 * 2 )) ]; then
+    echo "could not generate $1 (openssl rand failed) — .env is as it was" >&2; return 1
+  fi
+  envm_put_line "$1" "$v"
+}
 # envm_rename OLD NEW — move OLD's value to NEW (NEW wins when both exist); OLD is removed.
 envm_rename() {
   if envm_has "$1"; then

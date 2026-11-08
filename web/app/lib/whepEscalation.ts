@@ -75,15 +75,21 @@ export type EscalationAction =
 // @test-only whepEscalation.test.ts asserts against the grace window.
 export const DISCONNECT_GRACE_MS = 6000;
 
-// The reconnect ladder. One ~8-minute node-side blip can hit many viewers; a
-// short ladder — four tries at 2/4/6/8 s, each behind the 9 s connect timeout
-// — burns out in about a minute and leaves "Can't connect" on screen for the
-// rest of it. The waits grow and then hold at 30 s, and the budget is ten
-// attempts: with the connect timeout on each, roughly five minutes of
-// "Reconnecting…" before the viewer is handed the choice. Long enough to
-// outlast a short relay outage, short enough to still end somewhere. `attempt`
-// is the 1-based count of the retry being scheduled: the ramp for the first
-// four, the hold for the rest.
+// The reconnect ladder. The waits grow and then hold at 30 s. `attempt` is the
+// 1-based count of the retry being scheduled: the ramp for the first four, the
+// hold for the rest.
+//
+// A SESSION THAT HAS PLAYED NEVER GIVES UP (2026-10-31). The player only mounts
+// while the site's own liveness says stream.place is live, and unmounts when it
+// is not, so "is the stream still on?" is never this module's question. Until
+// then a viewer whose picture dropped keeps a quiet "Reconnecting…" and a try
+// every 30 s, the way Twitch's player does. The old ten-try budget put "Can't
+// connect" on screen about five minutes into a phone's dead spot, and the
+// viewer had to come back and tap. MAX_RECONNECTS is now two smaller things:
+// the budget for a session that has NEVER connected (retryBudgetSpent), and
+// the point where the reconnect screen also offers the escapes
+// (offerChoicesWhileReconnecting) while it keeps trying.
+// @test-only whepEscalation.test.ts and the reconnect render test drive the budget by this count.
 export const MAX_RECONNECTS = 10;
 const RECONNECT_RAMP_MS = [2000, 4000, 8000, 15000];
 const RECONNECT_HOLD_MS = 30000;
@@ -91,15 +97,115 @@ export function reconnectDelayMs(attempt: number): number {
   return RECONNECT_RAMP_MS[Math.max(attempt, 1) - 1] ?? RECONNECT_HOLD_MS;
 }
 
+/** Stop retrying and hand the viewer the choice? Only for a session that has
+ *  never played: a transport that has worked here is retried for as long as
+ *  the player is mounted (see the note above MAX_RECONNECTS). */
+export function retryBudgetSpent(input: { everConnected: boolean; retryCount: number }): boolean {
+  return !input.everConnected && input.retryCount >= MAX_RECONNECTS;
+}
+
+/** Has a reconnect run long enough that the screen should also offer the
+ *  escapes (Compatibility mode, the embed)? It keeps trying either way. */
+export function offerChoicesWhileReconnecting(retryCount: number): boolean {
+  return retryCount >= MAX_RECONNECTS;
+}
+
+// ── The connect watchdog ─────────────────────────────────────────────────────
+// One attempt has three phases before it plays: gathering our own ICE
+// candidates ("ice", capped by the player's waitForIce), the WHEP exchange
+// through our relay ("signal": the offer is out, no answer yet), and the ICE /
+// DTLS checks against the node ("connect": the answer is applied). A
+// connection that hangs is judged differently by phase:
+//  · "signal" is HTTP. Our relay gives up on the node after
+//    WHEP_RELAY_TIMEOUT_MS and answers 502 itself, so the player must not
+//    abandon the request sooner — the old 9 s watchdog did, on any attempt whose
+//    ICE gathering took more than a second. And a request that never answers
+//    is a network that cannot reach THIS SITE right now, not one that blocks
+//    WebRTC: it is retried, never answered with "Compatibility mode usually
+//    works" (prod 10-30: an Android phone's telemetry rows were all held and
+//    then delivered in one burst at 20:11:02 — its HTTP was not getting out).
+//  · "connect" is the media path. Hanging here is the UDP-hostile network
+//    (GrapheneOS Vanadium's default): retried when this session has played,
+//    else the choice panel.
+
+/** The relay's own deadline on the node (whepProxy.ts takes it as its default). */
+export const WHEP_RELAY_TIMEOUT_MS = 8000;
+/** waitForIce's cap: the offer goes out with whatever was gathered by then. */
+export const ICE_GATHER_CAP_MS = 2500;
+/** "Connecting…" has this one deadline from the start of an attempt — the HLS
+ *  path bounds its start with the same window. */
+export const CONNECT_TIMEOUT_MS = 9000;
+/** The latest an answer can arrive and still be our relay's answer: gathering's
+ *  cap + the relay's own deadline + 2 s for the two hops between the viewer and
+ *  the relay. Derived, not tuned: lowering a term moves this with it. */
+// @test-only the tests prove the derivation and tick the player to it; watchdogVerdict is its runtime reader.
+export const SIGNAL_DEADLINE_MS = ICE_GATHER_CAP_MS + WHEP_RELAY_TIMEOUT_MS + 2000;
+/** The ICE/DTLS checks get at least this long after the answer: what they had
+ *  under the old single deadline when gathering ran to its cap and the answer
+ *  was instant. A late answer no longer leaves them no time at all. */
+// @test-only whepEscalation.test.ts asserts the late-answer window; watchdogVerdict is its runtime reader.
+export const ICE_CHECK_MS = CONNECT_TIMEOUT_MS - ICE_GATHER_CAP_MS;
+
+export type NegotiationPhase = "ice" | "signal" | "connect" | "media";
+
+// ── A busy relay ─────────────────────────────────────────────────────────────
+// A 429 (our relay's per-address limit, or the node's own) is "busy", not a
+// transport that fails: the player waits and tries again by itself, counted
+// against no budget. Retrying does not deepen our own limit — a refused call
+// records nothing (rateLimit.ts) — and the wait keeps one viewer to a few
+// tries a minute against a cap of 120.
+
+/** The wait when a 429 names none. The relay sends it on its own 429s too. */
+export const BUSY_RETRY_S = 10;
+const BUSY_MIN_MS = 2000;   // a "0" must not become a tight loop
+const BUSY_MAX_MS = 60_000; // nor a huge value a wait of minutes
+
+/** How long to wait before trying again after a 429: its Retry-After
+ *  (delta-seconds or an HTTP date), bounded; BUSY_RETRY_S when absent or junk. */
+export function busyRetryMs(retryAfter: string | null, now: number = Date.now()): number {
+  const v = (retryAfter ?? "").trim();
+  let ms: number;
+  if (/^\d+$/.test(v)) ms = Number(v) * 1000;
+  else {
+    const at = v && !/^-?\d/.test(v) ? Date.parse(v) : NaN;
+    ms = Number.isFinite(at) ? at - now : BUSY_RETRY_S * 1000;
+  }
+  return Math.min(BUSY_MAX_MS, Math.max(BUSY_MIN_MS, ms));
+}
+
+export type WatchdogVerdict =
+  | { kind: "wait"; ms: number }
+  | { kind: "reconnect" }
+  | { kind: "fallback" }
+  | { kind: "none" };
+
+/**
+ * The watchdog's judgement of one attempt, `elapsedMs` after it started.
+ * `answeredAtMs` is when the answer was applied (meaningful in "connect").
+ */
+export function watchdogVerdict(input: {
+  phase: NegotiationPhase;
+  elapsedMs: number;
+  answeredAtMs: number | null;
+  everConnected: boolean;
+}): WatchdogVerdict {
+  const { phase, elapsedMs, answeredAtMs, everConnected } = input;
+  if (phase === "media") return { kind: "none" };
+  if (phase === "ice" || phase === "signal") {
+    const left = SIGNAL_DEADLINE_MS - elapsedMs;
+    return left > 0 ? { kind: "wait", ms: left } : { kind: "reconnect" };
+  }
+  const deadline = Math.max(CONNECT_TIMEOUT_MS, (answeredAtMs ?? 0) + ICE_CHECK_MS);
+  const left = deadline - elapsedMs;
+  if (left > 0) return { kind: "wait", ms: left };
+  return everConnected ? { kind: "reconnect" } : { kind: "fallback" };
+}
+
 export type EscalationInput = {
   /** RTCPeerConnection.connectionState */
   state: RTCPeerConnectionState;
   /** Has this session ever reached "connected"? */
   everConnected: boolean;
-  /** Consecutive failed reconnect attempts so far. */
-  retryCount: number;
-  /** Max consecutive retries before giving up on WebRTC. */
-  maxReconnects: number;
   /** True when WE are tearing the connection down (unmount, mode switch). */
   aborted: boolean;
 };
@@ -111,7 +217,7 @@ export type EscalationInput = {
  * drives the state to "closed" and must never be read as a failure.
  */
 export function escalationFor(input: EscalationInput): EscalationAction {
-  const { state, everConnected, retryCount, maxReconnects, aborted } = input;
+  const { state, everConnected, aborted } = input;
 
   if (aborted) return { kind: "none" };
   if (state === "connected" || state === "new" || state === "connecting") return { kind: "none" };
@@ -123,8 +229,8 @@ export function escalationFor(input: EscalationInput): EscalationAction {
   if (state === "failed" || state === "closed") {
     // Never connected => WebRTC does not work on this network (blocked UDP,
     // hostile proxy). Retrying the same transport will not help.
-    if (!everConnected) return { kind: "fallback" };
-    return retryCount >= maxReconnects ? { kind: "fallback" } : { kind: "reconnect" };
+    // Has played here => reconnect, with no budget: see MAX_RECONNECTS.
+    return everConnected ? { kind: "reconnect" } : { kind: "fallback" };
   }
 
   return { kind: "none" };

@@ -3,8 +3,10 @@
 // pg's string bigints never ride into arithmetic. Money is integer cents of take-home:
 // stream.support_events.amount_usd, written once by stream-api's economics.takeHome.
 
-/** A player live source's name (playerSource.ts LiveSource), restated so this file has no imports. */
-type LiveSourceKey = "native" | "streamplace" | "youtube" | "twitch";
+import { formatPrice } from "./moneyFormat.ts";
+
+/** A player live source's name (playerSource.ts LiveSource), restated so this file imports only the money formatter. */
+type LiveSourceKey = "native" | "streamplace" | "youtube" | "twitch" | "kick";
 
 /** The four platforms viewers are counted on, in stack order (bottom → top). */
 export const VIEWER_PLATFORMS = ["twitch", "youtube", "kick", "streamplace"] as const;
@@ -98,9 +100,12 @@ export function fmtDuration(minutes: number): string {
   return h === 0 ? `${m}m` : `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
-/** Whole dollars for a headline, cents for a row. */
+/** The support ledger is kept in US dollars (stream-api credits nothing else). */
+const LEDGER_CURRENCY = "usd";
+
+/** Whole dollars for a headline, cents for a row — the site's one money formatter. */
 export function fmtMoney(cents: number, whole = false): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", ...(whole ? { maximumFractionDigits: 0 } : {}) }).format(cents / 100);
+  return formatPrice(cents, LEDGER_CURRENCY, whole ? "whole" : "minor");
 }
 
 export function isSessionSort(v: unknown): v is SessionSort {

@@ -41,8 +41,12 @@ test("every list applies it: main timeline, thread index, thread roots, forum po
   const rows = read("app/lib/timelineRows.ts", /return true;\s*}\s*$/);
   assert.match(rows, /if \(isIgnoredSender\(room, e\)\) return false;/);
   const tl = read("app/features/community/Timeline.tsx", /<\/div>\s*\);\s*}\s*$/);
+  // The row filter is the shared room engine's (useRoomTimeline.ts, client polish Task 11).
+  assert.match(tl, /useRoomTimeline\(client, room, \{ showDeleted, myUserId, baseLimit \}\)/, "the timeline runs on the shared room engine (useRoomTimeline.ts, Task 11)");
+  const eng = read("app/lib/useRoomTimeline.ts", /phase,\s*};\s*}\s*$/);
   assert.doesNotMatch(tl, /isUserIgnored\(/, "the timeline goes through the predicate, not the raw client call");
-  assert.match(tl, /all\.filter\(\(e\) => isTimelineRow\(room, e, \{ deleted: showDeleted \}\)\)/, "the main timeline shares its renderability rule with the pinned panel's jump");
+  assert.doesNotMatch(eng, /isUserIgnored\(/, "the engine goes through the predicate, not the raw client call");
+  assert.match(eng, /all\.filter\(\(e\) => isTimelineRow\(room, e, \{ deleted: showDeleted \}\)\)/, "the main timeline shares its renderability rule with the pinned panel's jump");
 
   const threads = read("app/lib/matrixThreads.ts", /return \{[^}]*rel_type: "m\.thread"[\s\S]*\};\s*}\s*$/);
   assert.match(threads, /function isThreadReplyTo\(room: Room, e: MatrixEvent\)[\s\S]*?if \(isIgnoredSender\(room, e\)\) return null;/, "thread replies (panel, list, chip) drop ignored senders");

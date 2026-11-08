@@ -17,7 +17,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { stripComments } from "./sourceText.mjs";
-import { eventCardName, liveCardActor } from "./eventCardName.ts";
+import { eventCardName, liveCardActor, historyCardFields } from "./eventCardName.ts";
 import { normalizeUsername } from "./chatMsg.ts";
 
 const ME = "@casey:site.test";
@@ -73,10 +73,44 @@ test("Anonymous stays Anonymous, with no account behind it", () => {
   assert.equal(shown(card, actor), "Anonymous");
 });
 
-test("the account's identity still comes along: badges key, colour and style are live", () => {
-  const actor = liveCardActor("donation", liveTip("Your Mom"), { ...historyRow("Casey"), username_color: "#00ff00" });
+test("a tip under the account's own name still wears it: badges key, colour and style are live", () => {
+  const actor = liveCardActor("donation", liveTip("Casey"), { ...historyRow("Casey"), username_color: "#00ff00" });
   assert.equal(actor.matrixId, ME);
   assert.equal(actor.usernameColor, "#00ff00");
+  // Recorded as the account's: a later rename keeps it dressed.
+  const recorded = liveCardActor("donation", { ...liveTip("Casey"), tipIdentity: "account" }, historyRow("Renamed"));
+  assert.equal(recorded.matrixId, ME);
+});
+
+// ADR 0145 — a typed name that is not the account's reads back PLAIN, whatever the row's
+// matrix_id (kept for the money record and a moderator's reach) and whatever an older card's
+// event_json carried (cards before the fix stored the account's id, colour and style on them).
+const IDENTITY_KEYS = ["matrixId", "donorMatrixId", "payerMatrixId", "canonicalId", "publicId", "usernameColor", "usernameStyle"];
+function assertPlain(obj: Record<string, unknown>, where: string) {
+  for (const k of IDENTITY_KEYS) assert.ok(obj[k] == null, `${where} carries ${k}=${JSON.stringify(obj[k])}`);
+  assert.ok(!JSON.stringify(obj).includes(ME), `${where} carries the account id`);
+}
+
+test("restart: a plain tip read back from history wears no account — recorded, or from before the fix", () => {
+  const recorded = { system: "donation", username: "Your Mom", donorMatrixId: null, matrixId: null, tipIdentity: "plain", anonymous: false, amount: 500 };
+  const legacy = { ...liveTip("Your Mom"), canonicalId: "c0ffee" }; // stored with the account's id + colour
+  for (const [name, card] of [["recorded", recorded], ["legacy", legacy]] as const) {
+    const out = historyCardFields("donation", card, historyRow("Casey"), false);
+    assertPlain(out, `${name} history JSON`);
+    assert.equal(normalizeUsername(String(out.username)), "Your Mom");
+    // A moderator's copy is plain on screen too (they reach the sender through the card's row,
+    // modCardSender.ts); only a stored canonical reaches them, as for every card.
+    const mod = historyCardFields("donation", card, historyRow("Casey"), true);
+    for (const k of ["matrixId", "donorMatrixId", "usernameColor", "usernameStyle"]) assert.ok(mod[k] == null, `mod copy carries ${k}`);
+  }
+});
+
+test("history: an account card's JSON keeps its account; a non-mod never gets a stored canonical", () => {
+  const card = { ...liveTip("Casey"), tipIdentity: "account", canonicalId: "c0ffee" };
+  const pub = historyCardFields("donation", card, historyRow("Casey"), false);
+  assert.equal(pub.matrixId, ME);
+  assert.equal(pub.canonicalId, undefined);
+  assert.equal(historyCardFields("donation", card, historyRow("Casey"), true).canonicalId, "c0ffee");
 });
 
 test("every other card keeps the account's live name (a rename shows on old subs, like on chat lines)", () => {
@@ -88,11 +122,11 @@ test("every other card keeps the account's live name (a rename shows on old subs
   assert.equal(eventCardName("donation", null, null), "Anonymous");
 });
 
-test("history builds a card's identity with liveCardActor, not by hand", () => {
+test("history builds a card's fields with historyCardFields (liveCardActor inside), not by hand", () => {
   const raw = readFileSync(new URL("../api/chat/history/route.ts", import.meta.url), "utf8");
   const src = stripComments(raw);
   const last = raw.trimEnd().split("\n").slice(-1)[0]!.trim();
   assert.ok(last.length > 0 && src.trimEnd().endsWith(last), "the scan lost the end of the history route");
-  assert.match(src, /liveCardActor\(r\.event_kind, card, r\)/, "history does not build the card's identity with liveCardActor");
+  assert.match(src, /\.\.\.historyCardFields\(r\.event_kind, card, r, isMod\)/, "history does not build the card's fields with historyCardFields");
   assert.doesNotMatch(src, /username: r\.username, usernameColor: r\.username_color/, "history still sets a card's name from the account by hand");
 });

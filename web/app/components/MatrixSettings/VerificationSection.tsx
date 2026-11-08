@@ -23,7 +23,7 @@ export function VerificationSection(p: Props) {
         <div className="space-y-2">
           <p className="text-xs text-body font-medium">Verification request</p>
           <p className="text-3xs text-secondary leading-relaxed">
-            {p.verifyPeer} wants to verify this session.
+            Your other session {p.verifyPeer} wants to verify this one.
           </p>
           <div className="flex gap-1.5">
             <button

@@ -1,6 +1,7 @@
-// Setup step 7. POST { federation } — save the switch and ask the host to make the community (the
-// space and #general, as the first admin's own account); GET — the rooms once recorded, and the
-// host's answer.
+// Setup step 7. POST { federation, registration, channels? } — save the switch, the sign-up answer
+// and the channels listed beyond #general and #forum (made after setup), then ask the host to make
+// the community (the space, #general and #forum, as the first admin's own account); GET — the rooms
+// once recorded, and the host's answer.
 import { communityStatus, startCommunity } from "@/app/lib/setup/setupServer";
 
 export const dynamic = "force-dynamic";

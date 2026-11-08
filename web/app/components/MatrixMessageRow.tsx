@@ -15,13 +15,14 @@ import { copyText } from "@/app/lib/clipboard";
 import type { EmoteMap } from "@/app/lib/useEmotes";
 import { EMPTY_REACTIONS, type ReactionAgg, type ReactionExtra } from "@/app/lib/matrixReactions";
 import { extractUrls, uniqueUrls, snippet } from "@/app/lib/textFormat";
-import { formatChatTime, type TsFormat } from "@/app/lib/chatTime";
-import { memberName } from "@/app/lib/matrixDisplay";
+import { formatChatTime, communityHeaderParts, type TsFormat } from "@/app/lib/chatTime";
+import { memberName, memberAvatar } from "@/app/lib/matrixDisplay";
 import { senderLabel as discordLabel } from "@/app/lib/discordSender";
 import PlatformIcon from "@/app/components/PlatformIcon";
 import { useBadges, badgesForMatrixId } from "@/app/lib/BadgesContext";
 import { Smiley, Chats } from "@phosphor-icons/react/dist/ssr";
 import { Avatar } from "./Avatar";
+import { AVATAR_PX, type AvatarStep } from "@/app/lib/avatarSize";
 import { stripReplyFallback } from "@/app/lib/stripReplyFallback";
 import { sanitizeMatrixHtml, treeHrefs, treeText, treeHasEmbed } from "@/app/lib/matrixHtml";
 import { previewCandidates } from "@/app/lib/linkPreviewLimits";
@@ -29,81 +30,87 @@ import { MatrixHtml } from "./MatrixHtml";
 import { LinkPreview } from "./LinkPreview";
 import { ReactionKey, ReactionPicker, getRecentReactions, saveRecentReaction } from "./ReactionPicker";
 import { MsgContextMenu } from "./MsgContextMenu";
+import { msgMenuItems, type MsgMenuCtx } from "./msgMenuItems";
+import { MessageSheet, type MessageSheetView } from "./MessageSheet";
 import { MatrixImage, MatrixFile, MatrixVideo, MatrixAudio } from "./MatrixAttachments";
 import { mediaKindLabel } from "@/app/lib/mediaKind";
+import { attachmentCaption } from "@/app/lib/mediaInfo";
 import { ForumVoteControl } from "./ForumVoteControl";
+import { PollStartCard } from "./PollStartCard";
+import { isPollStartType, textOf } from "@/app/lib/pollStart";
 import { MemberCard } from "./MemberCard";
 import { PronounMark } from "./PronounMark";
 import { usernameStyleCSS, usernameStyleAnimClass } from "@/app/lib/usernameStyles";
 import { useAnimFence } from "@/app/lib/animFence";
 import type { UserLooks } from "@/app/lib/useUserLooks";
 import { useWantUserStyles } from "@/app/lib/useUserColors";
+import type { EchoState } from "@/app/lib/localEcho";
+import { NotSentLine } from "./NotSentLine";
+import { lockCopy } from "@/app/lib/keyWait";
+import { useReplyTarget } from "@/app/lib/replyTarget";
 
 const NO_LOOKS: UserLooks = {};
-
-// ─── Undecryptable message copy ──────────────────────────────────────────────
-// When a message can't be decrypted the SDK replaces its content with a
-// developer-facing body ("** Unable to decrypt: DecryptionError: ... **"). We must
-// never render that — it's raw noise. Map the SDK's failure reason (a
-// DecryptionFailureCode string) to short, human copy; the global "Session
-// unverified / Secure your account" banner carries the actual remediation, so the
-// row stays quiet. `reason` is `String(ev.decryptionFailureReason ?? "")`.
-function decryptFailureText(reason: string): string {
-  switch (reason) {
-    case "HISTORICAL_MESSAGE_NO_KEY_BACKUP":
-    case "HISTORICAL_MESSAGE_BACKUP_UNCONFIGURED":
-    case "HISTORICAL_MESSAGE_WORKING_BACKUP":
-      return "sent before you signed in on this device";
-    case "HISTORICAL_MESSAGE_USER_NOT_JOINED":
-      return "sent before you joined";
-    case "MEGOLM_KEY_WITHHELD":
-    case "MEGOLM_KEY_WITHHELD_FOR_UNVERIFIED_DEVICE":
-    case "UNSIGNED_SENDER_DEVICE":
-      return "waiting for the sender to share the key";
-    default:
-      return "can’t decrypt this message";
-  }
-}
+/** The head avatar's thumbnail in Cozy is fetched for the gutter's size (globals.css
+ *  `--mx-gutter-avatar-base`, the scale's lg step): it only picks how sharp the picture is,
+ *  never its box. */
+const GUTTER_AVATAR_PX = AVATAR_PX.lg;
 
 // ─── Reply preview (quoted message) ──────────────────────────────────────────
+
+/** The quote's text: the original's first line (CSS cuts it to the row), a media kind, or the
+ *  lock copy. Never the SDK's "** Unable to decrypt **" body. */
+function quoteText(ev: MatrixEvent): string {
+  const lock = lockCopy(ev, false);
+  if (lock !== undefined) return lock;
+  const content = ev.getContent() as Record<string, unknown>;
+  const kind = mediaKindLabel(ev.getType(), content.msgtype);
+  if (kind) return kind;
+  const firstLine = stripReplyFallback((content.body as string) ?? "").trim().split("\n")[0] ?? "";
+  return snippet(firstLine, 200);
+}
 
 function ReplyPreview({
   room,
   eventId,
   onOpenMember,
+  onJump,
 }: {
   room: Room;
   eventId: string;
   /** Opens the shared member card for the quoted sender (absent = deleted quote, no member found). */
   onOpenMember?: (member: RoomMember, e: React.MouseEvent) => void;
+  /** Jump to the original; absent = the quote is a plain block (the thread panel). */
+  onJump?: (id: string) => void;
 }) {
-  const ev = room.findEventById(eventId);
-  if (!ev) {
+  const target = useReplyTarget(room.client, room, eventId);
+  const quoteStyle = { fontSize: "var(--text-chat-xs)" };
+  if (target.state !== "loaded") {
+    const say = target.state === "loading" ? "Loading reply…" : target.state === "deleted" ? "Reply to deleted message" : "Original message isn't available";
     return (
-      <div className="mb-1 pl-2 border-l-2 border-control text-xs text-muted italic">
-        Reply to deleted message
+      <div className="mb-1 pl-2 border-l-2 border-control text-muted italic leading-snug truncate" style={quoteStyle} data-reply-state={target.state}>
+        {say}
       </div>
     );
   }
+  const ev = target.ev;
   const senderId = ev.getSender() ?? "";
   const member = room.getMember(senderId);
   // The bridge writes its own "(Discord)" into the ghost's displayname;
   // senderLabel strips it and flags the sender so the platform shows as a
   // glyph, not prose inside a name.
   const { label: senderLabel, fromDiscord } = discordLabel(memberName(member, senderId), senderId);
-  const content = ev.getContent() as Record<string, unknown>;
-  const preview = mediaKindLabel(ev.getType(), content.msgtype) ?? snippet(stripReplyFallback((content.body as string) ?? ""));
+  const preview = quoteText(ev);
   return (
     <div
-      className="mb-1 flex gap-1.5 pl-2 border-l-2 border-control text-muted leading-snug"
-      style={{ fontSize: "var(--text-chat-xs)" }}
+      className="mb-1 flex min-w-0 gap-1.5 pl-2 border-l-2 border-control text-muted leading-snug"
+      style={quoteStyle}
     >
       {member && onOpenMember ? (
         <button
           type="button"
           aria-label={`Open member card for ${senderLabel}`}
           onClick={(e) => onOpenMember(member, e)}
-          className="shrink-0 text-left"
+          className="min-w-0 max-w-[50%] shrink-0 truncate text-left"
           title={fromDiscord ? `${senderLabel} (via Discord)` : undefined}
           style={{ color: usernameColor(senderLabel), fontFamily: "var(--chat-username-font, inherit)", fontWeight: "var(--chat-username-weight, 600)" as React.CSSProperties["fontWeight"], filter: "saturate(var(--chat-username-sat, 1))" }}>
           {senderLabel}
@@ -112,19 +119,45 @@ function ReplyPreview({
           )}
         </button>
       ) : (
-        <span className="shrink-0" title={fromDiscord ? `${senderLabel} (via Discord)` : undefined} style={{ color: usernameColor(senderLabel), fontFamily: "var(--chat-username-font, inherit)", fontWeight: "var(--chat-username-weight, 600)" as React.CSSProperties["fontWeight"], filter: "saturate(var(--chat-username-sat, 1))" }}>
+        <span className="min-w-0 max-w-[50%] shrink-0 truncate" title={fromDiscord ? `${senderLabel} (via Discord)` : undefined} style={{ color: usernameColor(senderLabel), fontFamily: "var(--chat-username-font, inherit)", fontWeight: "var(--chat-username-weight, 600)" as React.CSSProperties["fontWeight"], filter: "saturate(var(--chat-username-sat, 1))" }}>
           {senderLabel}
           {fromDiscord && (
             <PlatformIcon platform="discord" size="0.85em" className="ml-1 inline-block align-baseline opacity-70" />
           )}
         </span>
       )}
-      <span className="truncate">{preview}</span>
+      {onJump ? (
+        <button
+          type="button"
+          aria-label="Jump to the original message"
+          onClick={() => onJump(eventId)}
+          className="min-w-0 flex-1 truncate text-left hover:text-strong focus-visible:outline focus-visible:outline-edge-bright">
+          {preview}
+        </button>
+      ) : (
+        <span className="truncate">{preview}</span>
+      )}
     </div>
   );
 }
 
+/** A reaction pill's tooltip: the first ten names, then how many more. */
+function reactorsTitle(names: string[]): string {
+  const shown = names.slice(0, 10).join(", ");
+  return names.length > 10 ? `${shown} and ${names.length - 10} more` : shown;
+}
+
 // ─── Shared message row ──────────────────────────────────────────────────────
+
+/**
+ * The text sent with a picture, video, audio or file, under it. Its own
+ * component: reading `content` through a call in the row's render would make
+ * the compiler drop the row's memo.
+ */
+function Caption({ content, emotes }: { content: Record<string, unknown>; emotes: EmoteMap }) {
+  const text = attachmentCaption(content.body, content.filename);
+  return text ? <div data-caption="" className="mt-1.5">{renderText(text, emotes)}</div> : null;
+}
 
 function MatrixMessageRowImpl({
   ev,
@@ -162,8 +195,14 @@ function MatrixMessageRowImpl({
   groupEnd = false,
   alt = false,
   looks = NO_LOOKS,
-  avatarSize = 14,
+  avatarStep = "line",
+  gutterAvatar = true,
   showEdited = true,
+  echo = "sent",
+  onRetry,
+  onDrop,
+  onJumpToReply,
+  lock,
 }: {
   ev: MatrixEvent;
   room: Room;
@@ -241,10 +280,31 @@ function MatrixMessageRowImpl({
   alt?: boolean;
   /** Name styles + pronouns by matrix id (useUserLooks) — Chat rows › Name styles / Pronoun symbols. */
   looks?: UserLooks;
-  /** Avatar px at the default size (Avatar scales it by Chat rows › Avatar size): 14, 12 in Compact. */
-  avatarSize?: number;
+  /** The head picture's step on the avatar scale, × Chat rows › Avatar size: line, xs in Compact. */
+  avatarStep?: AvatarStep;
+  /** Community › Layout is Cozy: the head's picture is fetched at the gutter's size. Only the
+   *  thumbnail follows it — WHERE the picture sits is globals.css, keyed off <html>. */
+  gutterAvatar?: boolean;
   /** Community › "(edited)" tag. */
   showEdited?: boolean;
+  /** The send state of the viewer's own local echo (localEcho.ts `echoState`):
+   *  "sending" is faint, "failed" is faint with "Not sent · Retry · Delete".
+   *  A prop, not read off `ev` here: the SDK mutates the same MatrixEvent in
+   *  place, so only a changed value tells the memo (rowPropsEqual) to re-render. */
+  echo?: EchoState;
+  /** Retry / Delete for a failed echo (localEcho.ts `retryEcho` / `dropEcho`). */
+  onRetry?: (ev: MatrixEvent) => void;
+  onDrop?: (ev: MatrixEvent) => void;
+  /** Jump to the message a reply quotes. Absent = the quote is a plain block, not a button. */
+  onJumpToReply?: (id: string) => void;
+  /** The lock row's words while this event can't be read (keyWait.ts `lockCopy`); absent once it
+   *  decrypts. A prop, not read off `ev`: the SDK decrypts the same event object in place, so only
+   *  a changed value repaints this memoised row. Absent = computed here, unsettled. */
+  lock?: string;
+  /** Whether `ev` is redacted, as the list saw it. A prop for the same reason as `lock`: the SDK
+   *  redacts the same event object in place, so only a changed value repaints this memoised row
+   *  (a ban's history deletion redacts a run of rows whose other props never change). */
+  redacted?: boolean;
 }) {
   // `tick` is a pass-through: its only job is to change once a minute (while a
   // "rel" format is in play) so this memoized row re-renders and recomputes
@@ -254,24 +314,38 @@ function MatrixMessageRowImpl({
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [reactAnchor, setReactAnchor] = useState<{ x: number; y: number } | null>(null);
   const [memberCard, setMemberCard] = useState<{ member: RoomMember; x: number; y: number } | null>(null);
-  // Long press opens THIS ROW'S TOOLBAR, not the ⋯ menu behind it — see the
-  // `(hover: hover)` gate in globals.css and ChatMessage's copy of this block.
-  // The toolbar already carries a ⋯ to the fuller menu, so this side only has
-  // to avoid jumping straight to the second tier.
+  // The toolbar is a hover (and keyboard) surface only — the `(hover: hover)` gate in globals.css.
+  // A long press opens the phone's ONE sheet instead (`sheet`), never the toolbar as well.
   const [barOpen, setBarOpen] = useState(false);
+  const [sheet, setSheet] = useState<{ view: MessageSheetView; x: number; y: number } | null>(null);
   // "(edited)" tapped: the original text shows under the message.
   const [showOriginal, setShowOriginal] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const closeBar = useCallback(() => setBarOpen(false), []);
+  const closeSheet = useCallback(() => setSheet(null), []);
+  const closeMenus = useCallback(() => { setBarOpen(false); setSheet(null); }, []);
   // ONE menu open app-wide — see exclusiveOpen.ts. Dismissal events cannot
   // carry this: a long press swallows its own touchend, so the previously
   // open row never saw a mousedown to close on.
-  const owner = useExclusiveOpen(barOpen, closeBar);
+  const owner = useExclusiveOpen(barOpen || sheet !== null, closeMenus);
+  // The pile a press started on (its key), or null for the message itself.
+  const pressedPile = useRef<string | null>(null);
   // Claim BEFORE flipping open: any other open row is already closing, and
   // this row cannot tell itself to close because it has not subscribed yet.
-  const handleLongPress = useCallback(() => { claimExclusive(owner); setBarOpen(true); }, [owner]);
+  const handleLongPress = useCallback((pos: { x: number; y: number }) => {
+    const key = pressedPile.current;
+    claimExclusive(owner); setSheet({ view: key ? { kind: "reactions", key } : { kind: "actions" }, ...pos });
+  }, [owner]);
   const longPress = useLongPress(handleLongPress);
+  // Touches inside this row's portals (the sheet, the picker, the card) bubble here through React;
+  // only a press on the row itself is the row's long press.
+  const onRowTouchStart = (e: React.TouchEvent) => {
+    const t = e.target as Element;
+    if (!rowRef.current?.contains(t)) return;
+    pressedPile.current = t.closest?.("[data-reaction-key]")?.getAttribute("data-reaction-key") ?? null;
+    longPress.onTouchStart(e);
+  };
   useOutsideClick(barRef, closeBar, { enabled: barOpen, escape: true, touch: false });
 
   // Toggle: if I already reacted with this key, redact it; otherwise add it.
@@ -284,15 +358,17 @@ function MatrixMessageRowImpl({
     else onReact?.(ev, key);
   };
   const myKeys = new Set(reactions.filter((r) => r.mine).map((r) => r.key));
-  // 3 most-recent reaction keys → quick-react buttons on the left of the bar.
-  const recentReacts = onReact ? getRecentReactions().slice(0, 3) : [];
+  // The viewer's three quick reactions (most used, then the curated defaults) — the bar's left end
+  // and the sheet's top row. A use is counted when it adds, never when it takes one off.
+  const recentReacts = onReact ? getRecentReactions() : [];
+  const quickReact = (k: string) => { if (!myKeys.has(k)) saveRecentReaction(k); toggleReaction(k); };
 
   const content = ev.getContent() as Record<string, unknown>;
   const senderId = ev.getSender() ?? "";
   // userColors/looks hold only the ids something asked for.
   useWantUserStyles([senderId]);
   const member = room.getMember(senderId);
-  const avatarUrl = member?.getMxcAvatarUrl() ?? null;
+  const avatarUrl = memberAvatar(member);
   // The bridge writes its own "(Discord)" into the ghost's displayname;
   // senderLabel strips it and flags the sender so the platform shows as a
   // glyph, not prose inside a name.
@@ -372,47 +448,51 @@ function MatrixMessageRowImpl({
   // (timelineRows.ts); it renders as the note alone — no toolbar, reactions,
   // thread chip or votes.
   const redacted = ev.isRedacted();
+  // Nobody received a failed echo: nothing to react to, reply to or thread.
+  const failed = echo === "failed";
+  const lockText = redacted ? undefined : (lock ?? lockCopy(ev, false));
 
   if (redacted) {
     body = <span className="text-muted italic">Message deleted</span>;
-  } else if (ev.isEncrypted() && (ev.isDecryptionFailure() || !content.body)) {
-    // A real decryption failure carries an SDK-generated body (msgtype
-    // m.bad.encrypted), so the old `!content.body` guard alone missed it and let
-    // the raw "** Unable to decrypt: ... **" string fall through to renderText.
-    // Detect it via isDecryptionFailure() and show friendly, reason-aware copy.
-    const failText = ev.isDecryptionFailure()
-      ? decryptFailureText(String(ev.decryptionFailureReason ?? ""))
-      : "encrypted";
-    body = <span className="text-muted italic">🔒 {failText}</span>;
+  } else if (lockText !== undefined) {
+    // Never the SDK's "** Unable to decrypt: … **" body. One line's height held, so the text
+    // replaces it in place when the key arrives.
+    body = <span data-lock="" className="inline-block text-muted italic" style={{ minHeight: "1lh" }}>{lockText}</span>;
+  } else if (isPollStartType(evType)) {
+    // A poll from another Matrix app: read-only until voting is built here.
+    body = <PollStartCard content={content} />;
+    rawBodyText = textOf(content) ?? "";
   } else if (evType === "m.sticker" || content.msgtype === "m.image") {
     // Forum image post: show the image, then its description (bodyOverride) below
-    // so the post's prose + links render in the thread view.
+    // so the post's prose + links render in the thread view. Otherwise the
+    // caption, when the sender wrote one (`body` beside a different `filename`).
     const desc = bodyOverride?.trim() ?? "";
     body = (
       <>
         <MatrixImage content={content} />
-        {desc && (
-          <div className="mt-1.5">{renderText(desc, emotes)}</div>
-        )}
+        {desc ? <div className="mt-1.5">{renderText(desc, emotes)}</div> : <Caption content={content} emotes={emotes} />}
       </>
     );
-    previewUrls = desc ? extractUrls(desc) : [];
+    // A caption's links get the card a plain line gets (under the media + caption).
+    previewUrls = extractUrls(desc || (attachmentCaption(content.body, content.filename) ?? ""));
     rawBodyText = (content.body as string) ?? "";
-  } else if (content.msgtype === "m.video") {
-    body = <MatrixVideo content={content} />;
-    rawBodyText = (content.body as string) ?? "";
-  } else if (content.msgtype === "m.audio") {
-    body = <MatrixAudio content={content} />;
-    rawBodyText = (content.body as string) ?? "";
-  } else if (content.msgtype === "m.file") {
-    body = <MatrixFile content={content} />;
+  } else if (content.msgtype === "m.video" || content.msgtype === "m.audio" || content.msgtype === "m.file") {
+    body = (
+      <>
+        {content.msgtype === "m.video" ? <MatrixVideo content={content} />
+          : content.msgtype === "m.audio" ? <MatrixAudio content={content} />
+          : <MatrixFile content={content} />}
+        <Caption content={content} emotes={emotes} />
+      </>
+    );
+    previewUrls = extractUrls(attachmentCaption(content.body, content.filename) ?? "");
     rawBodyText = (content.body as string) ?? "";
   } else if (dc.msgtype === "m.emote") {
     const src = (dc.body as string) ?? "";
     const emoteBody = stripReply ? stripReplyFallback(src) : src;
     body = (
       <span className="text-secondary italic">
-        <span title={fromDiscord ? `${senderLabel} (via Discord)` : undefined}>
+        <span className="min-w-0 [overflow-wrap:anywhere]" title={fromDiscord ? `${senderLabel} (via Discord)` : undefined}>
           * {senderLabel}
           {fromDiscord && (
             <PlatformIcon platform="discord" size="0.85em" className="ml-1 inline-block align-baseline opacity-70" />
@@ -453,6 +533,7 @@ function MatrixMessageRowImpl({
   const ts = new Date(ev.getTs());
   const badges = badgesForMatrixId(badgeState, senderId);
   const shortTime = formatChatTime(ts, tsFormat, "community-hover");
+  const headerTime = communityHeaderParts(ts, tsFormat);
   const nameColor =
     (isOwn && ownColor) || userColors[senderId] || memberColor || usernameColor(senderLabel);
   // The chat's Name styles + Pronoun symbols (⑥): the same span classes live chat
@@ -461,7 +542,7 @@ function MatrixMessageRowImpl({
   // a live line arrives, and a Community row mounts on every scroll and room switch.
   const look = looks[senderId];
   const nameStyle = look?.s ? { ...look.s, entrance: null } : null;
-  const nameStyleCss = usernameStyleCSS(nameStyle, nameColor);
+  const nameStyleCss = usernameStyleCSS(nameStyle, nameColor, senderLabel);
   const nameAnimClass = usernameStyleAnimClass(nameStyle);
   // An animated style pauses while its row is off screen — the same fence as a
   // live-chat row (animFence.ts).
@@ -494,7 +575,7 @@ function MatrixMessageRowImpl({
   const lrMember = lastReply ? room.getMember(lrSenderId) : null;
   // label only here, no glyph: this is a one-line thread preview, not a name.
   const lrSender = lastReply ? discordLabel(memberName(lrMember, lrSenderId), lrSenderId).label : null;
-  const lrAvatar = lrMember?.getMxcAvatarUrl() ?? null;
+  const lrAvatar = memberAvatar(lrMember);
   let lrPreview = "";
   if (lastReply) {
     const lc = lastReply.getContent() as Record<string, unknown>;
@@ -505,6 +586,24 @@ function MatrixMessageRowImpl({
   // A message can seed a thread if it isn't itself a thread reply (replies open
   // their parent thread instead) and isn't redacted.
   const canThread = !!onOpenThread && !hideThread && !isThreadReply && !ev.isRedacted();
+
+  // What this message offers — one list for the ⋯ menu and the long-press sheet. `at` anchors the
+  // reaction picker the React item opens.
+  const menuCtx = (at: { x: number; y: number }): MsgMenuCtx => ({
+    onReact: onReact ? () => setReactAnchor(at) : undefined,
+    onReply: onReply ? () => onReply(ev) : undefined,
+    onThread: canThread ? () => onOpenThread?.(ev) : undefined,
+    onMention: onMention ? () => onMention(senderId) : undefined,
+    onEdit: onEdit && canEdit ? () => onEdit(ev) : undefined,
+    onCopy: () => void copyText(rawBodyText),
+    onCopyLink: () => void copyText(`https://matrix.to/#/${room.roomId}/${ev.getId()}`),
+    onPin: onTogglePin ? () => onTogglePin(ev, !!pinned) : undefined,
+    pinned,
+    onDelete: onDelete && canRedact ? () => onDelete(ev) : undefined,
+    onRetry: failed && onRetry ? () => onRetry(ev) : undefined,
+    onDrop: failed && onDrop ? () => onDrop(ev) : undefined,
+  });
+  const nameOf = (id: string) => discordLabel(memberName(room.getMember(id), id), id).label;
 
   return (
     <div
@@ -519,7 +618,9 @@ function MatrixMessageRowImpl({
       // mark a group's first and last row, chat-msg-alt is the shared stripe.
       data-head={grouped ? undefined : ""}
       data-gend={groupEnd ? "" : undefined}
-      className={`group relative mx-row px-4 hover:bg-surface-1 touch-no-select ${grouped ? "py-0.5" : "pt-3 pb-0.5"} ${
+      // The row's horizontal inset is globals.css `--mx-row-inset` (the Cozy gutter's gap too).
+      // A head row's top padding is globals.css `--mx-head-pad` (the hover bar is anchored to it).
+      className={`group relative mx-row hover:bg-surface-1 touch-no-select ${grouped ? "py-0.5" : "pb-0.5"} ${
         alt ? "chat-msg-alt" : ""
       } ${mentioned ? "chat-row-mention-mx" : ""} ${highlighted ? "bg-accent/15 hover:bg-accent/15" : ""}`}
       // Same reason as ChatMessage's row: a tap on the message TEXT blurs the
@@ -527,13 +628,14 @@ function MatrixMessageRowImpl({
       // screen. Coarse-only so desktop drag-selection survives.
       onMouseDown={keepFocusCoarse}
       {...longPress}
+      onTouchStart={onRowTouchStart}
     >
       {/* Hover action bar (desktop) — touch gets the long-press menu. Shares
           `.row-actions` with ChatMessage: one definition of "the row toolbar",
           opaque rather than glass. This copy always had the cost right
           (`hidden group-hover:flex`); what it lacked was the fade, which the
           class now gives both. */}
-      {(onReply || onReact) && !redacted && (
+      {(onReply || onReact) && !redacted && !failed && (
         <div
           ref={barRef}
           data-open={barOpen || undefined}
@@ -546,12 +648,12 @@ function MatrixMessageRowImpl({
             <button
               key={k}
               type="button"
-              onClick={() => { toggleReaction(k); saveRecentReaction(k); }}
+              onClick={() => quickReact(k)}
               // keepFocus on every button, as on ChatMessage's equivalents:
               // reacting or replying from the Matrix timeline must not drop the
               // soft keyboard (the rule covers the whole chat surface).
               onMouseDown={keepFocus}
-              title={`React ${k}`}
+              title={`React with ${k}`}
               className="w-8 h-8 flex items-center justify-center rounded hover:bg-surface-3 transition-colors"
             >
               <ReactionKey k={k} emotes={emotes} size="1.15rem" />
@@ -597,30 +699,38 @@ function MatrixMessageRowImpl({
         </div>
       )}
 
-      {/* Reply preview spans the full row, above the name line. */}
-      {replyToId && (
-        <div>
-          <ReplyPreview room={room} eventId={replyToId} onOpenMember={(m, e) => {
+      {/* The body column (.mx-body). Cozy (the default layout) pads it by the gutter
+          and lifts the head's avatar — or a grouped row's hover time — into that
+          padding; Compact and Bubbles leave the avatar in the name line and the text
+          the full row width. The layout is a class on <html>, so one markup serves
+          all three and a switch never re-renders a row (globals.css, Community). */}
+      <div className="mx-body">
+        <div className={`min-w-0 pr-6${echo === "sent" ? "" : " opacity-60"}`} data-echo={echo === "sent" ? undefined : echo}>
+        {/* The reply quote heads the column, above .mx-main — the block the avatar
+            is placed against — so a quote never pushes the picture off its name. */}
+        {replyToId && (
+          <ReplyPreview room={room} eventId={replyToId} onJump={onJumpToReply} onOpenMember={(m, e) => {
             const r = e.currentTarget.getBoundingClientRect();
             setMemberCard({ member: m, x: r.right, y: r.top });
           }} />
-        </div>
-      )}
-
-      <div>
-        {/* Body column */}
-        {/* Avatars stay in-line with the username: no
-            gutter — the avatar is the first thing in the name line, one row
-            tall like live chat's, and the text runs the full row width. */}
-        <div className="min-w-0 pr-6">
-        {!grouped && (
-          <div className="flex items-baseline gap-1.5 flex-wrap leading-tight">
+        )}
+        <div className="mx-main">
+        {grouped ? (
+          // The gutter's hover time (Cozy; hover devices, and keyboard focus on a row
+          // that holds a focusable control). Touch cannot reach a grouped row's time.
+          // aria-hidden: the text's tooltip below carries the same time.
+          <span className="mx-gutter-time mx-time tabular-nums" aria-hidden="true"
+            style={{ fontSize: "var(--text-chat-xs)", fontFamily: "var(--chat-ts-font, inherit)", color: "var(--chat-ts-color, #71717a)" }}>
+            {formatChatTime(ts, tsFormat, "community-gutter")}
+          </span>
+        ) : (
+          <div className="mx-head flex items-baseline gap-1.5 flex-wrap leading-tight">
             {member ? (
               <button type="button" aria-label={`Open member card for ${senderLabel}`} onClick={openMemberCard} className="mx-avatar shrink-0 self-center rounded-full">
-                <Avatar mxcUrl={avatarUrl} name={senderLabel} size={avatarSize} />
+                <Avatar mxcUrl={avatarUrl} name={senderLabel} size={avatarStep} scaled box="--mx-avatar-box" thumb={gutterAvatar ? GUTTER_AVATAR_PX : undefined} />
               </button>
             ) : (
-              <span className="mx-avatar shrink-0 self-center"><Avatar mxcUrl={avatarUrl} name={senderLabel} size={avatarSize} /></span>
+              <span className="mx-avatar shrink-0 self-center"><Avatar mxcUrl={avatarUrl} name={senderLabel} size={avatarStep} scaled box="--mx-avatar-box" thumb={gutterAvatar ? GUTTER_AVATAR_PX : undefined} /></span>
             )}
             {/* `contents` keeps the header's own flex gap between badges; the
                 class is what the chat's Badges switch hides (.chat-badges-off). */}
@@ -633,7 +743,7 @@ function MatrixMessageRowImpl({
             </span>
             {member ? (
               <button type="button" aria-label={`Open member card for ${senderLabel}`} onClick={openMemberCard}
-                className="mx-text text-left hover:underline cursor-pointer"
+                className="mx-text min-w-0 [overflow-wrap:anywhere] text-left hover:underline cursor-pointer"
                 title={fromDiscord ? `${senderLabel} (via Discord)` : undefined}
                 style={{ color: nameColor, fontSize: CHAT_FONT, fontFamily: "var(--chat-username-font, inherit)", fontWeight: "var(--chat-username-weight, 600)" as React.CSSProperties["fontWeight"], filter: "saturate(var(--chat-username-sat, 1))" }}>
                 {nameInner}
@@ -642,7 +752,7 @@ function MatrixMessageRowImpl({
                 )}
               </button>
             ) : (
-              <span className="mx-text"
+              <span className="mx-text min-w-0 [overflow-wrap:anywhere]"
                 title={fromDiscord ? `${senderLabel} (via Discord)` : undefined}
                 style={{ color: nameColor, fontSize: CHAT_FONT, fontFamily: "var(--chat-username-font, inherit)", fontWeight: "var(--chat-username-weight, 600)" as React.CSSProperties["fontWeight"], filter: "saturate(var(--chat-username-sat, 1))" }}>
                 {nameInner}
@@ -651,13 +761,15 @@ function MatrixMessageRowImpl({
                 )}
               </span>
             )}
-            <span className="mx-time tabular-nums" style={{ fontSize: chatFontVar("--chat-ts-size"), fontFamily: "var(--chat-ts-font, inherit)", color: "var(--chat-ts-color, #71717a)" }}>
-              {formatChatTime(ts, tsFormat, "community-header")}
+            {/* The day part hides on a narrow pane (globals.css [data-mx-pane="narrow"]);
+                the full stamp stays the tooltip. */}
+            <span className="mx-time tabular-nums" title={formatChatTime(ts, tsFormat, "community-header")} style={{ fontSize: chatFontVar("--chat-ts-size"), fontFamily: "var(--chat-ts-font, inherit)", color: "var(--chat-ts-color, #71717a)" }}>
+              {headerTime.day && <span className="mx-time-day">{headerTime.day} </span>}{headerTime.time}
             </span>
           </div>
         )}
-        {/* A grouped row's time is the text's tooltip: there is no gutter,
-            and the row's right edge is the action bar's. */}
+        {/* A grouped row's time is also the text's tooltip, for a mouse in Compact /
+            Bubbles (no gutter). Touch shows no tooltip: it cannot reach this time. */}
         {/* Text colour = Colours › Text colour. */}
         <div className="mx-text break-words" title={grouped ? shortTime : undefined} style={{ color: "var(--chat-text-color)", fontSize: CHAT_FONT, fontFamily: "var(--chat-font-family, inherit)", fontWeight: "var(--chat-font-weight, 400)" as React.CSSProperties["fontWeight"], lineHeight: "var(--chat-line-height, 1.4)" }}>
           {body}
@@ -691,7 +803,7 @@ function MatrixMessageRowImpl({
             style={{ fontSize: "var(--text-chat-sm)" }}
           >
             {lastReply ? (
-              <Avatar mxcUrl={lrAvatar} name={lrSender ?? "?"} size={18} />
+              <Avatar mxcUrl={lrAvatar} name={lrSender ?? "?"} size="sm" />
             ) : (
               <span>💬</span>
             )}
@@ -712,8 +824,12 @@ function MatrixMessageRowImpl({
               <button
                 key={r.key}
                 type="button"
+                data-reaction-key={r.key}
                 onClick={() => toggleReaction(r.key)}
-                title={r.mine ? "Remove reaction" : "React"}
+                aria-pressed={!!r.mine}
+                aria-label={`${r.key}, ${r.count}. ${r.mine ? "Remove your reaction" : "React"}`}
+                // Who reacted (a phone holds the pill for the full list, MessageSheet).
+                title={reactorsTitle(r.senders.map(nameOf))}
                 className={`flex items-center gap-1 rounded-full border px-2 py-0.5 leading-none transition-colors ${
                   r.mine
                     ? "bg-accent/20 border-accent/50 text-heading"
@@ -740,23 +856,32 @@ function MatrixMessageRowImpl({
           </div>
         )}
         </div>
+        </div>
+        {failed && <NotSentLine onRetry={() => onRetry?.(ev)} onDelete={() => onDrop?.(ev)} />}
       </div>
 
       {ctxMenu && (
         <MsgContextMenu
           x={ctxMenu.x}
           y={ctxMenu.y}
-          onReact={onReact ? () => setReactAnchor({ x: ctxMenu.x, y: ctxMenu.y }) : undefined}
-          onReply={onReply ? () => onReply(ev) : undefined}
-          onThread={canThread ? () => onOpenThread?.(ev) : undefined}
-          onMention={onMention ? () => onMention(senderId) : undefined}
-          onEdit={onEdit && canEdit ? () => onEdit(ev) : undefined}
-          onCopy={() => void copyText(rawBodyText)}
-          onCopyLink={() => void copyText(`https://matrix.to/#/${room.roomId}/${ev.getId()}`)}
-          onPin={onTogglePin ? () => onTogglePin(ev, !!pinned) : undefined}
-          pinned={pinned}
-          onDelete={onDelete && canRedact ? () => onDelete(ev) : undefined}
+          {...menuCtx({ x: ctxMenu.x, y: ctxMenu.y })}
           onClose={() => setCtxMenu(null)}
+        />
+      )}
+
+      {sheet && !redacted && (
+        <MessageSheet
+          open
+          onClose={closeSheet}
+          view={sheet.view}
+          quickReactions={onReact && !failed && echo === "sent" ? recentReacts : []}
+          activeKeys={myKeys}
+          onReact={quickReact}
+          onMore={() => { setReactAnchor({ x: sheet.x, y: sheet.y }); setSheet(null); }}
+          items={msgMenuItems(menuCtx({ x: sheet.x, y: sheet.y }), echo)}
+          reactions={reactions}
+          nameOf={nameOf}
+          emotes={emotes}
         />
       )}
 
@@ -827,8 +952,15 @@ function rowPropsEqual(a: MatrixMessageRowProps, b: MatrixMessageRowProps): bool
     a.groupEnd !== b.groupEnd ||
     a.alt !== b.alt ||
     a.looks !== b.looks ||
-    a.avatarSize !== b.avatarSize ||
-    a.showEdited !== b.showEdited
+    a.avatarStep !== b.avatarStep ||
+    a.gutterAvatar !== b.gutterAvatar ||
+    a.showEdited !== b.showEdited ||
+    a.echo !== b.echo ||
+    a.onRetry !== b.onRetry ||
+    a.onDrop !== b.onDrop ||
+    a.onJumpToReply !== b.onJumpToReply ||
+    a.lock !== b.lock ||
+    a.redacted !== b.redacted
   ) {
     return false;
   }
@@ -840,6 +972,9 @@ function rowPropsEqual(a: MatrixMessageRowProps, b: MatrixMessageRowProps): bool
     const x = ra[i], y = rb[i];
     if (!x || !y) return false;
     if (x.key !== y.key || x.count !== y.count || x.mine !== y.mine || x.mxc !== y.mxc) {
+      return false;
+    }
+    if (x.senders !== y.senders && (x.senders.length !== y.senders.length || x.senders.some((id, j) => id !== y.senders[j]))) {
       return false;
     }
   }

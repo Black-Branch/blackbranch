@@ -225,13 +225,15 @@ test("the seven rail sections carry the agreed grouping", () => {
   const want: Record<string, string[]> = {
     text: ["Message text", "Names", "Site text", "Timestamps"],
     rows: ["Names & badges", "Platform", "Avatars", "Layout", "Emotes"],
-    colours: ["Text colours", "Panel colours", "Borders", "Shape", "Buttons"],
-    site: ["Composer", "Sizes", "Tabs", "Player"],
+    colours: ["Text colours", "Mentions & highlights", "Panel colours", "Borders", "Shape", "Buttons"],
+    // "On a phone": client polish Task 17 (the brief's phone group; edge to edge + community text).
+    site: ["Composer", "Sizes", "On a phone", "Tabs", "Player"],
     effects: ["Effects"],
     // Behavior (Highlights lives here, including "hide streamer highlight").
     behavior: ["Sound", "Highlights", "Messages", "People", "Words", "Tabs", "History", "Windows", "Terminal"],
     // Community — its own settings.
-    community: ["Timeline", "Edits & deletions", "Channel list", "Privacy"],
+    // Composer: the Return key moved here from Site & bars (k, #242, 2026-11-06).
+    community: ["Timeline", "Edits & deletions", "Channel list", "Composer", "Privacy"],
   };
   for (const t of TABS) {
     assert.deepEqual(
@@ -243,5 +245,5 @@ test("the seven rail sections carry the agreed grouping", () => {
   // The group count is pinned — a regroup moves sections, it never loses one.
   // A removed SETTING can remove a group; a merge or a new section changes the
   // count on purpose. Update the number only with such a change.
-  assert.equal(SECTIONS.length, 32);
+  assert.equal(SECTIONS.length, 35); // 34: Task 17 added "On a phone"; 35: #242 added Community › Composer
 });

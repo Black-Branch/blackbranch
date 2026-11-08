@@ -60,7 +60,7 @@ const CANON = "0123456789ab";
 // linking); `native` = stream.links rows on the site's own platform (canonical
 // → the matrix id that chats natively). The fake answers the one union lookup
 // from both, and finds nothing native unless the lookup names the native platform.
-type Db = { links: Record<string, string>; native?: Record<string, string>; admins: string[]; mods?: string[]; failLinks?: boolean; failUsers?: boolean };
+type Db = { links: Record<string, string>; native?: Record<string, string>; admins: string[]; mods?: string[]; staff?: string[]; failLinks?: boolean; failUsers?: boolean };
 function db(d: Db): CeilingQuery {
   return async (sql, params) => {
     if (sql.includes("site.platform_links") || sql.includes("stream.links")) {
@@ -73,7 +73,7 @@ function db(d: Db): CeilingQuery {
     }
     if (d.failUsers) throw new Error("pool gone");
     const ids = params[0] as string[];
-    return { rows: ids.map((id) => ({ matrix_id: id, is_admin: d.admins.includes(id), is_mod: !!d.mods?.includes(id) })) };
+    return { rows: ids.map((id) => ({ matrix_id: id, is_admin: d.admins.includes(id), is_mod: !!d.mods?.includes(id), is_staff: !!d.staff?.includes(id) })) };
   };
 }
 
@@ -141,6 +141,24 @@ test("a mod acting on another mod is DENIED; an admin acting on a mod is allowed
   assert.equal(moderationCeilingDenied({ actorId: MOD, targetMx: "@other:site.test", actorAdmin: false, targetAdmin: false, targetMod: true }), true);
   assert.equal(moderationCeilingDenied({ actorId: OWNER, targetMx: MOD, actorAdmin: true, targetAdmin: false, targetMod: true }), false);
   assert.equal(moderationCeilingDenied({ actorId: MOD, targetMx: MOD, actorAdmin: false, targetAdmin: false, targetMod: true }), false, "self");
+});
+
+test("Staff (level 75, above Mod) is the admins' to moderate: a mod is DENIED, an admin is allowed", () => {
+  const STAFF = "@sam-staff:site.test";
+  assert.equal(moderationCeilingDenied({ actorId: MOD, targetMx: STAFF, actorAdmin: false, targetAdmin: false, targetStaff: true }), true);
+  assert.equal(moderationCeilingDenied({ actorId: OWNER, targetMx: STAFF, actorAdmin: true, targetAdmin: false, targetStaff: true }), false);
+  assert.equal(moderationCeilingDenied({ actorId: STAFF, targetMx: STAFF, actorAdmin: false, targetAdmin: false, targetStaff: true }), false, "self");
+});
+
+test("the DB-backed check refuses a mod acting on Staff, by matrix id and by their canonical, with its own sentence", async () => {
+  const STAFF = "@sam-staff:site.test";
+  const q = db({ links: { [CANON]: STAFF }, admins: [OWNER], mods: [MOD], staff: [STAFF] });
+  for (const target of [STAFF, CANON]) {
+    const res = await checkModerationCeiling(MOD, target, q);
+    assert.equal(res?.status, 403, `${target} was let through`);
+    assert.match(await res!.text(), /^Only an admin can moderate a member of staff$/);
+  }
+  assert.equal(await checkModerationCeiling(OWNER, STAFF, q), null, "an admin may act on Staff");
 });
 
 test("the DB-backed check refuses a mod banning a mod — by matrix id and by their canonical — with its own sentence", async () => {

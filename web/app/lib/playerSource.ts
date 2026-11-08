@@ -30,16 +30,17 @@ export type PlayerSource =
   | "streamplace"  // the stream.place embed
   | "youtube"
   | "twitch"
+  | "kick"         // the Kick embed (decision 0135: a streamer toggle, on whenever a slug is set)
   | "community"    // the featured streamer
   | FallbackId;    // a registered fallback
 
-/** The four things the live row can persist — the tab is session state. */
-export type LiveSource = Extract<PlayerSource, "native" | "streamplace" | "youtube" | "twitch">;
+/** The five things the live row can persist — the tab is session state. */
+export type LiveSource = Extract<PlayerSource, "native" | "streamplace" | "youtube" | "twitch" | "kick">;
 
 /** The one persisted key. Absent → the legacy pair is consulted (liveSourceFromLegacy). */
 export const LIVE_SOURCE_KEY = "player_live_source";
 
-const LIVE_SOURCES: readonly LiveSource[] = ["native", "streamplace", "youtube", "twitch"];
+const LIVE_SOURCES: readonly LiveSource[] = ["native", "streamplace", "youtube", "twitch", "kick"];
 
 /** Validate a stored value; null means "absent or junk". */
 export function parseLiveSource(stored: string | null): LiveSource | null {
@@ -66,6 +67,7 @@ export function legacyForLiveSource(source: LiveSource): Pick<PlayerState, "acti
     case "streamplace": return { active: "sp", spThinPlayer: false };
     case "youtube":     return { active: "yt", spThinPlayer: false };
     case "twitch":      return { active: "tw", spThinPlayer: false };
+    case "kick":        return { active: "kk", spThinPlayer: false };
   }
 }
 
@@ -73,20 +75,21 @@ export function legacyForLiveSource(source: LiveSource): Pick<PlayerState, "acti
 export function liveSourceFromState(s: Pick<PlayerState, "active" | "spThinPlayer">): LiveSource {
   if (s.active === "yt") return "youtube";
   if (s.active === "tw") return "twitch";
+  if (s.active === "kk") return "kick";
   return s.spThinPlayer ? "native" : "streamplace";
 }
 
 /** Legacy player state this file maps to and from. */
 export type PlayerState = {
   tab: "live" | "community" | "replay" | FallbackId;
-  active: "sp" | "yt" | "tw";
+  active: "sp" | "yt" | "tw" | "kk";
   spThinPlayer: boolean;
 };
 
 /**
  * Which sources the viewer may pick, in display order.
  *
- * Live:    the site's player · stream.place · YouTube · Twitch · community · fallbacks
+ * Live:    the site's player · stream.place · YouTube · Twitch · Kick · community · fallbacks
  * Offline: community · fallbacks
  *
  * Community only appears when one is actually configured — an icon that plays
@@ -105,15 +108,16 @@ export function availableSources(opts: { live: boolean; hasCommunity: boolean; f
 /**
  * The live sources this install has a channel for: the site's player and the
  * stream.place embed need the stream.place channel, YouTube a channel id (and its module shown),
- * Twitch a channel. A source without one would play an empty embed (`channel=`) — and could be
- * the first-time viewer's default.
+ * Twitch a channel, Kick a channel slug. A source without one would play an empty embed
+ * (`channel=`) — and could be the first-time viewer's default.
  */
-export function liveSourcesSetUp(c: { streamplaceChannel: string; youtubeChannelId: string; youtubeShown: boolean; twitchChannel: string }): LiveSource[] {
+export function liveSourcesSetUp(c: { streamplaceChannel: string; youtubeChannelId: string; youtubeShown: boolean; twitchChannel: string; kickSlug: string }): LiveSource[] {
   const has: Record<LiveSource, boolean> = {
     native: !!c.streamplaceChannel.trim(),
     streamplace: !!c.streamplaceChannel.trim(),
     youtube: !!c.youtubeChannelId.trim() && c.youtubeShown,
     twitch: !!c.twitchChannel.trim(),
+    kick: !!c.kickSlug.trim(),
   };
   return LIVE_SOURCES.filter((s) => has[s]);
 }
@@ -146,6 +150,7 @@ export function stateForSource(source: PlayerSource, prev: PlayerState): PlayerS
     case "streamplace": return { ...prev, tab: "live", active: "sp", spThinPlayer: false };
     case "youtube":     return { ...prev, tab: "live", active: "yt" };
     case "twitch":      return { ...prev, tab: "live", active: "tw" };
+    case "kick":        return { ...prev, tab: "live", active: "kk" };
     case "community":   return { ...prev, tab: "community" };
     default:            return { ...prev, tab: source };   // a registered fallback: its id is its tab
   }
@@ -163,6 +168,7 @@ export function sourceFromState(s: PlayerState): PlayerSource | null {
   if (s.tab === "replay") return null;
   if (s.active === "yt") return "youtube";
   if (s.active === "tw") return "twitch";
+  if (s.active === "kk") return "kick";
   return s.spThinPlayer ? "native" : "streamplace";
 }
 
@@ -172,6 +178,7 @@ export const SOURCE_META: Record<LiveSource | "community", { label: string; plat
   streamplace: { label: "Streamplace",      platform: "streamplace" },
   youtube:     { label: "YouTube",          platform: "youtube" },
   twitch:      { label: "Twitch",           platform: "twitch" },
+  kick:        { label: "Kick",             platform: "kick" },
   community:   { label: "Community",        platform: "community" },
 };
 
@@ -242,6 +249,22 @@ export function youtubeLiveSrc(opts: { videoId: string | null; channelId: string
   if (opts.channelId) return `https://www.youtube.com/embed/live_stream?channel=${opts.channelId}&${tail}`;
   return null;
 }
+
+/**
+ * The Kick live source URL: Kick's own player for the channel slug. `muted` carries the device's
+ * "start stream muted" setting, as every live source does (a phone only autoplays muted). Null for
+ * an empty slug — no Kick source at all, never an embed of nobody.
+ */
+export function kickLiveSrc(slug: string, autoMute: boolean): string | null {
+  if (!slug.trim()) return null;
+  return `https://player.kick.com/${encodeURIComponent(slug)}?autoplay=true&muted=${autoMute}`;
+}
+
+/**
+ * The line under the Kick player. Plain text, no link: Kick's embed plays at a quality Kick
+ * chooses, and the viewer who wants the full source knows where Kick is.
+ */
+export const KICK_EMBED_CAPTION = "Kick decides the quality this embed plays; open it on kick.com for the full source.";
 
 /**
  * Which tab the live/community edge moves the viewer to.

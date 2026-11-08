@@ -42,7 +42,11 @@ for (const route of ["app/api/auth/mas-callback/route.ts", "app/api/auth/matrix-
     // and tested there with a stub transport; here the route must act on that outcome first.
     const federated = route.includes("matrix-callback");
     const whoami = federated ? src.indexOf("completeFederatedCallback(") : src.indexOf("account/whoami");
-    const check = federated ? src.indexOf("if (!outcome.ok) return fail(outcome.error)") : src.indexOf("deviceMismatch(stateData.deviceId, whoami)");
+    // The federated refusal block may first drop a registry entry the callback vouched for, then
+    // returns the refusal; nothing of the account is written in it.
+    const refusalBlock = /if \(!outcome\.ok\) \{[^]*?return fail\(outcome\.error\);\s*\}/.exec(src);
+    if (federated) assert.ok(refusalBlock && !/INSERT|UPDATE site\.user/.test(refusalBlock[0]), "the federated refusal returns fail(outcome.error) and writes no account row");
+    const check = federated ? (refusalBlock?.index ?? -1) : src.indexOf("deviceMismatch(stateData.deviceId, whoami)");
     const refuse = federated ? check : src.indexOf("error=device_mismatch");
     assert.ok(whoami > 0 && check > whoami, "the check must use the whoami answer");
     assert.ok(refuse >= check, "a refusal must redirect with device_mismatch");

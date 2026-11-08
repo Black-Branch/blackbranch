@@ -86,6 +86,17 @@ export function paidThroughSql(viewerParam: string, sourcesParam: string): strin
       AND r.provider_status <> 'trialing')`;
 }
 
+/** Is the viewer's paid term still open — an entitling record (not a trial) that still renews or
+ *  still has paid time ahead? A gift queued behind the term begins only once this is false
+ *  (giftQueue.ts), never on the clock: between an old period end and its renewal's webhook the record
+ *  still says it renews. `$1` viewer param, `$2` sources param. */
+export function paidTermOpenSql(viewerParam: string, sourcesParam: string): string {
+  if (!PARAM.test(viewerParam) || !PARAM.test(sourcesParam)) throw new Error("paidTermOpenSql: parameters only");
+  return `EXISTS (SELECT 1 FROM site.subscription_records r
+    WHERE r.matrix_id = ${viewerParam} AND ${entitledRecordsSql("r", sourcesParam)}
+      AND r.provider_status <> 'trialing' AND (r.renews OR r.period_end > now()))`;
+}
+
 /** The tiers a viewer's entitling records give, for highestTier. `$1` viewer, `$2` sources. */
 export const VIEWER_TIERS_SQL =
   `SELECT r.tier FROM site.subscription_records r WHERE r.matrix_id = $1 AND ${entitledRecordsSql("r", "$2")}`;
@@ -135,6 +146,15 @@ export async function listViewerSubscriptions(db: Queryable, viewer: string): Pr
     provider: r.provider, tier: r.tier, status: r.status, renews: r.renews,
     periodEnd: iso(r.period_end), accessUntil: iso(r.access_until),
   }));
+}
+
+/** How many viewers a provider's records entitle right now, whether or not its module is on: the
+ *  people whose perks end if that provider is switched off (paymentSwitch.ts). */
+export async function entitledCountFor(db: Queryable, provider: Provider): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(
+    `SELECT count(DISTINCT r.matrix_id)::int AS n FROM site.subscription_records r WHERE ${entitledRecordsSql("r", "$1")}`,
+    [[provider]]);
+  return rows[0]?.n ?? 0;
 }
 
 /** Does a viewer hold a subscription the SITE bills that is still going to charge them? It blocks

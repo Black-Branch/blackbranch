@@ -3,7 +3,10 @@
 import "./testInstallValues.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { senderLabel, isBridgedBot, bridgeMatchers, discordGhostPattern } from "./discordSender.ts";
+import { spawnSync } from "node:child_process";
+import { Client } from "pg";
+import { senderLabel, isBridgedBot, isDiscordGhost, bridgeMatchers, discordGhostPattern } from "./discordSender.ts";
+import { INSTANCE_KEYS, parseInstanceValue } from "./instanceSchema.generated.mjs";
 
 // A REAL bridge ghost from Synapse: bridge username_template is
 // `discord_{{.}}`, so there is no underscore before "discord". A predicate
@@ -123,4 +126,115 @@ test("a template without the expected shape yields NO matcher for that part, nev
   assert.equal(bridgeMatchers("{{.}}_{{.}}", REAL_DISPLAY).ghostPattern, null, "two {{.}}");
   assert.equal(bridgeMatchers(REAL_USER, "{{.Username}}").suffix, null, "no fixed tail");
   assert.equal(bridgeMatchers(REAL_USER, "{{.Username}} (Discord)").bot, null, "no bot marker");
+});
+
+// ── Out Of Your Element (the bundle's bridge) ──
+// OOYE has no username_template setting: a ghost is its registration's `namespace_prefix`
+// (`_ooye_`, install/matrix/render.sh MX_OOYE_PREFIX) followed by the Discord username, lower-cased
+// and cut to a-z 0-9 . _ = - (OOYE 3.7 src/d2m/converters/user-to-mxid.js downcaseUsername; a
+// taken name gets a number, a webhook "webhook_<name>", PluralKit "_pk_<id>"). Its display name is
+// the server nickname, else the global name, else the username, with NO tail and no bot marker
+// (src/d2m/actions/register-user.js memberToStateContent). Written in the template language the two
+// keys already use, the placeholder naming what the bridge puts there:
+const OOYE_USER = "_ooye_{{.Username}}";
+const OOYE_DISPLAY = "{{or .Nick .GlobalName .Username}}";
+// Real shapes: the bridge's bot as a real homeserver registered it (server renamed),
+// and the shapes OOYE's code produces.
+const OOYE_GHOSTS = ["@_ooye_bot:site.test", "@_ooye_casey:site.test", "@_ooye_casey2:site.test",
+  "@_ooye_mr.x_y=z-1:site.test", "@_ooye_100000000000000001:site.test", "@_ooye_webhook_hookname:site.test",
+  "@_ooye__pk_abcde:site.test", "@_ooye_casey:example.org"];
+// Never a ghost: site accounts (a real one can never hold the prefix — Synapse's exclusive namespace and
+// the bundle's MAS ban list reserve it), lookalikes, and the other bridge's ghosts.
+const NOT_OOYE = ["@casey:site.test", "@ooye_casey:site.test", "@x_ooye_casey:site.test", "@_ooye_:site.test",
+  "@_ooye_Casey:site.test", "@_ooye_ca sey:site.test", "@_ooye_casey", "@discord_100000000000000001:site.test", ""];
+
+test("OOYE's template: its ghosts are recognised, nothing else is", () => {
+  const m = bridgeMatchers(OOYE_USER, OOYE_DISPLAY);
+  assert.equal(m.ghostPattern, "^@_ooye_[a-z0-9._=-]+:");
+  for (const id of OOYE_GHOSTS) assert.equal(m.ghost?.test(id), true, id);
+  for (const id of NOT_OOYE) assert.equal(m.ghost?.test(id), false, id);
+});
+
+test("OOYE's display names carry no tail and no bot marker: nothing is stripped, no name says bot", () => {
+  const m = bridgeMatchers(OOYE_USER, OOYE_DISPLAY);
+  assert.deepEqual([m.suffix, m.bot], [null, null]);
+});
+
+test("mautrix's template still recognises exactly its own ghosts — and none of OOYE's", () => {
+  const m = bridgeMatchers(REAL_USER, REAL_DISPLAY);
+  for (const id of OOYE_GHOSTS) assert.equal(m.ghost?.test(id), false, id);
+  assert.equal(m.ghost?.test(GHOST), true);
+});
+
+test("the placeholder decides the characters: an id is digits only, a name never takes a capital or a colon", () => {
+  assert.equal(bridgeMatchers("discord_{{.}}", "").ghost?.test("@discord_casey:site.test"), false);
+  assert.equal(bridgeMatchers("dc_{{.Username}}", "").ghostPattern, "^@dc_[a-z0-9._=-]+:");
+  assert.equal(bridgeMatchers("{{.Username}}", "").ghostPattern, null, "a bare name would claim every account");
+  assert.equal(bridgeMatchers("_ooye_{{.Username}}{{.}}", "").ghostPattern, null, "two placeholders");
+  assert.equal(bridgeMatchers("_ooye_{{.Name}}", "").ghostPattern, null, "a placeholder nobody defined: no guess");
+  assert.equal(bridgeMatchers("_ooye_", "").ghostPattern, null, "a bare prefix");
+});
+
+test("every template the settings layer accepts yields a ghost pattern (and what it refuses, none)", () => {
+  const entry = INSTANCE_KEYS.find((k) => k.key === "discordBridge.usernameTemplate")!;
+  for (const t of [REAL_USER, OOYE_USER, "dc.{{.}}+x", "dc_{{.Username}}"]) {
+    assert.equal(parseInstanceValue(entry, t).ok, true, t);
+    assert.notEqual(bridgeMatchers(t, "").ghostPattern, null, t);
+  }
+  for (const t of ["_ooye_", "{{.Username}}", "_ooye_{{.Name}}", "a{{.}}b{{.Username}}"]) {
+    assert.equal(parseInstanceValue(entry, t).ok, false, t);
+    assert.equal(bridgeMatchers(t, "").ghostPattern, null, t);
+  }
+});
+
+const DB_URL = process.env.SQL_PARSE_DATABASE_URL || "";
+
+test("against real Postgres: each template's pattern, bound as SQL binds it, agrees with the JS match",
+  { skip: DB_URL ? false : "SQL_PARSE_DATABASE_URL not set (CI sets it)" }, async () => {
+  const db = new Client({ connectionString: DB_URL });
+  await db.connect();
+  try {
+    const ids = [...OOYE_GHOSTS, ...NOT_OOYE, GHOST, BOT, "@discord_abc:site.test"];
+    for (const t of [REAL_USER, OOYE_USER]) {
+      const m = bridgeMatchers(t, "");
+      const { rows } = await db.query<{ id: string; ghost: boolean }>(
+        "SELECT id, id ~ $1 AS ghost FROM unnest($2::text[]) id", [m.ghostPattern, ids]);
+      assert.equal(rows.length, ids.length);
+      for (const r of rows) assert.equal(r.ghost, m.ghost!.test(r.id), `${t}: ${r.id}`);
+      assert.ok(rows.some((r) => r.ghost) && rows.some((r) => !r.ghost), `${t}: both answers occur`);
+    }
+  } finally {
+    await db.end();
+  }
+});
+
+// The cutover changes two values in the site's environment; they are read once, at start.
+/** One fresh web process (a "start") with these install values: is each id a ghost? */
+function startWith(user: string, display: string, ids: string[]): boolean[] {
+  const mod = JSON.stringify(new URL("./discordSender.ts", import.meta.url).href);
+  const code = `const m = await import(${mod}); console.log(JSON.stringify(${JSON.stringify(ids)}.map((id) => m.isDiscordGhost(id))));`;
+  const values = { "discordBridge.usernameTemplate": user, "discordBridge.displaynameTemplate": display };
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code],
+    { env: { ...process.env, INSTALL_VALUES: JSON.stringify(values) }, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout.trim().split("\n").pop()!) as boolean[];
+}
+
+test("restart: a site started on mautrix's values, restarted on OOYE's, marks the new bridge's people", () => {
+  const ids = ["@_ooye_casey:site.test", GHOST, "@casey:site.test"];
+  assert.deepEqual(startWith(REAL_USER, REAL_DISPLAY, ids), [false, true, false], "before: only mautrix's ghosts");
+  assert.deepEqual(startWith(OOYE_USER, OOYE_DISPLAY, ids), [true, false, false], "after the restart: OOYE's");
+  assert.deepEqual(startWith("", "", ids), [false, false, false], "module off: nobody");
+});
+
+test("retry: asking again in the same process gives the same answer (the matchers are built once)", () => {
+  const first = OOYE_GHOSTS.map((id) => isDiscordGhost(id));
+  for (let i = 0; i < 3; i++) assert.deepEqual(OOYE_GHOSTS.map((id) => isDiscordGhost(id)), first);
+  assert.deepEqual([isDiscordGhost(GHOST), isDiscordGhost(GHOST)], [true, true]);
+});
+
+// Vacuity anchor at the END: the OOYE template discriminates — one ghost in, one person out.
+test("the OOYE pattern genuinely discriminates", () => {
+  const m = bridgeMatchers(OOYE_USER, OOYE_DISPLAY);
+  assert.notEqual(m.ghost?.test("@_ooye_casey:site.test"), m.ghost?.test("@casey:site.test"));
 });

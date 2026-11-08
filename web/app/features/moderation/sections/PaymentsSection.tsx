@@ -9,6 +9,7 @@ import { LoadingState } from "@/app/components/Spinner";
 import EmptyState from "@/app/components/EmptyState";
 import { Chips } from "@/app/components/chrome";
 import { platformLabel } from "@/app/lib/platforms";
+import { formatPrice, SITE_CURRENCY } from "@/app/lib/moneyFormat";
 import { siteName } from "@/app/lib/siteName";
 import type { PaymentRow } from "@/app/lib/paymentHistory";
 import { card, h2, btn, timeAgo } from "../shared";
@@ -23,12 +24,9 @@ const FILTERS = [{ key: "all", label: "All" }, ...OUTCOMES] as const;
 const SOURCES = ["", "site", "twitch", "youtube", "kick", "kofi", "patreon", "streamlabs"] as const;
 const outcomeWord = (o: string) => OUTCOMES.find((x) => x.key === o)?.label ?? o;
 const sourceWord = (s: string) => (s === "" ? "every source" : s === "site" ? siteName() : s === "kofi" ? "Ko-fi" : s === "streamlabs" ? "Streamlabs" : s === "patreon" ? "Patreon" : platformLabel(s));
-// In the payment's own currency (it printed "$" before every currency).
-const money = (cents: number | null, currency: string | null) => {
-  if (cents == null) return "—";
-  try { return new Intl.NumberFormat(undefined, { style: "currency", currency: (currency ?? "usd").toUpperCase() }).format(cents / 100); }
-  catch { return `${(cents / 100).toFixed(2)} ${(currency ?? "").toUpperCase()}`; }
-};
+// In the payment's own currency and minor units, by the site's one money formatter.
+const money = (cents: number | null, currency: string | null) =>
+  cents == null ? "—" : formatPrice(cents, (currency || SITE_CURRENCY).toLowerCase(), "minor");
 
 type Reply = { rows: PaymentRow[]; nextBefore: string | null; last30: { count: number; cents: number } | null };
 
@@ -77,8 +75,8 @@ export default function PaymentsSection({ onSetup }: { onSetup?: () => void }) {
         </label>
         {last30 && (
           <span className="ml-auto" data-totals>
-            Last 30 days: {money(last30.cents, "usd")} from {last30.count} payment{last30.count === 1 ? "" : "s"}
-            {received.length > 0 && <> · shown: {money(receivedCents, "usd")} received{rows && rows.some((r) => r.points) ? " (points spends not counted)" : ""}</>}
+            Last 30 days: {money(last30.cents, SITE_CURRENCY)} from {last30.count} payment{last30.count === 1 ? "" : "s"}
+            {received.length > 0 && <> · shown: {money(receivedCents, SITE_CURRENCY)} received{rows && rows.some((r) => r.points) ? " (points spends not counted)" : ""}</>}
           </span>
         )}
       </div>

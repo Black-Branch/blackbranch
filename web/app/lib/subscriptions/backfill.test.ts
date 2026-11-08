@@ -78,8 +78,8 @@ test("v161's back-fill and the readers moved onto the one fragment", { skip }, a
   // Gifts: one on a subscriber, one on a non-subscriber, one expired.
   let g = 0;
   const gift = async (who: string, days: number) => pool.query(
-    `INSERT INTO site.gift_subscriptions (recipient_matrix_id, gifter_matrix_id, months, expires_at, stripe_session_id)
-     VALUES ($1, NULL, 1, now() + make_interval(days => $2), $3)`, [who, days, `cs_${RUN}_${++g}`]);
+    `INSERT INTO site.gift_subscriptions (recipient_matrix_id, gifter_matrix_id, months, starts_at, expires_at, stripe_session_id)
+     VALUES ($1, NULL, 1, now() - interval '20 days', now() + make_interval(days => $2), $3)`, [who, days, `cs_${RUN}_${++g}`]);
   await gift(viewers[0]!.who, 10);
   await gift(viewers[7]!.who, 10);  // canceled + gift
   await gift(viewers[3]!.who, -1);  // incomplete + an expired gift

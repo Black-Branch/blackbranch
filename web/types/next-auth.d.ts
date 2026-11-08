@@ -8,7 +8,7 @@ declare module "next-auth" {
     /** The site.user_sessions row this cookie is bound to — set only while that row is live. */
     sessionId?: string;
     /** Why the cookie authenticated nothing (siteSession.ts); absent when it did. */
-    authState?: "revoked" | "unavailable" | "refused";
+    authState?: "revoked" | "deleted" | "unavailable" | "refused";
   }
 }
 

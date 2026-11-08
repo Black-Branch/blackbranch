@@ -6,7 +6,7 @@ import { useOutsideClick } from "@/app/lib/useOutsideClick";
 import { emoteCrossOrigin, lowerResEmoteUrl } from "@/app/lib/emoteRes";
 import type { EmoteMap } from "@/app/lib/useEmotes";
 import { Segmented } from "@/app/components/chrome";
-import { lsGetJSON, lsSetJSON } from "@/app/lib/safeLocalStorage";
+import { lsSetJSON } from "@/app/lib/safeLocalStorage";
 import { Twemoji } from "@/app/lib/twemoji";
 import { EMOJI_GROUPS } from "@/app/lib/emojiGroups";
 import { clampIntoSpan, visibleViewport } from "@/app/lib/visibleViewport";
@@ -16,23 +16,65 @@ import { mxcToDownload } from "@/app/lib/matrixMedia";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢", "🔥", "👀"];
 
-// Recently-used reaction keys (emoji or emote shortcodes), most-recent first.
-const RECENT_REACT_KEY = "bb_recent_reactions";
-// Cache the parsed list so it isn't JSON.parse'd from localStorage in the render
-// body of every message row. Invalidated only when the user reacts (saveRecent).
-let recentReactCache: string[] | null = null;
-export function getRecentReactions(): string[] {
-  if (recentReactCache) return recentReactCache;
-  const a = lsGetJSON<string[]>(RECENT_REACT_KEY, []);
-  recentReactCache = Array.isArray(a) ? a : [];
-  return recentReactCache;
+// The viewer's reaction history: [key, uses] pairs, most recently used first, so a tie in uses
+// goes to the more recent by position alone. Read from storage on every call (a string read) and
+// parsed only when it changed — rows call this in their render body.
+const USES_KEY = "bb_reaction_uses";
+/** The previous store: the last keys used, newest first. Read once as a seed (one use each). */
+const LEGACY_RECENT_KEY = "bb_recent_reactions";
+const USES_CAP = 32;
+/** The three quick reactions: the most used, filled from the curated list until there are three. */
+const QUICK_COUNT = 3;
+
+type Uses = [string, number][];
+let usesCache: { raw: string | null; legacyRaw: string | null; uses: Uses } | null = null;
+
+function parseUses(raw: string | null, legacyRaw: string | null): Uses {
+  let v: unknown;
+  try { v = JSON.parse(raw ?? legacyRaw ?? "[]"); } catch { return []; }
+  if (!Array.isArray(v)) return [];
+  if (raw === null) return v.filter((k): k is string => typeof k === "string" && k !== "").map((k) => [k, 1]);
+  return v.filter((e): e is [string, number] =>
+    Array.isArray(e) && typeof e[0] === "string" && e[0] !== "" && typeof e[1] === "number" && e[1] > 0);
 }
+
+function readUses(): Uses {
+  let raw: string | null = null, legacyRaw: string | null = null;
+  try {
+    raw = localStorage.getItem(USES_KEY);
+    if (raw === null) legacyRaw = localStorage.getItem(LEGACY_RECENT_KEY);
+  } catch { /* no storage (server render, blocked): no history */ }
+  if (usesCache && usesCache.raw === raw && usesCache.legacyRaw === legacyRaw) return usesCache.uses;
+  usesCache = { raw, legacyRaw, uses: parseUses(raw, legacyRaw) };
+  return usesCache.uses;
+}
+
+/** Keys the viewer has used, most used first, ties to the more recent. */
+function rankedHistory(): string[] {
+  // Array.prototype.sort is stable, so equal counts keep their recency order.
+  return [...readUses()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+}
+
+export function getRecentReactions(): string[] {
+  const out = rankedHistory().slice(0, QUICK_COUNT);
+  for (const k of QUICK_REACTIONS) {
+    if (out.length >= QUICK_COUNT) break;
+    if (!out.includes(k)) out.push(k);
+  }
+  return out;
+}
+
 export function saveRecentReaction(key: string) {
-  const cur = getRecentReactions().filter((k) => k !== key);
-  cur.unshift(key);
-  const next = cur.slice(0, 16);
-  lsSetJSON(RECENT_REACT_KEY, next);
-  recentReactCache = next;
+  const cur = readUses();
+  const n = cur.find(([k]) => k === key)?.[1] ?? 0;
+  const next: Uses = [[key, n + 1], ...cur.filter(([k]) => k !== key)];
+  while (next.length > USES_CAP) {
+    // Drop the least used, the oldest of those (searching from the end).
+    let drop = next.length - 1;
+    for (let i = next.length - 1; i > 0; i--) if (next[i]![1] < next[drop]![1]) drop = i;
+    next.splice(drop, 1);
+  }
+  lsSetJSON(USES_KEY, next);
 }
 
 // Render a reaction key: a custom emote image when the key is a known emote
@@ -91,7 +133,7 @@ export function ReactionPicker({
   const [tab, setTab] = useState<"emoji" | "emote">("emote");
   const [cat, setCat] = useState(0);
   const [q, setQ] = useState("");
-  const recent = useMemo(() => getRecentReactions().slice(0, 3), []);
+  const recent = useMemo(() => rankedHistory().slice(0, QUICK_COUNT), []);
 
   useOutsideClick(ref, onClose, { escape: true });
 
@@ -121,7 +163,7 @@ export function ReactionPicker({
     >
       {recent.length > 0 && (
         <div className="flex items-center gap-0.5 px-1.5 py-1 border-b border-edge shrink-0">
-          <span className="text-3xs uppercase tracking-wider text-muted mr-1">Recent</span>
+          <span className="text-3xs uppercase tracking-wider text-muted mr-1">Frequent</span>
           {recent.map((k) => (
             <button key={k} type="button" onClick={() => pick(k)}
               className="w-7 h-7 flex items-center justify-center rounded hover:bg-surface-3">

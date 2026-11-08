@@ -3,14 +3,17 @@
 // Wires the player debug log (app/lib/playerDebug.ts) to the player box and the page around it.
 // Does nothing at all unless the per-device switch is on. MEASUREMENT ONLY: nothing here touches
 // playback.
-import { useEffect, type RefObject } from "react";
-import { PlayerDebugLog, PLAYER_DEBUG_KEY, readPlayerDebugSwitch } from "@/app/lib/playerDebug";
+import { useEffect, useRef, type RefObject } from "react";
+import { PlayerDebugLog, PLAYER_DEBUG_KEY, readPlayerDebugSwitch, remountCause, type PlayerInputs } from "@/app/lib/playerDebug";
 import { reportClientError } from "@/app/lib/clientError";
 import { lsGet, lsRemove, lsSet } from "@/app/lib/safeLocalStorage";
 import { DEBUG_FLAGS_ON } from "@/app/lib/debugFlags";
+import { PLAYER_MODE_KEY } from "@/app/lib/playerMode";
 
 let log: PlayerDebugLog | null = null;
 let mounts = 0;
+// The box's inputs as its last life ended — what the next mount's cause is judged against.
+let lastInputs: PlayerInputs | null = null;
 
 function debugLog(): PlayerDebugLog | null {
   if (log) return log;
@@ -22,8 +25,23 @@ function debugLog(): PlayerDebugLog | null {
   if (!sw.on) return null;
   log = new PlayerDebugLog();
   (window as unknown as { __playerDebug?: PlayerDebugLog }).__playerDebug = log;
+  // Taps are heard for the life of the page, not only while the player box is
+  // mounted. They used to be attached with the box, so a tap that UNFOLDED the
+  // player (made while the box was folded away) was never heard, and every
+  // remount report read "last tap … hours before" — the 10-29/10-30 rows that
+  // looked like the player remounting itself (prod: each remount's next report
+  // put a tap 0.4 s before the fold that followed it).
+  const l = log;
+  const onTap = () => l.interaction();
+  document.addEventListener("pointerdown", onTap, true);
+  document.addEventListener("keydown", onTap, true);
   return log;
 }
+
+/** The stored fold, for the mount/unmount lines: "none" = folded by a write. */
+const storedMode = () => `mode=${lsGet(PLAYER_MODE_KEY) ?? "unset"}`;
+/** The inputs plus the stored fold — a fold writes it before the player unmounts. */
+const withMode = (i: PlayerInputs): PlayerInputs => ({ ...i, mode: lsGet(PLAYER_MODE_KEY) ?? "unset" });
 
 function record(l: PlayerDebugLog, kind: string, detail = "") {
   const report = l.push(kind, detail);
@@ -35,8 +53,13 @@ function record(l: PlayerDebugLog, kind: string, detail = "") {
 
 const MEDIA_EVENTS = ["loadstart", "emptied", "play", "playing", "pause", "waiting", "stalled", "ended", "error", "volumechange"] as const;
 
-/** `src` is what the box is showing (playerSrcFor) — logged on every change. */
-export function usePlayerDebug(boxRef: RefObject<HTMLElement | null>, src: string): void {
+/** `src` is what the box is showing (playerSrcFor) — logged on every change. `inputs` is what the
+ *  box is keyed on; a remount's row names the ones that changed since its last life. */
+export function usePlayerDebug(boxRef: RefObject<HTMLElement | null>, src: string, inputs: PlayerInputs): void {
+  // The latest inputs, for the mount line and for the unmount that ends this life.
+  const inputsRef = useRef(inputs);
+  useEffect(() => { inputsRef.current = inputs; });
+
   useEffect(() => {
     const l = debugLog();
     if (l) record(l, "src", src);
@@ -47,7 +70,8 @@ export function usePlayerDebug(boxRef: RefObject<HTMLElement | null>, src: strin
     const box = boxRef.current;
     if (!l || !box) return;
     mounts += 1;
-    record(l, mounts > 1 ? "remount" : "mount", `#${mounts}`);
+    if (mounts > 1) record(l, "remount", `cause=${remountCause(lastInputs, withMode(inputsRef.current))} #${mounts} ${storedMode()}`);
+    else record(l, "mount", `#${mounts} ${storedMode()}`);
 
     const muted = new WeakMap<EventTarget, boolean>();
     const loads = new WeakMap<EventTarget, number>();
@@ -77,7 +101,6 @@ export function usePlayerDebug(boxRef: RefObject<HTMLElement | null>, src: strin
     for (const t of MEDIA_EVENTS) box.addEventListener(t, onMedia, true);
     box.addEventListener("load", onLoad, true);
 
-    const onTap = () => l.interaction();
     const onVisibility = () => record(l, "visibility", document.visibilityState);
     const onPageHide = () => record(l, "pagehide");
     const onPageShow = (e: PageTransitionEvent) => record(l, "pageshow", e.persisted ? "from back-forward cache" : "");
@@ -88,19 +111,16 @@ export function usePlayerDebug(boxRef: RefObject<HTMLElement | null>, src: strin
     };
     // Another tab or window changed a stored setting (the key only, never the value).
     const onStorage = (e: StorageEvent) => record(l, "storage", e.key ?? "(all)");
-    document.addEventListener("pointerdown", onTap, true);
-    document.addEventListener("keydown", onTap, true);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("pageshow", onPageShow);
     window.addEventListener("resize", onResize);
     window.addEventListener("storage", onStorage);
     return () => {
-      record(l, "unmount");
+      record(l, "unmount", storedMode());
+      lastInputs = withMode(inputsRef.current);
       for (const t of MEDIA_EVENTS) box.removeEventListener(t, onMedia, true);
       box.removeEventListener("load", onLoad, true);
-      document.removeEventListener("pointerdown", onTap, true);
-      document.removeEventListener("keydown", onTap, true);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("pageshow", onPageShow);

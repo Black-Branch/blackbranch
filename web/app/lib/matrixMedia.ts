@@ -15,11 +15,16 @@ function mxcParts(mxcUrl: string | null | undefined): [string, string] | null {
   return m && m[1] && m[2] ? [m[1], m[2]] : null;
 }
 
+/** A crop thumbnail of at least `size` px. Asked at the crop sizes Synapse makes by default (32 and
+ *  96): it serves those bytes for any width up to 96 anyway, so asking each surface's own width only
+ *  made one picture a separate request per surface. Past 96 the width is kept for a server that
+ *  makes bigger thumbnails. */
 export function mxcToHttp(mxcUrl: string | null | undefined, size = 40): string | null {
   const parts = mxcParts(mxcUrl);
   if (!parts) return null;
   const [server, mediaId] = parts;
-  return `/api/matrix/media/thumbnail/${server}/${mediaId}?width=${size}&height=${size}&method=crop`;
+  const ask = size <= 32 ? 32 : size <= 96 ? 96 : size;
+  return `/api/matrix/media/thumbnail/${server}/${mediaId}?width=${ask}&height=${ask}&method=crop`;
 }
 
 /** The profile BANNER and every inline chat image: a scale thumbnail at

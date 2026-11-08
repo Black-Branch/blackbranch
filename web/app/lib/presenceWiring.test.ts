@@ -167,7 +167,8 @@ test("T5: one shared card, opened to the left from the list; the dot mapping own
 test("T6: the list groups through memberGroups, derives through deriveState, and collapses Discord + Inactive by default", () => {
   const s = stripComments(read("app/features/community/MemberList.tsx"));
   endsWithBrace(s, "MemberList.tsx");
-  assert.match(s, /groupMembers\(views\)/);
+  assert.match(s, /groupMembers\(views, ladder\)/);
+  assert.match(s, /const ladder = useCommunityLadder\(\);/, "the groups follow the server's ladder");
   assert.match(s, /deriveState\(site, matrixSnapshotOf\(room, m\.userId\), now\)/);
   assert.match(s, /discord: false, inactive: false \}/, "Discord and Inactive start collapsed");
   assert.match(s, /data-presence-counts/);

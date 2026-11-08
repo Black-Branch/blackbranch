@@ -117,7 +117,9 @@ export type AdminPanelEntry = {
   label: string;
   /** The section item it follows and nests under; omitted = the section's end, not nested. */
   after?: string;
-  Panel: ComponentType<AdminPanelProps>;
+  /** Its own panel. Omitted in the AI section: the place lists the plugin's AI tasks that belong
+   *  to its key (adminLayout.ts aiSubOf), on the AI page's own cards. */
+  Panel?: ComponentType<AdminPanelProps>;
 };
 
 /**

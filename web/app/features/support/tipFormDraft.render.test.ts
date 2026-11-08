@@ -123,33 +123,28 @@ test("the name box caps at 32 characters — sanitizeDisplayName's own limit (FI
   m.unmount();
 });
 
-test("the account-name hint shows only for a signed-in person whose name box is empty (FIX 3)", () => {
-  const signedOut = mount({ busy: false, signedIn: true, initialName: "", onSubmit: () => {} });
-  assert.ok(
-    !signedOut.host.textContent?.includes("Leave blank to use your account name"),
-    "a signed-out person must never see this — for them a blank box really does mean Anonymous",
-  );
-  signedOut.unmount();
+// ADR 0145: a signed-in tipper sees, under the name box, what each choice shows in chat — their own
+// name (or blank) wears their badges and colours, any other name is plain. Always shown for them,
+// whatever the box holds, so typing never moves the form; a guest has no account and no line.
+const HINT = "Your own name, or a blank box, shows with your badges and colours. Any other name shows plain, not linked to you.";
+test("the name line: shown to a signed-in tipper whatever the box holds, never to a guest", () => {
+  const guest = mount({ busy: false, signedIn: false, initialName: "", onSubmit: () => {} });
+  assert.ok(!guest.host.textContent?.includes(HINT), "a guest has no account for the line to describe");
+  guest.unmount();
 
-  const signedInFilled = mount({ busy: false, signedIn: true, initialName: "Ada", onSubmit: () => {} });
-  assert.ok(
-    !signedInFilled.host.textContent?.includes("Leave blank to use your account name"),
-    "the hint should not show while the box is prefilled and non-empty",
-  );
-  signedInFilled.unmount();
+  for (const initialName of ["Ada", ""]) {
+    const m = mount({ busy: false, signedIn: true, initialName, onSubmit: () => {} });
+    assert.ok(m.host.textContent?.includes(HINT), `a signed-in tipper (prefill ${JSON.stringify(initialName)}) did not see the line`);
+    m.unmount();
+  }
 
-  // The case the hint exists for: a signed-in person's box is empty
-  // because a remembered draft restored a DELIBERATELY blank, non-anonymous
-  // name — donate/route.ts re-fills that from their account, so an
-  // empty box here is misleading without the hint.
+  // A remembered draft with a deliberately blank, non-anonymous name: still the same line.
   const draft: TipDraft = { amount: 5, message: "", displayName: "", anonymous: false, announce: true };
-  const signedInEmpty = mount({ busy: false, signedIn: true, initialName: "Ada", initialDraft: draft, onSubmit: () => {} });
-  const nameField = signedInEmpty.host.querySelector('input[aria-label="Your name"]') as HTMLInputElement;
+  const blank = mount({ busy: false, signedIn: true, initialName: "Ada", initialDraft: draft, onSubmit: () => {} });
+  const nameField = blank.host.querySelector('input[aria-label="Your name"]') as HTMLInputElement;
   assert.equal(nameField.value, "");
   assert.equal(nameField.disabled, false, "not anonymous — the box should stay editable");
-  assert.ok(
-    signedInEmpty.host.textContent?.includes('Leave blank to use your account name, or tick "Tip anonymously".'),
-    "a signed-in person with an empty, non-anonymous name box should see the hint",
-  );
-  signedInEmpty.unmount();
+  assert.ok(blank.host.textContent?.includes(HINT));
+  assert.ok(!blank.host.textContent?.includes("Leave blank to use your account name"), "the old hint is gone");
+  blank.unmount();
 });

@@ -20,10 +20,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const quiet = { log() {}, warn() {}, error() {} };
 const DEFAULT = AI_ADAPTER.PRODUCT_SLOTS.find((s) => s.id === 'helpdesk.answer').defaultPrompt;
 
-function fakeCfg(values = {}, content = {}) {
+function fakeCfg(values = {}, content = {}, serving = null) {
   const listeners = new Set();
   return {
     values, contentRows: content,
+    serving: () => serving,
     get: (k) => (k in values ? values[k] : null),
     content: (k) => (k in content ? content[k] : null),
     onLoad: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
@@ -344,6 +345,40 @@ test('an owner module with no plugin is never claimed, and is not announced as m
   const f = siteFacts(fakeCfg({ 'modules.radio': false }));
   assert.doesNotMatch(f, /radio/i);
   assert.match(siteFacts(fakeCfg({ 'modules.radio': true })), /Radio tab/);
+});
+
+// A module stream-api serves is on when stream-api RUNS it (config/modules.mjs, ONE RULE): a saved
+// switch reaches the site at stream-api's restart, and the help desk must say what is there now.
+test('radio saved on, stream-api running it off → the facts do not offer a Radio tab', () => {
+  const running = (on) => ({ self: { 'modules.radio': { display: on } }, reports: {} });
+  assert.doesNotMatch(siteFacts(fakeCfg({ 'modules.radio': true }, {}, running(false))), /Radio tab/);
+  assert.match(siteFacts(fakeCfg({ 'modules.radio': false }, {}, running(true))), /Radio tab/, 'saved off, still running: it still plays');
+  // Restart: once stream-api runs the saved switch, the two agree.
+  assert.match(siteFacts(fakeCfg({ 'modules.radio': true }, {}, running(true))), /Radio tab/);
+  // Retry: stream-api has not reported yet (no snapshot, or no entry) → the saved switch.
+  assert.match(siteFacts(fakeCfg({ 'modules.radio': true }, {}, null)), /Radio tab/);
+  assert.match(siteFacts(fakeCfg({ 'modules.radio': true }, {}, { self: {}, reports: {} })), /Radio tab/);
+  // A module only web serves (stripe) applies at once: the saved switch.
+  assert.match(siteFacts(fakeCfg({ 'modules.stripe': true }, {}, { self: { 'modules.stripe': { display: false } }, reports: {} })), /paid by card/);
+});
+
+test('the settings reader keeps stream-api\'s own report and the other processes\' from GET /config', async () => {
+  const { createInstanceConfig } = await import('../instanceConfig.js');
+  const self = { 'modules.radio': { source: 'db', display: false } };
+  const reports = { web: { keys: {} } };
+  const fetchImpl = async (url) => new Response(JSON.stringify(
+    String(url).includes('/config/secrets') ? { values: {} }
+      : String(url).endsWith('/config') ? { values: { 'modules.radio': true }, self, reports } : { content: {} }),
+  { status: 200, headers: { 'content-type': 'application/json' } });
+  const cfg = createInstanceConfig({ fetchImpl, log: quiet, env: {} });
+  assert.equal(cfg.serving(), null, 'nothing is known before the first load');
+  const was = process.env.STREAM_API_URL;
+  process.env.STREAM_API_URL = 'http://stream-api.site.test'; // made up; fetch is stubbed
+  try { assert.equal(await cfg.load(), true); } finally {
+    if (was === undefined) delete process.env.STREAM_API_URL; else process.env.STREAM_API_URL = was;
+  }
+  assert.deepEqual(cfg.serving(), { self, reports });
+  assert.doesNotMatch(siteFacts(cfg), /Radio tab/, 'saved on, running off');
 });
 
 test('the prompt carries the site facts ahead of the install\'s reference, and says they win', () => {

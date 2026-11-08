@@ -58,3 +58,76 @@ test("the page reads the settings per request and passes them in", () => {
   assert.match(page, /bundle: hostRequestsAvailable\(\),/);
   assert.match(page, /<SignInForm options=\{\{[\s\S]*\}\} \/>\s*\);\s*\}\s*$/, "read to its end");
 });
+
+// ── A sign-in the callback refused comes back as ?error=<code>; the page says why ─────────────────
+// The two codes both callbacks send when a NEW account is refused (lib/lockdown.ts) concern the
+// site's own sign-in, so they show under the main button whatever the federated setting is.
+const { dom, React, act } = await import("../../../lib/testDom.ts");
+const { createRoot } = await import("react-dom/client");
+// next/link's prefetch observer reaches for `self` (a browser global jsdom does not install).
+(globalThis as unknown as { self: unknown }).self ??= globalThis;
+
+async function mountAt(search: string, federated: "off" | "on" = "off") {
+  dom.reconfigure({ url: `https://example.org/auth/signin${search}` });
+  const container = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => { root.render(React.createElement(SignInForm, { options: { federated, signup: "open" } })); });
+  await act(async () => { await Promise.resolve(); });
+  const red = () => [...container.querySelectorAll("p.text-red-400")].map((p) => p.textContent);
+  return { container, root, red };
+}
+
+test("?error=signups_disabled / unavailable → the sentence, under the main button, federated off or on", async () => {
+  for (const federated of ["off", "on"] as const) {
+    const paused = await mountAt("?error=signups_disabled", federated);
+    assert.deepEqual(paused.red(), ["New accounts are paused on this site right now."]);
+    const main = [...paused.container.querySelectorAll("button")].find((b) => b.textContent === "Sign in")!.parentElement!;
+    assert.equal(main.querySelector("p.text-red-400")?.textContent, "New accounts are paused on this site right now.",
+      `under the main button (federated ${federated})`);
+    await act(async () => paused.root.unmount());
+    const down = await mountAt("?error=unavailable", federated);
+    assert.deepEqual(down.red(), ["Sign-in is unavailable right now — try again in a few minutes."]);
+    await act(async () => down.root.unmount());
+  }
+  const plain = await mountAt("");
+  assert.deepEqual(plain.red(), [], "no ?error: nothing said");
+  await act(async () => plain.root.unmount());
+});
+
+test("restart: a fresh load of the same refused URL says it again; a load without ?error says nothing", async () => {
+  const first = await mountAt("?error=signups_disabled");
+  await act(async () => first.root.unmount());
+  const again = await mountAt("?error=signups_disabled");
+  assert.deepEqual(again.red(), ["New accounts are paused on this site right now."]);
+  await act(async () => again.root.unmount());
+  const clean = await mountAt("");
+  assert.deepEqual(clean.red(), []);
+  await act(async () => clean.root.unmount());
+});
+
+test("retry: pressing Sign in again clears the old sentence; a failed retry shows only its own line", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (() => Promise.resolve(new Response("{}", { status: 503 }))) as typeof fetch;
+  try {
+    const m = await mountAt("?error=signups_disabled");
+    assert.deepEqual(m.red(), ["New accounts are paused on this site right now."], "the refusal is said first");
+    const button = [...m.container.querySelectorAll("button")].find((b) => b.textContent === "Sign in");
+    assert.ok(button, "the main Sign in button");
+    await act(async () => { button.click(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    const said = m.red();
+    assert.equal(said.length, 1, `one line, not two: ${JSON.stringify(said)}`);
+    assert.doesNotMatch(said[0] ?? "", /New accounts are paused/);
+    await act(async () => m.root.unmount());
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("the refusal codes are the ones lib/lockdown.ts sends", () => {
+  const form = stripComments(readFileSync(join(import.meta.dirname, "SignInForm.tsx"), "utf8"));
+  assert.match(form, /import type \{ SignupDecision \} from "@\/app\/lib\/lockdown";/);
+  assert.match(form, /Record<Extract<SignupDecision, \{ allowed: false \}>\["reason"\], string>/);
+  assert.match(form, /\n\}\s*$/, "read to its end");
+});

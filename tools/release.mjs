@@ -76,12 +76,17 @@ function repoImageRefs(tree) {
     mas: find(/^\s+image:\s*(ghcr\.io\/element-hq\/matrix-authentication-service:[^\s@]+)\s*$/m, compose, "mas"),
     caddy: find(/^\s+image:\s*(caddy:[^\s@]+)\s*$/m, compose, "caddy"),
     cloudflared: find(/^\s+image:\s*(cloudflare\/cloudflared:[^\s@]+)\s*$/m, compose, "cloudflared"),
-    "mautrix-discord": find(/^\s+image:\s*(dock\.mau\.dev\/mautrix\/discord:[^\s@]+)\s*$/m, compose, "mautrix-discord"),
     restic: find(/^FROM\s+(restic\/restic:[^\s@]+)/m, docker, "restic"),
     node: find(/^ARG NODE_IMAGE=([^\s@]+)$/m, docker, "node"),
     dockerfile: find(/^# syntax=([^\s@]+)$/m, docker, "the Dockerfile frontend (# syntax=)"),
   };
 }
+
+// Names an older box's verifier requires that this release no longer pins, each written as an image
+// the release does pin (an older box checks every manifest image is used by compose.yaml or
+// install/Dockerfile, and pulls it). "mautrix-discord": 0.1.0-preview.1 to .4 require it; the bridge
+// is now Out Of Your Element, built on the box (install/ooye/), so the name carries the node image.
+const LEGACY_IMAGE_NAMES = { "mautrix-discord": "node" };
 
 function resolveDigest(ref, table) {
   if (table) { const d = table[ref]; if (!/^sha256:[0-9a-f]{64}$/.test(d ?? "")) die(`--digests has no sha256 for ${ref}`); return d; }
@@ -170,6 +175,7 @@ function cut() {
     const refs = { ...repoImageRefs(stage), web: webRef };
     const images = {};
     for (const name of IMAGE_NAMES) images[name] = `${refs[name]}@${resolveDigest(refs[name], table)}`;
+    for (const [legacy, name] of Object.entries(LEGACY_IMAGE_NAMES)) images[legacy] = images[name];
     let compose = pinWebImage(readFileSync(path.join(stage, "install/compose.yaml"), "utf8"), images.web);
     if (compose === null) die("install/compose.yaml has no web service in the shape the release pins (image + build, target web)");
     let docker = readFileSync(path.join(stage, "install/Dockerfile"), "utf8");

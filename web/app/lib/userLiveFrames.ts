@@ -31,11 +31,19 @@ function remove(prev: ChatMsg[], keys: Set<string>, showDeleted: boolean): ChatM
 /** The card's buffer after one frame. Returns `prev` itself when nothing changed. */
 export function applyCardFrame(prev: ChatMsg[], frame: StreamFrame, view: CardView): ChatMsg[] {
   switch (frame.type) {
-    case "history":
+    case "history": {
       // The replay on connect: whatever of theirs is still in the server's ring buffer.
-      return frame.messages
-        .filter((m) => isKeyable(m) && view.mine(m) && (view.showDeleted || !m.deleted))
-        .slice(-MAX);
+      const theirs = frame.messages.filter((m) => isKeyable(m) && view.mine(m));
+      if (!frame.delta) return theirs.filter((m) => view.showDeleted || !m.deleted).slice(-MAX);
+      // A resume sends only what changed: folded in by id, a deleted line leaving as on a delete.
+      if (theirs.length === 0) return prev;
+      const byKey = new Map(theirs.map((m) => [chatKey(m), m]));
+      const kept = prev.map((m) => byKey.get(chatKey(m)) ?? m);
+      const have = new Set(prev.map(chatKey));
+      const merged = [...kept, ...theirs.filter((m) => !have.has(chatKey(m)))];
+      const gone = new Set(theirs.filter((m) => m.deleted).map(chatKey));
+      return remove(merged, gone, view.showDeleted).slice(-MAX);
+    }
     case "message": {
       const m: ChatMsg = frame;
       if (!isKeyable(m) || !view.mine(m)) return prev;

@@ -18,7 +18,7 @@ const read = (f: string) => stripComments(readFileSync(join(HERE, f), "utf8"));
 test("ThreadsListPanel draws a ← when given onBack", () => {
   const src = read("ThreadsListPanel.tsx");
   assert.match(src, /onBack\?: \(\) => void;/, "the prop exists");
-  assert.match(src, /\{onBack && \(\s*<button onClick=\{onBack\} aria-label="Back"/, "the ← button is gated on onBack and labelled Back");
+  assert.match(src, /\{onBack && \(\s*<BarButton size="touch" icon=\{<span className="text-sm">←<\/span>\} label="Back" onClick=\{onBack\} \/>/, "the ← button is gated on onBack and labelled Back");
 });
 
 test("MatrixView hands the list a back action in mode 1 only", () => {

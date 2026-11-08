@@ -37,7 +37,7 @@
 
 import { MODULES } from './modules.mjs';
 
-/** @typedef {'string'|'list'|'origin'|'wsOrigin'|'url'|'serverName'|'matrixId'|'localpartTemplate'|'enum'|'secret'|'bool'|'number'|'aiRoute'|'aiTasks'|'aiConnections'|'memoryState'|'setupState'|'backupRepository'} InstanceKind */
+/** @typedef {'string'|'list'|'origin'|'wsOrigin'|'url'|'serverName'|'matrixId'|'localpart'|'localpartTemplate'|'enum'|'secret'|'bool'|'number'|'aiRoute'|'aiTasks'|'aiConnections'|'memoryState'|'setupState'|'backupRepository'} InstanceKind */
 /** @typedef {'web'|'stream-api'|'stream-ingest'} InstancePackage */
 /**
  * @typedef {object} InstanceEntry
@@ -64,6 +64,14 @@ import { MODULES } from './modules.mjs';
  * @property {number} [maxLength]   string kind
  * @property {boolean} [productDefault] a non-empty default that is the PRODUCT's own (never an install's)
  * @property {boolean} [legacyOn]   a module switch whose part was always on before it had one (config/modules.mjs)
+ * @property {boolean} [settable]   install tier: a display value `sudo blackbranch set` changes (install/blackbranch
+ *                                  SETTABLE_KEYS; install/bundle.test.mjs holds the two equal)
+ * @property {boolean} [permanent]  install tier: the install's identity (its addresses, its chat server's name, its
+ *                                  sign-in client); it never changes after the install
+ * @property {boolean} [hostRendered] the HOST applies it: `blackbranch render` turns it into the homeserver's config,
+ *                                  asked for on every save — no service restart ever applies it
+ * @property {string} [upstreamId]   a fixed-issuer sign-in slot's switch: the ULID the sign-in service keys that
+ *                                  provider (and every person's link to it) by — it never changes (ADR 0154)
  * @property {string} label
  * @property {string} description
  */
@@ -72,31 +80,31 @@ import { MODULES } from './modules.mjs';
 export const INSTANCE_KEYS = [
   // ── Site (install tier) ──────────────────────────────────────────────────────────────────
   { key: 'site.name', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_NAME', 'NEXT_PUBLIC_SITE_NAME'], packages: ['web', 'stream-ingest'],
+    reload: 'restart', tier: 'install', settable: true, env: ['SITE_NAME', 'NEXT_PUBLIC_SITE_NAME'], packages: ['web', 'stream-ingest'],
     required: true, label: 'Site name',
     description: 'What a viewer reads as the name of this site: page titles, the sign-in page, the install prompt.' },
   { key: 'site.description', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_DESCRIPTION'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['SITE_DESCRIPTION'], packages: ['web'],
     label: 'Site description',
     description: 'One sentence for search results and link previews (the meta description and share cards). Unset = a neutral line built from the site name.' },
   { key: 'site.homeHeading', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_HOME_HEADING'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['SITE_HOME_HEADING'], packages: ['web'],
     label: 'Home heading',
     description: 'The heading a signed-out visitor sees at the top of Home. Unset = the site name.' },
   { key: 'site.homeIntro', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_HOME_INTRO'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['SITE_HOME_INTRO'], packages: ['web'],
     label: 'Home intro',
     description: 'The one line under the Home heading for a signed-out visitor. Unset = a neutral line.' },
   { key: 'site.shortName', kind: 'string', maxLength: 24, default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_SHORT_NAME'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['SITE_SHORT_NAME'], packages: ['web'],
     label: 'Short name',
     description: 'The name under the app icon when the site is installed on a phone. Unset = the site name.' },
   { key: 'site.tagline', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_TAGLINE'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['SITE_TAGLINE'], packages: ['web'],
     label: 'Share card line',
     description: 'The line under the site name on the picture shown when a link to the site is shared. Unset = a neutral line.' },
   { key: 'site.iconSet', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_ICON_SET'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['SITE_ICON_SET'], packages: ['web'],
     label: 'Icon folder',
     description: 'The folder under the site\'s public files that holds its icons (icon.png, icon-192.png, icon-512.png, icon-maskable-512.png, apple-touch-icon.png), e.g. "/" or "/brand/mine". Unset = the built-in neutral icons.' },
   // The word this install used for the site's own platform id and browser storage names before
@@ -106,15 +114,15 @@ export const INSTANCE_KEYS = [
     label: 'Legacy site id',
     description: 'A lower-case word (e.g. oldsite) this site used for its own platform id and its browser storage names before the product names. Old values under it are carried forward: a returning visitor\'s saved settings, and a page opened before the rename. Unset = none (a fresh install).' },
   { key: 'site.origin', kind: 'origin', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_ORIGIN', 'AUTH_URL'], packages: ['web', 'stream-ingest'],
+    reload: 'restart', tier: 'install', permanent: true, env: ['SITE_ORIGIN', 'AUTH_URL'], packages: ['web', 'stream-ingest'],
     required: true, label: 'Site address',
     description: 'The public origin of the website (https://…). Sign-in return URLs, CORS, sitemaps and payment return links are built from it.' },
   { key: 'site.apiOrigin', kind: 'origin', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_API_ORIGIN'], packages: ['web'],
+    reload: 'restart', tier: 'install', permanent: true, env: ['SITE_API_ORIGIN'], packages: ['web'],
     required: true, label: 'API address',
     description: 'The public origin of stream-api (https://…): radio audio and art, the content-security policy.' },
   { key: 'site.apiWsOrigin', kind: 'wsOrigin', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['SITE_API_WS_ORIGIN'], packages: ['web'],
+    reload: 'restart', tier: 'install', permanent: true, env: ['SITE_API_WS_ORIGIN'], packages: ['web'],
     required: true, label: 'Live socket address',
     description: 'The public WebSocket origin of stream-api (wss://…) that browsers open for live chat and overlays.' },
 
@@ -123,19 +131,19 @@ export const INSTANCE_KEYS = [
   // purpose: a page that invents an operator or a law is worse than one that says it has none,
   // so unset shows a "not set" marker and web logs it at boot.
   { key: 'legal.operator', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['LEGAL_OPERATOR'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['LEGAL_OPERATOR'], packages: ['web'],
     label: 'Operator',
     description: 'Who runs the site, as named in the Terms and Privacy Policy (a person\'s trading name or a company).' },
   { key: 'legal.contactEmail', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['LEGAL_CONTACT_EMAIL'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['LEGAL_CONTACT_EMAIL'], packages: ['web'],
     label: 'Contact e-mail',
     description: 'Where legal, privacy, refund and data-deletion requests go. Shown on the legal and About pages.' },
   { key: 'legal.governingLaw', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['LEGAL_GOVERNING_LAW'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['LEGAL_GOVERNING_LAW'], packages: ['web'],
     label: 'Governing law',
     description: 'Whose laws govern the Terms, as it reads after "the laws of", e.g. "the State of X, United States".' },
   { key: 'legal.effectiveDate', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['LEGAL_EFFECTIVE_DATE'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['LEGAL_EFFECTIVE_DATE'], packages: ['web'],
     label: 'Last updated',
     description: 'The date the legal page says it was last updated, as written, e.g. "January 1, 2026".' },
 
@@ -186,16 +194,85 @@ export const INSTANCE_KEYS = [
     label: 'Weekly backups kept',
     description: 'How many weeks keep one backup each, beyond the daily ones. Unset = 4.' },
 
+  // Outgoing mail (optional): read by the HOST when it renders the sign-in service's config —
+  // `blackbranch` resolves them inside the stream-api image with this schema's resolver
+  // (install/matrix/mail.cjs), and saving one asks for that render. Unset host = no mail, as before:
+  // no password recovery, no address required at sign-up. With a host set, the sign-in service sends
+  // through it, password recovery is on and sign-up asks for a verified address (ADR 0051).
+  // The password is secret tier, below.
+  { key: 'mail.smtp.host', kind: 'serverName', default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['MAIL_SMTP_HOST'], packages: ['web'],
+    label: 'Mail server',
+    description: 'The SMTP server the sign-in service sends mail through (smtp.example.com; your mail provider names it). Unset = no mail: no password recovery, and sign-up asks for no address.' },
+  { key: 'mail.smtp.port', kind: 'number', integer: true, min: 1, max: 65535, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['MAIL_SMTP_PORT'], packages: ['web'],
+    label: 'Mail server port',
+    description: 'Unset = the usual one for the connection: 587 for STARTTLS, 465 for TLS, 25 for plain.' },
+  { key: 'mail.smtp.mode', kind: 'enum', values: ['starttls', 'tls', 'plain'], default: 'starttls', scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['MAIL_SMTP_MODE'], packages: ['web'],
+    label: 'Mail connection',
+    description: 'starttls (the usual, port 587), tls (port 465) or plain (unencrypted: only for a mail server on this machine\'s own network).' },
+  { key: 'mail.smtp.username', kind: 'string', maxLength: 255, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['MAIL_SMTP_USERNAME'], packages: ['web'],
+    label: 'Mail server user name',
+    description: 'The user name the mail server signs in with. Unset = no sign-in (a relay that needs none).' },
+  { key: 'mail.from', kind: 'string', maxLength: 255, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['MAIL_FROM'], packages: ['web'],
+    label: 'Mail sender address',
+    description: 'The address mail comes from. Unset = noreply@ the site\'s domain (your mail provider must allow it).' },
+
+  // Sign-in providers (optional, ADR 0154): "Continue with Google / Discord / Twitch / your own OpenID
+  // server" on the sign-in page. Read by the HOST like the mail settings (install/matrix/signin.cjs)
+  // and rendered into the sign-in service's config (install/matrix/render.sh). Google, Discord and Twitch
+  // carry their slot's `upstreamId`: the id the sign-in service keys the provider — and every person's
+  // link to it — by. It never changes. The OpenID slot's id is derived from its issuer
+  // (signinProviderId below). The client secrets are secret tier, below.
+  { key: 'signin.google.enabled', kind: 'bool', default: false, scope: 'server', module: 'core', secret: false, upstreamId: '01M6W7E48RDHCVFV08SQ68SZTB',
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_GOOGLE_ENABLED'], packages: ['web'],
+    label: 'Sign in with Google',
+    description: 'Make the app in the Google Cloud console: APIs & Services → Credentials → Create credentials → OAuth client ID, type Web application. Paste the redirect URL below under Authorised redirect URIs, then copy the client id and secret here.' },
+  { key: 'signin.google.clientId', kind: 'string', maxLength: 255, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_GOOGLE_CLIENT_ID'], packages: ['web'],
+    label: 'Google client id', description: 'The OAuth client\'s id (it ends in .apps.googleusercontent.com).' },
+  { key: 'signin.discord.enabled', kind: 'bool', default: false, scope: 'server', module: 'core', secret: false, upstreamId: '01M6W7E48SQRP7WM6CF3PM0QQH',
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_DISCORD_ENABLED'], packages: ['web'],
+    label: 'Sign in with Discord',
+    description: 'Make the app in the Discord Developer Portal: Applications → New Application, then OAuth2. Add the redirect URL below under Redirects, then copy the client id and secret here.' },
+  { key: 'signin.discord.clientId', kind: 'string', maxLength: 255, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_DISCORD_CLIENT_ID'], packages: ['web'],
+    label: 'Discord client id', description: 'The application\'s client id (a long number, on its OAuth2 page).' },
+  { key: 'signin.twitch.enabled', kind: 'bool', default: false, scope: 'server', module: 'core', secret: false, upstreamId: '01M6W7E48SP2C7JKD41P73GKF0',
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_TWITCH_ENABLED'], packages: ['web'],
+    label: 'Sign in with Twitch',
+    description: 'Make the app in the Twitch developer console: Applications → Register Your Application, category Website Integration, with the redirect URL below as its OAuth Redirect URL. Copy the client id; New Secret gives the secret. This is its own app, not the one Twitch chat uses.' },
+  { key: 'signin.twitch.clientId', kind: 'string', maxLength: 255, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_TWITCH_CLIENT_ID'], packages: ['web'],
+    label: 'Twitch client id', description: 'The application\'s client id.' },
+  { key: 'signin.oidc.enabled', kind: 'bool', default: false, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_OIDC_ENABLED'], packages: ['web'],
+    label: 'Sign in with your OpenID server',
+    description: 'Your own sign-in server (Authentik, Keycloak, Zitadel, Authelia or any OpenID Connect server). Fill in its address first: the redirect URL below appears once it is saved. Make a confidential OAuth2 / OpenID client there with that URL, then fill in its client id and secret here. The URL belongs to that address: another server gets another URL, and people who signed in through the old one do not carry over (switch back to the old address and they do).' },
+  { key: 'signin.oidc.issuer', kind: 'url', default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_OIDC_ISSUER'], packages: ['web'],
+    label: 'OpenID server address',
+    description: 'Its issuer address, exactly as the server names itself: https://… (the sign-in service accepts no http:// address), with or without a trailing / as the server has it. The Doctor checks that it answers as this address.' },
+  { key: 'signin.oidc.clientId', kind: 'string', maxLength: 255, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_OIDC_CLIENT_ID'], packages: ['web'],
+    label: 'OpenID client id', description: 'The client\'s id on your OpenID server.' },
+  { key: 'signin.oidc.humanName', kind: 'string', maxLength: 40, default: null, scope: 'server', module: 'core', secret: false,
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['SIGNIN_OIDC_NAME'], packages: ['web'],
+    label: 'OpenID button name', description: 'What the sign-in button says after "Continue with". Unset = the server\'s address.' },
+
   // ── Matrix homeserver (install tier) ─────────────────────────────────────────────────────
   // ONE source for "which homeserver is ours". The base URL is the origin the site TRUSTS (its
   // server-side fetches skip the SSRF guard), so these are install tier: never dashboard-edited.
   // The MAS_* names are aliases — the contract is the Matrix OAuth 2.0 API, not one program.
   { key: 'matrix.serverName', kind: 'serverName', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['MATRIX_SERVER_NAME'], packages: ['web', 'stream-api'],
+    reload: 'restart', tier: 'install', permanent: true, env: ['MATRIX_SERVER_NAME'], packages: ['web', 'stream-api'],
     required: true, label: 'Matrix server name',
     description: 'The :server part of every account id (@name:server). Permanent: a homeserver can never be renamed.' },
   { key: 'matrix.baseUrl', kind: 'origin', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['MATRIX_HOMESERVER_URL'], packages: ['web'],
+    reload: 'restart', tier: 'install', permanent: true, env: ['MATRIX_HOMESERVER_URL'], packages: ['web'],
     required: true, label: 'Matrix homeserver address',
     description: 'The homeserver\'s client-server API origin (https://…). The site trusts this origin; the well-known delegates to it.' },
   { key: 'matrix.federationServer', kind: 'serverName', default: null, scope: 'public', module: 'core', secret: false,
@@ -215,7 +292,7 @@ export const INSTANCE_KEYS = [
   // Synapse — so it applies at that restart, never live. The room ids are what the bootstrap made
   // (`blackbranch matrix bootstrap`), recorded so a later run finds them rather than making more.
   { key: 'matrix.federation', kind: 'bool', default: false, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'instance', env: ['MATRIX_FEDERATION'], packages: ['web'],
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['MATRIX_FEDERATION'], packages: ['web'],
     label: 'Federation',
     description: 'Whether other Matrix servers can reach this community (off on a new install). On a bundled install the host applies it by re-rendering the homeserver config and restarting Synapse; the server name never changes.' },
   // Sign-up on the bundled homeserver, read by the HOST like the federation switch (render.sh's
@@ -223,7 +300,7 @@ export const INSTANCE_KEYS = [
   // closed (render.sh and the description agree; this comment said "open" until 2026-10-18). An install whose homeserver
   // the bundle does not render (its own MAS elsewhere) shows the switch and it changes nothing.
   { key: 'matrix.registration', kind: 'enum', values: ['open', 'closed'], default: null, scope: 'server', module: 'core', secret: false,
-    reload: 'restart', tier: 'instance', env: ['MATRIX_REGISTRATION'], packages: ['web'],
+    reload: 'restart', hostRendered: true, tier: 'instance', env: ['MATRIX_REGISTRATION'], packages: ['web'],
     label: 'Let people make accounts',
     description: 'Whether anyone may make an account on the bundled homeserver\'s own sign-in pages: Yes (open) or No (closed). Unset = No; always No while setup runs. Applies only to the homeserver this install\'s bundle runs: the host re-renders its sign-in config and restarts it. A homeserver run elsewhere keeps its own setting.' },
   // Sign-in with an account on ANOTHER Matrix server (federated sign-in), read by web on every
@@ -253,11 +330,11 @@ export const INSTANCE_KEYS = [
     label: '#general room',
     description: 'The room id (!…) of #general, written by the homeserver bootstrap. Change it only when the room is replaced.' },
   { key: 'matrix.oauth.issuer', kind: 'url', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['MATRIX_OAUTH_ISSUER', 'MAS_ISSUER'], packages: ['web'],
+    reload: 'restart', tier: 'install', permanent: true, env: ['MATRIX_OAUTH_ISSUER', 'MAS_ISSUER'], packages: ['web'],
     required: true, label: 'Matrix sign-in issuer',
     description: 'The OAuth 2.0 issuer the homeserver delegates sign-in to (its auth_metadata must name exactly this).' },
   { key: 'matrix.oauth.clientId', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['MATRIX_OAUTH_CLIENT_ID', 'MAS_CLIENT_ID'], packages: ['web'],
+    reload: 'restart', tier: 'install', permanent: true, env: ['MATRIX_OAUTH_CLIENT_ID', 'MAS_CLIENT_ID'], packages: ['web'],
     required: true, label: 'Matrix sign-in client id',
     description: 'This site\'s registered (confidential) client at the issuer. Public: it appears in every sign-in link.' },
 
@@ -267,11 +344,50 @@ export const INSTANCE_KEYS = [
   { key: 'discordBridge.usernameTemplate', kind: 'localpartTemplate', default: null, scope: 'public', module: 'discord-bridge', secret: false,
     reload: 'restart', tier: 'install', env: ['DISCORD_BRIDGE_USERNAME_TEMPLATE'], packages: ['web'],
     label: 'Discord bridge username template',
-    description: 'The bridge\'s username_template, e.g. discord_{{.}}: how a Discord user\'s Matrix id is built.' },
+    description: 'How the bridge builds a Discord user\'s Matrix id. mautrix-discord: its username_template, e.g. discord_{{.}}. Out Of Your Element: its namespace_prefix followed by {{.Username}}, e.g. _ooye_{{.Username}}.' },
   { key: 'discordBridge.displaynameTemplate', kind: 'string', default: null, scope: 'public', module: 'discord-bridge', secret: false,
     reload: 'restart', tier: 'install', env: ['DISCORD_BRIDGE_DISPLAYNAME_TEMPLATE'], packages: ['web'],
     label: 'Discord bridge display-name template',
-    description: 'The bridge\'s displayname_template. Its fixed tail (e.g. " (Discord)") is stripped for display; its {{if .Bot}}…{{end}} text marks bot accounts.' },
+    description: 'The bridge\'s displayname_template. Its fixed tail (e.g. " (Discord)") is stripped for display; its {{if .Bot}}…{{end}} text marks bot accounts. Out Of Your Element adds neither: {{or .Nick .GlobalName .Username}}.' },
+
+  // ── Community service account (install tier) ─────────────────────────────────────────────
+  // The install's own account that makes and keeps the community's rooms: a Synapse application
+  // service the host renders (install/matrix/render.sh); its tokens live in the install's .env and
+  // never reach a service. Permanent: the rooms it made are its for good. The switch says whether
+  // the host keeps the rooms as the Admin Panel sets them (on for a new install).
+  { key: 'community.serviceLocalpart', kind: 'localpart', default: 'blackbranch', productDefault: true, scope: 'public', module: 'core', secret: false,
+    reload: 'restart', tier: 'install', permanent: true, env: ['COMMUNITY_LOCALPART'], packages: ['web'],
+    label: 'Community account name',
+    description: 'The name of the account this install uses to make and look after the community\'s rooms (@name:server). Set when the site was installed; it never changes.' },
+  { key: 'community.reconciler', kind: 'bool', default: false, scope: 'public', module: 'core', secret: false,
+    reload: 'restart', tier: 'install', env: ['COMMUNITY_RECONCILER'], packages: ['web'],
+    label: 'Rooms kept as set here',
+    description: 'Whether the server keeps the community\'s rooms the way the Admin Panel sets them. On for a new install; off on a site set up before this existed.' },
+  // How the server keeps them (spec 2026-10-23 §4.1 put-back, §4.5 retention cap). Read by web,
+  // which hands both to the host in the community feed.
+  { key: 'community.keepElementEdits', kind: 'bool', default: false, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['COMMUNITY_KEEP_ELEMENT_EDITS'], packages: ['web'],
+    label: 'Keep changes made in Element',
+    description: 'Off: a change made to a community channel outside this panel (in Element, say) is put back the way the panel has it, and the panel says what it put back. On: such a change is kept and only listed, for streamers who also run the community from Element. While this is on, changes made HERE to a channel that already exists (its name, topic, picture, who can see or post in it, how long it keeps messages, where it sits) are not applied either: they are listed as differences too. New channels, who is in which channel, and who is a moderator are still applied.' },
+  // The accounts that belong to a chat bridge (its bot): the community reconciler leaves their power as
+  // it is and never removes them. Trusted from here only, never from a room's own bridge state (anyone
+  // with state power can write that one). Slice 2 adds the Discord bridge's bot itself.
+  { key: 'community.bridgeAccounts', kind: 'list', default: [], scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['COMMUNITY_BRIDGE_ACCOUNTS'], packages: ['web'],
+    label: 'Bridge accounts',
+    description: 'Accounts that belong to a chat bridge, each a full Matrix id like @bot:example.com. Their power is left alone and they are never kicked.' },
+  { key: 'community.retentionCapDays', kind: 'number', integer: true, min: 0, max: 3650, default: 365, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['COMMUNITY_RETENTION_CAP_DAYS'], packages: ['web'],
+    label: 'Longest a channel keeps messages',
+    description: 'The most days any channel may keep its messages, from 1 to 3650. 0 means no limit: messages are kept forever, at the cost of disk. Each channel picks its own time up to this; a channel that picks none keeps them this long. Applied to the server at its next start.' },
+  // The channels the setup pages listed beyond the two the community starts with (#general and
+  // #forum), each `<kind>:<name>`. There is no channel table row to write them into until the
+  // community's home is taken into the Community page (the reconciler's first import): that import
+  // turns them into rows (web/app/lib/community/setupChannels.ts), and the next run makes them.
+  { key: 'community.setupChannels', kind: 'list', default: [], scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['COMMUNITY_SETUP_CHANNELS'], packages: ['web'], surface: 'setup',
+    label: 'Channels listed at setup',
+    description: 'The channels the setup pages listed beyond #general and #forum. They become the community\'s channels the first time the server takes the community into the Community page, which manages them from then on.' },
 
   // ── Streamer, bot, staff ─────────────────────────────────────────────────────────────────
   { key: 'streamer.displayName', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
@@ -309,7 +425,7 @@ export const INSTANCE_KEYS = [
     label: 'YouTube channel id',
     description: 'The channel id (UC…). Used for the embed, live detection, chat and moderation.' },
   { key: 'platform.youtube.vodPlaylist', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
-    reload: 'restart', tier: 'install', env: ['YOUTUBE_VOD_PLAYLIST'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['YOUTUBE_VOD_PLAYLIST'], packages: ['web'],
     label: 'VOD playlist',
     description: 'The YouTube playlist (PL…) whose public videos are listed as past broadcasts: Home\'s VODs card and the VODs tabs. Unset or "none" = no VODs anywhere.' },
   { key: 'platform.kick.slug', kind: 'string', default: null, scope: 'public', module: 'core', secret: false,
@@ -332,10 +448,10 @@ export const INSTANCE_KEYS = [
   // sources the watch page offers. The default (none off) is every source, so nothing changes until an
   // admin switches one off; a list that switches every source off is ignored (fail open: a player with
   // no source is a dark site).
-  { key: 'player.embedsOff', kind: 'list', values: ['native', 'streamplace', 'youtube', 'twitch'], default: [], scope: 'public', module: 'core', secret: false,
+  { key: 'player.embedsOff', kind: 'list', values: ['native', 'streamplace', 'youtube', 'twitch', 'kick'], default: [], scope: 'public', module: 'core', secret: false,
     reload: 'live', tier: 'instance', env: ['PLAYER_EMBEDS_OFF'], packages: ['web'],
     label: 'Player sources switched off',
-    description: 'The live sources the watch page does not offer: native (the site\'s own player), streamplace, youtube, twitch. Empty = all of them. Switched in the Stream tab; switching every one off is ignored.' },
+    description: 'The live sources the watch page does not offer: native (the site\'s own player), streamplace, youtube, twitch, kick. Empty = all of them. Switched in the Stream tab; switching every one off is ignored.' },
 
   // ── Payments ─────────────────────────────────────────────────────────────────────────────
   // The publishable key is public by design (Stripe.js in the browser needs it), so it is a plain
@@ -352,7 +468,7 @@ export const INSTANCE_KEYS = [
   { key: 'money.subscribeUrl', kind: 'url', default: null, scope: 'public', module: 'core', secret: false,
     reload: 'live', tier: 'instance', env: ['SUBSCRIBE_URL'], packages: ['web'],
     label: 'Outside subscribe link',
-    description: 'Where the Subscribe button goes when the site cannot sell the Supporter subscription itself: card payments off, or no Supporter price set at Stripe. For example a Patreon page. Unset then = no Subscribe button.' },
+    description: 'Where the Subscribe button goes, used only when neither Stripe nor PayPal sells the Supporter subscription (no Stripe Supporter price and no PayPal plan). For example a Patreon page. Unset then = no Subscribe button.' },
   { key: 'money.supportLine', kind: 'string', maxLength: 400, default: null, scope: 'public', module: 'core', secret: false,
     reload: 'live', tier: 'instance', env: ['DONO_LINKS'], packages: ['stream-ingest'],
     label: '!dono reply',
@@ -362,23 +478,23 @@ export const INSTANCE_KEYS = [
   // The NAME, symbol and icon are install tier (env, read when web starts), like site.name. Product
   // defaults are neutral words; an install's own is env.
   { key: 'currency.name', kind: 'string', maxLength: 24, default: 'point', productDefault: true, scope: 'public', module: 'currency', secret: false,
-    reload: 'restart', tier: 'install', env: ['CURRENCY_NAME'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['CURRENCY_NAME'], packages: ['web'],
     label: 'Points name (one)',
     description: 'What one unit of the site currency is called: "1 point". Shown everywhere a balance, a price or an earning is.' },
   { key: 'currency.namePlural', kind: 'string', maxLength: 24, default: 'points', productDefault: true, scope: 'public', module: 'currency', secret: false,
-    reload: 'restart', tier: 'install', env: ['CURRENCY_NAME_PLURAL'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['CURRENCY_NAME_PLURAL'], packages: ['web'],
     label: 'Points name (many)',
     description: 'The plural: "150 points". Set it to the same word as the name for a word with no plural.' },
   { key: 'currency.symbol', kind: 'string', maxLength: 4, default: 'pts', productDefault: true, scope: 'public', module: 'currency', secret: false,
-    reload: 'restart', tier: 'install', env: ['CURRENCY_SYMBOL'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['CURRENCY_SYMBOL'], packages: ['web'],
     label: 'Points symbol',
     description: 'The short mark after a number where the name would crowd it: a balance chip, "+2" when you earn. One letter sits right after the number; a longer one gets a space.' },
   { key: 'currency.icon', kind: 'string', default: null, scope: 'public', module: 'currency', secret: false,
-    reload: 'restart', tier: 'install', env: ['CURRENCY_ICON'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['CURRENCY_ICON'], packages: ['web'],
     label: 'Points icon',
     description: 'The picture shown beside points: a path on this site (/my-icon.webp) or an https address. Unset = the built-in coin.' },
   { key: 'community.scoreName', kind: 'string', maxLength: 32, default: 'Karma', productDefault: true, scope: 'public', module: 'currency', secret: false,
-    reload: 'restart', tier: 'install', env: ['COMMUNITY_SCORE_NAME'], packages: ['web'],
+    reload: 'restart', tier: 'install', settable: true, env: ['COMMUNITY_SCORE_NAME'], packages: ['web'],
     label: 'Vote score name',
     description: 'What a person\'s score from votes on their messages is called (Home\'s boards, the user card). Its last word names the per-100-messages board.' },
   // Home's Leaderboard: on or off, and which of the product's boards it offers. Read by the page at
@@ -391,6 +507,35 @@ export const INSTANCE_KEYS = [
     reload: 'live', tier: 'instance', env: ['LEADERBOARD_HIDDEN'], packages: ['web'],
     label: 'Leaderboard boards switched off',
     description: 'The boards the Leaderboard does not offer: points (points earned), credit (the vote score), creditRate (the vote score per 100 messages), streams, messages (top messages), emotes (top emotes). Empty = all of them.' },
+  // The crowd auto-pin: a chat message with enough net upvotes pins itself (web/app/lib/votePolicy.ts,
+  // where the default curve's measurement is written down). Read at every vote. Defaults are the
+  // product's own numbers.
+  { key: 'chat.autoPin.off', kind: 'bool', default: false, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['CHAT_AUTO_PIN_OFF'], packages: ['web'],
+    label: 'Turn off auto-pin',
+    description: 'On = upvotes never pin a message by themselves; only a moderator pins.' },
+  { key: 'chat.autoPin.votes', kind: 'number', integer: true, min: 1, max: 100, default: 3, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['CHAT_AUTO_PIN_VOTES'], packages: ['web'],
+    label: 'Upvotes to pin',
+    description: 'How many more upvotes than downvotes a message needs to pin itself in a quiet chat.' },
+  { key: 'chat.autoPin.chattersPerVote', kind: 'number', integer: true, min: 1, max: 1000, default: 12, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['CHAT_AUTO_PIN_CHATTERS_PER_VOTE'], packages: ['web'],
+    label: 'Chatters per extra upvote',
+    description: 'In a busier chat a message needs one more upvote for every this many people who chatted in the last 15 minutes.' },
+  { key: 'chat.autoPin.maxVotes', kind: 'number', integer: true, min: 1, max: 100, default: 6, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['CHAT_AUTO_PIN_MAX_VOTES'], packages: ['web'],
+    label: 'Most upvotes ever needed',
+    description: 'However busy the chat, a message never needs more upvotes than this. Set it too high and nothing ever pins itself.' },
+  { key: 'chat.autoPin.minutes', kind: 'number', integer: true, min: 1, max: 120, default: 10, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['CHAT_AUTO_PIN_MINUTES'], packages: ['web'],
+    label: 'Minutes pinned',
+    description: 'How long a message the upvotes pinned stays at the top of chat. A moderator\'s pin stays until it is taken down.' },
+  // The streamer's highlight (web/app/lib/chatSpotlight.ts): an admin's click on a chat message
+  // shows it to everyone as the message being answered. Read at every click (spotlightSwitch.ts).
+  { key: 'chat.spotlight.off', kind: 'bool', default: false, scope: 'server', module: 'core', secret: false,
+    reload: 'live', tier: 'instance', env: ['CHAT_SPOTLIGHT_OFF'], packages: ['web'],
+    label: 'Turn off the streamer highlight',
+    description: 'On = clicking a chat message no longer highlights it for everyone, and a highlight showing now is taken down.' },
   // The economy: instance tier, live. Defaults are the product's own numbers.
   { key: 'currency.purchasable', kind: 'bool', default: false, scope: 'public', module: 'currency', secret: false,
     reload: 'live', tier: 'instance', env: ['CURRENCY_PURCHASABLE'], packages: ['web'],
@@ -510,7 +655,8 @@ export const INSTANCE_KEYS = [
   ...MODULES.map((m) => ({
     key: `modules.${m.id}`, kind: 'bool', default: m.defaultOn, scope: 'server', module: m.id, secret: false,
     // The website reads its switches at call time; a server process captures them at its start.
-    reload: m.packages.every((p) => p === 'web') ? 'live' : 'restart', tier: 'instance', env: [`MODULE_${m.id.toUpperCase()}`], packages: [...m.packages],
+    // A manifest marked appliesLive is applied by its server process on the settings load itself.
+    reload: m.packages.every((p) => p === 'web') || m.appliesLive ? 'live' : 'restart', tier: 'instance', env: [`MODULE_${m.id.toUpperCase()}`], packages: [...m.packages],
     ...(m.legacyOn ? { legacyOn: true } : {}),
     label: m.label, description: m.description,
   })),
@@ -569,6 +715,21 @@ export const INSTANCE_KEYS = [
   { key: 'backup.s3.secretAccessKey', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
     reload: 'live', tier: 'secret', env: ['BACKUP_S3_SECRET_ACCESS_KEY'], packages: ['stream-api'],
     label: 'Bucket secret key', description: 'The backup bucket\'s secret key (backup target s3). Read by the server\'s backup job, never by the site.' },
+  { key: 'mail.smtp.password', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
+    reload: 'restart', hostRendered: true, tier: 'secret', env: ['MAIL_SMTP_PASSWORD'], packages: ['stream-api'],
+    label: 'Mail server password', description: 'The mail server\'s password (with its user name). Read by the server when it renders the sign-in service\'s config, never by the site.' },
+  { key: 'signin.google.clientSecret', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
+    reload: 'restart', hostRendered: true, tier: 'secret', env: ['SIGNIN_GOOGLE_CLIENT_SECRET'], packages: ['stream-api'],
+    label: 'Google client secret', description: 'The Google client\'s secret. Read by the server when it renders the sign-in service\'s config, never by the site.' },
+  { key: 'signin.discord.clientSecret', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
+    reload: 'restart', hostRendered: true, tier: 'secret', env: ['SIGNIN_DISCORD_CLIENT_SECRET'], packages: ['stream-api'],
+    label: 'Discord client secret', description: 'The Discord application\'s client secret. Read by the server when it renders the sign-in service\'s config, never by the site.' },
+  { key: 'signin.twitch.clientSecret', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
+    reload: 'restart', hostRendered: true, tier: 'secret', env: ['SIGNIN_TWITCH_CLIENT_SECRET'], packages: ['stream-api'],
+    label: 'Twitch client secret', description: 'The Twitch application\'s client secret. Read by the server when it renders the sign-in service\'s config, never by the site.' },
+  { key: 'signin.oidc.clientSecret', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
+    reload: 'restart', hostRendered: true, tier: 'secret', env: ['SIGNIN_OIDC_CLIENT_SECRET'], packages: ['stream-api'],
+    label: 'OpenID client secret', description: 'The OpenID client\'s secret. Read by the server when it renders the sign-in service\'s config, never by the site.' },
   { key: 'matrix.oauth.clientSecret', kind: 'secret', default: null, scope: 'server', module: 'core', secret: true,
     reload: 'live', tier: 'secret', env: ['MATRIX_OAUTH_CLIENT_SECRET', 'MAS_CLIENT_SECRET'], packages: ['web'],
     label: 'Matrix sign-in client secret', description: 'Pairs with the sign-in client id: code exchange, token refresh, revocation.' },
@@ -947,10 +1108,18 @@ export function parseInstanceValue(entry, raw) {
     }
     return { ok: true, value: v };
   }
+  if (kind === 'localpart') {
+    // A Matrix user name, kept to the characters the homeserver's config and its regex take as they are.
+    if (!/^[a-z0-9._=-]{1,64}$/.test(s)) return { ok: false, error: 'expected a Matrix user name: 1-64 of a-z 0-9 . _ = -' };
+    return { ok: true, value: s };
+  }
   if (kind === 'localpartTemplate') {
-    const parts = s.split('{{.}}');
+    // ONE placeholder, and it says which bridge: {{.}} is mautrix-discord's numeric Discord id,
+    // {{.Username}} Out Of Your Element's cleaned Discord name (web/app/lib/discordSender.ts).
+    const actions = s.match(/\{\{.*?\}\}/g) || [];
+    const parts = actions.length === 1 && ['{{.}}', '{{.Username}}'].includes(actions[0]) ? s.split(actions[0]) : [];
     if (parts.length !== 2 || !(parts[0] + parts[1]) || !parts.every((p) => /^[a-z0-9._=/+-]*$/.test(p))) {
-      return { ok: false, error: 'expected a Matrix localpart with exactly one {{.}}, e.g. discord_{{.}}' };
+      return { ok: false, error: 'expected a Matrix localpart with exactly one {{.}} or {{.Username}}, e.g. discord_{{.}} or _ooye_{{.Username}}' };
     }
     return { ok: true, value: s };
   }
@@ -1068,6 +1237,60 @@ export function messageVisibleSql(alias) {
  * host's target reader and the check the box runs before every backup (one rule, three callers).
  * Self-contained except for parseInstanceValue, which the generator emits beside it.
  */
+/**
+ * The sign-in service's provider id for a sign-in slot (ADR 0154). A slot whose issuer is fixed
+ * (Google, Discord, Twitch) has the fixed `upstreamId` on its switch. The OpenID slot's issuer is the
+ * owner's to change, and the sign-in service keys every person's link by the id: under one fixed id, a
+ * new server would inherit the old server's links, and its user `sub` 1 would sign in as the old
+ * server's user `sub` 1. So that slot's id is DERIVED from its normalised issuer (https, host lower
+ * case, no trailing /): one server, one id; another server, another id and no links. null = no usable
+ * issuer. SHA-256 is written out here because the site's pages run this copy too (no node:crypto there).
+ */
+export function signinProviderId(slot, issuer) {
+  if (slot !== 'oidc') {
+    const sw = INSTANCE_KEYS.find((e) => e.key === `signin.${slot}.enabled`);
+    return sw && typeof sw.upstreamId === 'string' ? sw.upstreamId : null;
+  }
+  let u;
+  try { u = new URL(String(issuer ?? '').trim()); } catch { return null; }
+  if (u.protocol !== 'https:' || !u.host) return null;
+  const text = `blackbranch-signin-oidc\n${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, '')}`;
+  // SHA-256 (FIPS 180-4); its constants are the fractional parts of the first primes' roots.
+  const primes = [];
+  for (let n = 2; primes.length < 64; n++) if (primes.every((p) => n % p)) primes.push(n);
+  const frac = (x) => ((x - Math.floor(x)) * 2 ** 32) >>> 0;
+  const K = primes.map((p) => frac(Math.cbrt(p)));
+  let H = primes.slice(0, 8).map((p) => frac(Math.sqrt(p)));
+  const msg = new TextEncoder().encode(text);
+  const total = Math.ceil((msg.length + 9) / 64) * 64;
+  const buf = new Uint8Array(total);
+  buf.set(msg); buf[msg.length] = 0x80;
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(total - 8, Math.floor((msg.length * 8) / 2 ** 32)); dv.setUint32(total - 4, (msg.length * 8) >>> 0);
+  const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+  const W = new Uint32Array(64);
+  for (let o = 0; o < total; o += 64) {
+    for (let i = 0; i < 16; i++) W[i] = dv.getUint32(o + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(W[i - 15], 7) ^ rotr(W[i - 15], 18) ^ (W[i - 15] >>> 3);
+      const s1 = rotr(W[i - 2], 17) ^ rotr(W[i - 2], 19) ^ (W[i - 2] >>> 10);
+      W[i] = (W[i - 16] + s0 + W[i - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + W[i]) >>> 0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    H = [a, b, c, d, e, f, g, h].map((v, i) => (v + H[i]) >>> 0);
+  }
+  // The digest's first 128 bits as a ULID (26 Crockford base-32 characters; the first is 0-7).
+  let n = (BigInt(H[0]) << 96n) | (BigInt(H[1]) << 64n) | (BigInt(H[2]) << 32n) | BigInt(H[3]);
+  let id = '';
+  for (let i = 0; i < 26; i++) { id = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'[Number(n & 31n)] + id; n >>= 5n; }
+  return id;
+}
+
 export function checkBackupTarget(target, repository) {
   const repo = typeof repository === 'string' ? repository.trim() : '';
   if (target === 'local' || target === null || target === undefined || target === '') {
@@ -1201,9 +1424,27 @@ export async function runProviderCheck(test, get, fetchImpl) {
       if (want && String(want) !== id) return { ok: false, code: 'mismatch', id };
       return { ok: true, code: 'accepted', id };
     };
+    // Stripe's customer portal: billingPortal.sessions.create needs a DEFAULT configuration, which
+    // exists only once the account's portal settings were saved (per mode, live or test). Without
+    // it every subscriber's "Manage subscription" — the one in-site way to cancel — is refused.
+    const stripePortal = async (key) => {
+      const res = await fetchImpl('https://api.stripe.com/v1/billing_portal/configurations?is_default=true&limit=1', {
+        headers: { authorization: `Bearer ${key}` }, signal: timeout() });
+      if (!res.ok) return verdict(res);
+      const list = (await json(res))?.data;
+      return Array.isArray(list) && list.length > 0 ? null : { ok: false, code: 'no_portal' };
+    };
+    if (test === 'stripe-portal') {
+      const miss = need('stripe.secretKey'); if (miss) return miss;
+      const key = String(get('stripe.secretKey'));
+      const mode = /^(sk|rk)_live_/.test(key) ? 'live' : 'test';
+      const r = await stripePortal(key);
+      return r ? { ...r, mode } : { ok: true, code: 'accepted', mode };
+    }
     if (test === 'stripe') {
       // Read-only: the account, then one page of each object type the site reads. A restricted key
       // without one of those Read permissions answers 403 for that type alone — listed, never text.
+      // Then the customer portal (stripePortal above).
       const miss = need('stripe.secretKey'); if (miss) return miss;
       const key = String(get('stripe.secretKey'));
       const mode = /^(sk|rk)_live_/.test(key) ? 'live' : 'test';
@@ -1217,7 +1458,11 @@ export async function runProviderCheck(test, get, fetchImpl) {
         if (why === 'limited' || res.status === 403) { denied.push(name); continue; }
         return { ok: false, code: res.status === 401 || why === 'rejected' ? 'rejected' : 'http_error', status: res.status };
       }
-      return denied.length ? { ok: false, code: 'denied', denied, mode } : { ok: true, code: 'accepted', mode };
+      const portal = await stripePortal(key);
+      if (portal && portal.code === 'limited') denied.push('billing_portal');
+      if (denied.length) return { ok: false, code: 'denied', denied, mode };
+      if (portal && !portal.ok) return { ...portal, mode };
+      return { ok: true, code: 'accepted', mode };
     }
     if (test === 'stripe-webhook') {
       // The destination for THIS site's address exists, is enabled and sends every handled event.
@@ -1351,8 +1596,8 @@ export async function runProviderCheck(test, get, fetchImpl) {
 export function normalizeCheckResult(r) {
   const OK = ['accepted', 'connected', 'limited'];
   const BAD = ['rejected', 'http_error', 'not_set', 'timeout', 'request_failed', 'no_token', 'not_connected', 'unreachable', 'no_check', 'unanswered', 'unreadable',
-    'not_found', 'mismatch', 'denied', 'disabled', 'missing_events', 'wrong_target', 'bad_format', 'metadata_bad'];
-  const READS = ['account', 'customers', 'subscriptions', 'invoices', 'payment_intents', 'checkout_sessions'];
+    'not_found', 'mismatch', 'denied', 'disabled', 'missing_events', 'wrong_target', 'bad_format', 'metadata_bad', 'no_portal'];
+  const READS = ['account', 'customers', 'subscriptions', 'invoices', 'payment_intents', 'checkout_sessions', 'billing_portal'];
   if (!r || typeof r !== 'object' || ![...OK, ...BAD].includes(r.code)) return { ok: false, code: 'unreadable' };
   const out = { ok: OK.includes(r.code), code: r.code };
   if (Number.isInteger(r.status) && r.status >= 100 && r.status <= 599) out.status = r.status;
@@ -1395,6 +1640,7 @@ export function describeCheck(r) {
     case 'wrong_target': return 'the webhook points at another address, not this site';
     case 'bad_format': return 'not in the provider\'s format';
     case 'metadata_bad': return 'the account was found, but this site\'s sign-in description did not answer as expected';
+    case 'no_portal': return 'the customer portal was never saved in Stripe — Settings → Billing → Customer portal → Save, or subscribers cannot manage or cancel';
     default: return 'unreadable result';
   }
 }

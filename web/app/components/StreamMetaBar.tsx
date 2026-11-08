@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { dispatchClaimable } from "@/app/lib/claimableEvent";
-import { CurrencyDollar, Gift, Bell, SealCheck } from "@phosphor-icons/react/dist/ssr";
+import { CurrencyDollar, Gift, Bell, SealCheck, Check } from "@phosphor-icons/react/dist/ssr";
 import PlatformIcon, { PLATFORM_COLORS } from "./PlatformIcon";
 import PointsIcon from "./PointsIcon";
 import { initials, formatCount, type CommunityStatus } from "@/app/lib/streamView";
@@ -11,7 +11,10 @@ import { type Vod } from "@/app/lib/vods";
 import { Bar } from "@/app/components/chrome";
 import { siteName } from "@/app/lib/siteName";
 import { usePlayerFallbacks } from "@/app/lib/plugins/player";
+import { CommunityChooser } from "./CommunityChooser";
 import type { PlayerState } from "@/app/lib/playerSource";
+import { useImgFallback, checkImgFailed } from "@/app/lib/useImgFallback";
+import { avatarStyle } from "@/app/lib/avatarSize";
 
 /** Three 30px circles in flow, 6px gaps (the actions row's own `gap-1.5`); a
  *  hovered or focused one grows IN FLOW to its labelled pill, the others
@@ -42,6 +45,8 @@ const moneyClip =
  *  CONTENT box at zero, never the padding) and put those 6px back into every
  *  resting circle; clipped, it contributes nothing until the label unrolls. */
 const moneyLabel = "block pl-1.5";
+// The bar's picture (streamer, featured channel, playlist): the avatar scale's md step.
+const BAR_PIC = avatarStyle("md");
 
 /** The YouTube glyph on the featured "Visit channel" circle — unchanged path data, just no longer inline. */
 function YoutubeGlyph() {
@@ -58,7 +63,11 @@ type StreamMetaBarProps = {
   /** Out of the flow (mobile compact). Never the keyboard — see barVisibility.ts. */
   hidden: boolean;
   live: boolean;
+  /** The community entry this viewer watches (their pick, else the featured one). */
   community: CommunityStatus | null;
+  /** Every community entry live now (featured first): the chooser shows with more than one. */
+  communities: readonly CommunityStatus[];
+  onPickCommunity: (key: string) => void;
   tab: PlayerState["tab"];
   streamerAvatar: string | null;
   /** The streamer's display name (instance key streamer.displayName, from the server render);
@@ -70,7 +79,9 @@ type StreamMetaBarProps = {
   selectedVod: Vod | null;
   followerCount: number | null;
   liveViewers: number | null;
-  subscribed: boolean;
+  /** What the Subscribe button says (subscribeButton): Subscribe, Gift, or Subscribed (a subscriber
+   *  where gifts cannot be sold — it opens their subscription). */
+  subscribeLabel: "subscribe" | "gift" | "subscribed";
   openSupport: (section: "donation" | "subscribe", fallbackUrl: string) => void;
   /** null = this install has nowhere to donate (no provider, no outside link): no button. */
   donateUrl: string | null;
@@ -97,8 +108,8 @@ type StreamMetaBarProps = {
 // inkOn() picking a readable label: --color-on-accent is a fixed near-black, so
 // a viewer choosing a dark fill would otherwise get an unreadable button.
 export function StreamMetaBar({
-  overlay, hidden, live, community, tab, streamerAvatar, streamerName, pfpFailed, setPfpFailed, streamTitle,
-  selectedVod, followerCount, liveViewers, subscribed, openSupport, donateUrl, subscribeUrl,
+  overlay, hidden, live, community, communities, onPickCommunity, tab, streamerAvatar, streamerName, pfpFailed, setPfpFailed, streamTitle,
+  selectedVod, followerCount, liveViewers, subscribeLabel, openSupport, donateUrl, subscribeUrl,
 }: StreamMetaBarProps) {
   const router = useRouter();
 
@@ -112,8 +123,13 @@ export function StreamMetaBar({
   const featured = onCommunity && community ? community : null;
   // The fallback playlist: Community is selected and nobody is live.
   const playlist = onCommunity && !community;
+  // The featured streamer's picture comes from another platform: a failed one shows their initials.
+  const { ok: featuredPicOk, ref: featuredPicRef, onError: onFeaturedPicError } = useImgFallback(featured?.avatar_url);
 
-  const homeTitle = streamerName ? `${streamerName} · ${siteName()}` : siteName();
+  // A streamer's own site usually carries their name: then the title says it once.
+  const site = siteName();
+  const sameName = streamerName.trim().toLowerCase() === site.trim().toLowerCase();
+  const homeTitle = streamerName.trim() && !sameName ? `${streamerName} · ${site}` : site;
   const title =
     fallback ? fallback.title
     : tab === "replay" ? (selectedVod?.title ?? homeTitle)
@@ -132,21 +148,21 @@ export function StreamMetaBar({
       center={
         <div className="flex items-center gap-3 min-w-0 w-full h-full">
           {featured ? (
-            featured.avatar_url ? (
-              <img src={featured.avatar_url} alt={featured.display_name} className="w-8 h-8 rounded-full shrink-0 object-cover" />
+            featured.avatar_url && featuredPicOk ? (
+              <img src={featured.avatar_url} alt={featured.display_name} className="avatar" style={BAR_PIC} ref={featuredPicRef} onError={onFeaturedPicError} />
             ) : (
-              <div className="w-8 h-8 rounded-full bg-red-900/60 flex items-center justify-center text-xs font-bold shrink-0 select-none text-red-200">
+              <div className="avatar bg-red-900/60 flex items-center justify-center text-xs font-bold select-none text-red-200" style={BAR_PIC}>
                 {initials(featured.display_name)}
               </div>
             )
           ) : playlist ? (
-            <div className="w-8 h-8 rounded-full bg-surface-2 flex items-center justify-center shrink-0 text-body-dim" aria-hidden="true">
+            <div className="avatar bg-surface-2 flex items-center justify-center text-body-dim" style={BAR_PIC} aria-hidden="true">
               <PlatformIcon platform="community" size={16} />
             </div>
           ) : streamerAvatar && !pfpFailed ? (
-            <img src={streamerAvatar} alt={streamerName} className="w-8 h-8 rounded-full shrink-0 object-cover" onError={() => setPfpFailed(true)} />
+            <img src={streamerAvatar} alt={streamerName} className="avatar" style={BAR_PIC} ref={(img) => checkImgFailed(img, () => setPfpFailed(true))} onError={() => setPfpFailed(true)} />
           ) : (
-            <div className="w-8 h-8 rounded-full bg-blue-700 flex items-center justify-center text-xs font-bold shrink-0 select-none">
+            <div className="avatar bg-blue-700 flex items-center justify-center text-xs font-bold select-none" style={BAR_PIC}>
               {initials(streamerName || siteName())}
             </div>
           )}
@@ -175,7 +191,7 @@ export function StreamMetaBar({
                 <>
                   <span className="font-semibold text-body mr-1.5">{streamerName || siteName()}</span>
                   <SealCheck size={13} weight="fill" color="#7dd9a8" className="inline-block align-[-2px] mr-1.5" />
-                  <span className="mr-1.5">· {followerCount !== null ? formatCount(followerCount) : "—"} followers</span>
+                  {followerCount !== null && <span className="mr-1.5">· {formatCount(followerCount)} followers</span>}
                   {live && liveViewers !== null && <span className="mr-1.5">· {formatCount(liveViewers)} watching</span>}
                 </>
               )}
@@ -188,6 +204,7 @@ export function StreamMetaBar({
               shift left, and the title block above yields the space by
               truncating further. Phones have no hover: circles only, which is
               the compact form. */}
+          {featured && <CommunityChooser communities={communities} shownKey={featured.key} onPick={onPickCommunity} />}
           <div className="flex items-center gap-1.5 shrink-0 h-[28px]">
             {featured ? (
               // A featured entry from Twitch alone has no YouTube channel to visit: its Twitch one.
@@ -236,15 +253,15 @@ export function StreamMetaBar({
                 {subscribeUrl !== null && <button
                   type="button"
                   onClick={() => openSupport("subscribe", subscribeUrl)}
-                  title={subscribed ? "Gift Supporter to someone" : "Become a Supporter"}
-                  aria-label={subscribed ? "Gift" : "Subscribe"}
+                  title={subscribeLabel === "gift" ? "Gift Supporter to someone" : subscribeLabel === "subscribed" ? "Your Supporter subscription" : "Become a Supporter"}
+                  aria-label={subscribeLabel === "gift" ? "Gift" : subscribeLabel === "subscribed" ? "Subscribed" : "Subscribe"}
                   className={moneyCircle("px-[7.5px] hover:brightness-110")}
                   // The LABEL tracks subscription; the COLOUR does not (a hue
                   // readout the viewer couldn't theme, in Twitch's brand purple).
                   style={{ backgroundColor: "var(--gift-color)", color: "var(--gift-ink, var(--color-on-accent))" }}
                 >
-                  {subscribed ? <Gift size={13} weight="bold" /> : <Bell size={13} weight="bold" />}
-                  <span className={moneyClip}><span className={moneyLabel}>{subscribed ? "Gift" : "Subscribe"}</span></span>
+                  {subscribeLabel === "gift" ? <Gift size={13} weight="bold" /> : subscribeLabel === "subscribed" ? <Check size={13} weight="bold" /> : <Bell size={13} weight="bold" />}
+                  <span className={moneyClip}><span className={moneyLabel}>{subscribeLabel === "gift" ? "Gift" : subscribeLabel === "subscribed" ? "Subscribed" : "Subscribe"}</span></span>
                 </button>}
               </>
             )}

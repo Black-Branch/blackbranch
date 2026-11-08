@@ -33,7 +33,8 @@ function filesMatching(dir: string, pattern: RegExp): string[] {
 test("the channel header renders a bell that opens the notification menu", () => {
   const src = read(TIMELINE);
   assert.match(src, /NotificationMenu/, "Timeline must import and render the shared menu");
-  assert.match(src, /aria-label="Notification settings"/,
+  // A BarButton: its `label` is both aria-label and title.
+  assert.match(src, /<BarButton\s+size="touch"\s+ref=\{bellRef\}[^]*?label="Notification settings"/,
     "the bell needs an accessible name — an icon-only control is nameless otherwise");
   assert.match(src, /BellSimple|Bell\b/, "the bell icon must be rendered");
 });

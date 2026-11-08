@@ -58,6 +58,36 @@ export async function masUserByName(admin: MasAdmin, token: string, username: st
   } catch { return { ok: false, code: "unreachable" }; }
 }
 
+const DEVICE_SCOPE = "urn:matrix:org.matrix.msc2967.client:device:";
+
+/**
+ * Is this account's device still signed in at the account server? Asked after a refused refresh,
+ * the one question that decides whether the browser may wipe its crypto store:
+ *   gone    — the account is gone or deactivated, or no ACTIVE session holds the device scope;
+ *   alive   — an active session still holds it (the refusal was something else — our own client
+ *             misconfiguration, a lost rotation race);
+ *   unknown — the admin API could not be asked (no `urn:mas:admin` grant, unreachable, garbage).
+ */
+export async function masDeviceStatus(admin: MasAdmin, username: string, deviceId: string): Promise<"gone" | "alive" | "unknown"> {
+  const t = await admin.token(AbortSignal.timeout(8_000));
+  if (!t.ok) return "unknown";
+  const found = await masUserByName(admin, t.token, username);
+  if (!found.ok) return "unknown";
+  if (!found.user || found.user.deactivated) return "gone";
+  try {
+    const q = new URLSearchParams({
+      "filter[user]": found.user.id, "filter[status]": "active", "filter[scope]": `${DEVICE_SCOPE}${deviceId}`, "page[first]": "1",
+    });
+    const r = await admin.fetch(`${admin.base}/oauth2-sessions?${q}`, {
+      headers: { Authorization: `Bearer ${t.token}` }, signal: AbortSignal.timeout(8_000),
+    });
+    if (!r.ok) return "unknown";
+    const j = (await r.json().catch(() => null)) as { data?: unknown } | null;
+    if (!Array.isArray(j?.data)) return "unknown";
+    return j.data.length > 0 ? "alive" : "gone";
+  } catch { return "unknown"; }
+}
+
 /** MAS's own words for a refusal (its JSON:API `errors`), one line, bounded. */
 async function reasonOf(r: Response): Promise<string> {
   const j = (await r.json().catch(() => null)) as { errors?: { title?: unknown }[] } | null;

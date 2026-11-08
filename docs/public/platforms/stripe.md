@@ -67,7 +67,17 @@ This step fills:
 
 You can skip this step and come back to it from the Admin Panel.
 
-## 4. Behind Cloudflare: let Stripe through (optional)
+## 4. The customer portal (optional)
+
+Subscribers manage and cancel their card subscription in Stripe's customer portal, which Stripe opens only once its settings were saved. Settings → Billing → Customer portal: choose what subscribers may do (at least cancel), then press Save. Do it in the same mode as the key (live, or test for test keys). Until then "Manage subscription" answers that the site has not finished setting it up. Check on the key above says when the portal was never saved.
+
+Links:
+
+- [Stripe: customer portal](https://dashboard.stripe.com/settings/billing/portal)
+
+You can skip this step and come back to it from the Admin Panel.
+
+## 5. Behind Cloudflare: let Stripe through (optional)
 
 If your site is behind Cloudflare (the tunnel is) and Bot Fight Mode is on, it blocks Stripe's webhooks. On the Free plan no rule can make an exception to Bot Fight Mode, so turn Bot Fight Mode off: Cloudflare dashboard → your domain → Security → Settings, filter by Bot traffic. On Pro or higher, use Super Bot Fight Mode instead and add a custom rule: when the URI path equals the path below, action Skip, and choose Super Bot Fight Mode. This site cannot check either without a Cloudflare token; the doctor reminds you.
 
@@ -84,7 +94,7 @@ Copy into the provider's page:
 
 You can skip this step and come back to it from the Admin Panel.
 
-## 5. Before you take real money: one test purchase of each kind (optional)
+## 6. Before you take real money: one test purchase of each kind (optional)
 
 The Checks above only read; nothing here writes to Stripe until a viewer starts a payment. So prove the Write permissions once, with test keys (rk_test_, pk_test_) and a webhook destination made in test mode: with Stripe's test card, subscribe, tip, buy points and gift a subscription to a second account, then open the billing portal from your account. If one of them fails, Stripe's Dashboard → Developers → Logs shows the refused request and the permission it lacked: add that one permission to the key, never switch to the full secret key. Then make the live key and a live webhook destination the same way and paste those instead.
 

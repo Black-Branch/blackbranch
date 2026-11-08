@@ -2,6 +2,7 @@ import { getStripe, stripeConfigured, publicOrigin } from "@/app/lib/stripe";
 import { requireUser } from "@/app/lib/authGuard";
 import { supportBranding, SAVED_PM_OPTIONS, CUSTOMER_UPDATE } from "@/app/lib/billingServer";
 import { ensureStripeCustomerOrBusy } from "@/app/lib/stripeCustomer";
+import { openSubscriptionCheckout } from "@/app/lib/subscriptionCheckout";
 import { TIERS, type TierSlug } from "@/app/lib/tiers";
 import { supporterPrice } from "@/app/lib/supporterPrice";
 import { NextRequest } from "next/server";
@@ -55,30 +56,6 @@ export async function POST(req: NextRequest) {
   const customerId = await ensureStripeCustomerOrBusy(matrixId);
   if (typeof customerId !== "string") return customerId;
 
-  // Stripe happily lets one customer hold several concurrent subscriptions, and
-  // site.subscriptions is keyed on matrix_id — ONE row per user. So a second
-  // checkout silently overwrites the first: the user is billed twice, only the
-  // newer sub is tracked, and canceling it clears the row while the orphaned
-  // first subscription keeps charging with nothing pointing at it.
-  //
-  // Ask Stripe (not our mirror) so a sub that exists upstream but hasn't been
-  // mirrored yet — the webhook is asynchronous — still blocks a duplicate.
-  const existing = await stripe.subscriptions
-    .list({ customer: customerId, status: "all", limit: 100 })
-    .catch(() => null);
-  if (!existing) return new Response("Could not verify subscription state", { status: 503 });
-  const live = existing.data.find((s) =>
-    ["active", "trialing", "past_due", "unpaid", "incomplete"].includes(s.status)
-  );
-  if (live) {
-    // 409 so the client can route to the billing portal to change or cancel,
-    // rather than stacking a second subscription.
-    return Response.json(
-      { error: "already_subscribed", status: live.status, manage: "/billing" },
-      { status: 409 }
-    );
-  }
-
   // A gift still running: billing starts when it ends, so the viewer never pays for days the gift
   // already covers (the forward twin of giftServer.ts grantGift, which starts a gift to a paying
   // subscriber after the paid period). A trialing subscription entitles like an active one
@@ -93,7 +70,12 @@ export async function POST(req: NextRequest) {
   if (!gift) return new Response("Could not verify gift state", { status: 503 });
   const trialEnd = giftTrialEnd(gift.rows[0]?.gift_expires ?? null);
 
-  const checkout = await stripe.checkout.sessions.create({
+  // Stripe happily lets one customer hold several concurrent subscriptions, and a viewer can hold
+  // several customers: a second subscription bills the viewer twice. The duplicate check (every
+  // customer of the viewer, `paused` included) and the session's creation run under the viewer's
+  // lock, and an older open subscription session is expired first, so two tabs or a double click
+  // can never both be paid (subscriptionCheckout.ts).
+  const opened = await openSubscriptionCheckout(matrixId, customerId, () => stripe.checkout.sessions.create({
     ui_mode: "embedded_page",
     // "if_required": card payments stay in the modal, but redirect-based methods
     // (Cash App Pay, Amazon Pay) are only OFFERED when Stripe knows it can send
@@ -120,7 +102,15 @@ export async function POST(req: NextRequest) {
     customer_update: CUSTOMER_UPDATE,
     saved_payment_method_options: SAVED_PM_OPTIONS,
     branding_settings: supportBranding("#f59e0b"), // amber-500
+  })).catch((e: unknown) => {
+    console.error("[billing] subscription checkout:", e instanceof Error ? e.message : e);
+    return null;
   });
+  if (!opened) return new Response("Could not start checkout — try again in a moment.", { status: 503 });
+  if (opened.kind === "busy") return new Response("Checkout is busy — try again in a few seconds.", { status: 503, headers: { "Retry-After": "5" } });
+  // 409 so the client can route to the billing portal to change or cancel,
+  // rather than stacking a second subscription.
+  if (opened.kind === "live") return Response.json({ error: "already_subscribed", status: opened.status, manage: "/billing" }, { status: 409 });
 
-  return Response.json({ clientSecret: checkout.client_secret });
+  return Response.json({ clientSecret: opened.session.client_secret });
 }

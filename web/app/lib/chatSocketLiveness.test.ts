@@ -205,6 +205,49 @@ test("the device-health report counts a silent-socket replacement as a reconnect
   assert.equal(socketHealth.reconnects, before + 1);
 });
 
+// Device health, 11-01 and 11-03 stream reads: an Android Firefox phone reported 118 and 94
+// "reconnects" while Cloudflare saw its socket connect 4 and 3 times — every attempt that never
+// opened counted as a reconnect. `opens` counts the connections that really opened.
+test("the device-health report counts failed attempts as reconnects and only real connections as opens", (t) => {
+  const s = attach();
+  t.after(() => s.off());
+  const r0 = socketHealth.reconnects;
+  const o0 = socketHealth.opens;
+  // the first attempt and three retries never open (no network to the socket's host)
+  latest().drop();
+  for (const ms of [1_000, 2_000, 4_000]) { t.mock.timers.tick(ms); latest().drop(); }
+  assert.equal(socketHealth.reconnects, r0 + 4, "each failed attempt schedules a retry");
+  assert.equal(socketHealth.opens, o0, "nothing opened");
+  t.mock.timers.tick(8_000);
+  latest().open();
+  assert.equal(socketHealth.opens, o0 + 1, "the connection that got through");
+});
+
+test("restart: a drop of an open socket and its reconnect — two opens, one reconnect", (t) => {
+  const s = attach();
+  t.after(() => s.off());
+  const r0 = socketHealth.reconnects;
+  const o0 = socketHealth.opens;
+  latest().open();
+  latest().frame({ type: "hello" });
+  latest().drop();
+  t.mock.timers.tick(1_000);
+  latest().open();
+  assert.equal(socketHealth.opens, o0 + 2);
+  assert.equal(socketHealth.reconnects, r0 + 1);
+});
+
+test("retry: the synthetic onOpen for a late subscriber is not counted as a connection", (t) => {
+  const a = attach();
+  t.after(() => a.off());
+  latest().open();
+  const o0 = socketHealth.opens;
+  const b = attach();
+  t.after(() => b.off());
+  assert.equal(b.opens, 1, "the late subscriber hears the socket is up");
+  assert.equal(socketHealth.opens, o0, "but no new connection was made");
+});
+
 test("STALE_MS outlasts the server's slowest guaranteed frame (timer heartbeat: 15 s ticks, every 4th always sent)", () => {
   const timer = readFileSync(new URL("../../../stream-api/timer.js", import.meta.url), "utf8");
   const tick = Number(/function startHeartbeat\(ms = (\d+)\)/.exec(timer)?.[1]);

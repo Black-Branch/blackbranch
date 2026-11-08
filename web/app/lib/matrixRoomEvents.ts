@@ -26,12 +26,16 @@ export function subscribeRoomRefresh(
 
   room.on(RoomEvent.Timeline, refresh);
   room.on(RoomEvent.Redaction, refresh);
+  // Our own echo moving sending → sent / not sent / cancelled changes no timeline event, only
+  // the echo's status (and a cancel removes it) — every panel shows that state on its rows.
+  room.on(RoomEvent.LocalEchoUpdated, refresh);
   if (opts.members) room.on(RoomStateEvent.Members, refresh);
   client?.on(MatrixEventEvent.Decrypted, onDecrypted);
 
   return () => {
     room.off(RoomEvent.Timeline, refresh);
     room.off(RoomEvent.Redaction, refresh);
+    room.off(RoomEvent.LocalEchoUpdated, refresh);
     if (opts.members) room.off(RoomStateEvent.Members, refresh);
     client?.off(MatrixEventEvent.Decrypted, onDecrypted);
   };

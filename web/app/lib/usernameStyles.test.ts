@@ -51,8 +51,9 @@ for (const font of [null, ...ids("font")]) {
 test("un-anim is applied to exactly the sets that render an animation", () => {
   assert.ok(EVERY_SET.length > 100, "catalog sweep should be non-trivial");
   for (const eq of EVERY_SET) {
-    const css = usernameStyleCSS(eq, "#7dd9a8");
-    const animates = typeof css.animation === "string" && css.animation.length > 0;
+    const css = usernameStyleCSS(eq, "#7dd9a8", "casey");
+    // Pulse animates its glow LAYERS (globals.css .un-pulse), which the element carries the name for.
+    const animates = (typeof css.animation === "string" && css.animation.length > 0) || "--un-text" in css;
     const tagged = /\bun-anim\b/.test(usernameStyleAnimClass(eq));
     assert.equal(
       tagged, animates,

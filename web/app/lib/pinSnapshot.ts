@@ -10,6 +10,7 @@
 // Shared by the mod pin (api/chat/pin) and the crowd auto-pin (api/chat/vote): two
 // copies of one snapshot rule is how one of them stays broken.
 
+import { formatPrice, SITE_CURRENCY } from "./moneyFormat.ts";
 import { eventCardName } from "./eventCardName.ts";
 
 /** One row of the pin route's source query. Platform lines carry no event columns. */
@@ -31,8 +32,8 @@ const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 function money(cents: unknown, currency: unknown): string {
   const c = num(cents);
   if (c <= 0) return "";
-  const cur = text(currency).toUpperCase() || "USD";
-  return cur === "USD" ? `$${(c / 100).toFixed(2)}` : `${(c / 100).toFixed(2)} ${cur}`;
+  const cur = text(currency).toLowerCase() || SITE_CURRENCY;
+  return formatPrice(c, cur, "minor");
 }
 
 /** A line of text for a card that carries no message of its own. */

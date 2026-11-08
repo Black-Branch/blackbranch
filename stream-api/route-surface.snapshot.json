@@ -87,6 +87,7 @@
     "POST /chat/settings [requireInternal]",
     "POST /chat/spotlight [requireInternal]",
     "POST /chat/vote [requireInternal]",
+    "POST /config/reload [requireSecret]",
     "POST /config/report [requireSecret]",
     "POST /config/test/:key [requireSecret]",
     "POST /embedding [requireInternal]",
@@ -114,6 +115,7 @@
     "POST /speak [requireInternal]",
     "POST /sponsors/links-changed [requireInternal]",
     "POST /stream/end [requireInternal]",
+    "POST /stream/platforms [requireInternal]",
     "POST /stream/start [requireInternal]",
     "POST /support-bar/reset [requireInternal]",
     "POST /support/reconcile [requireSecret]",
@@ -131,7 +133,7 @@
     "PUT /memory/opt-out [requireInternal]"
   ],
   "shadowPairs": [],
-  "modules_comment": "Routes per module. `routes` above is the everything-on surface of an install with the site plugin (127). A switched-off module's routes are not mounted: radio off = 120, obs off = 122; lights and meter own no routes. `owner` lists the 35 routes that come from stream-api/owner/ (the radio and the bot's /bot/* config and data surface); a tree without that folder has the other 92. freshInstallRoutes is a fresh install without the site plugin: the 92 product routes minus the obs module's 5 rig routes (obs is off by default) = 87.",
+  "modules_comment": "Routes per module. `routes` above is the everything-on surface of an install with the site plugin (129). A switched-off module's routes are not mounted: radio off = 122, obs off = 124; lights and meter own no routes. `owner` lists the 35 routes that come from stream-api/owner/ (the radio and the bot's /bot/* config and data surface); a tree without that folder has the other 94. freshInstallRoutes is a fresh install without the site plugin: the 94 product routes minus the obs module's 5 rig routes (obs is off by default) = 89.",
   "modules": {
     "radio": [
       "GET /radio/admin/schedule [requireInternal]",
@@ -187,5 +189,5 @@
     "POST /bot/tuning [requireInternal]",
     "POST /radio/admin/dj/generate [requireInternal]"
   ],
-  "freshInstallRoutes": 87
+  "freshInstallRoutes": 89
 }

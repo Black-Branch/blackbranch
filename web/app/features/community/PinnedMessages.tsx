@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { MatrixEvent } from "matrix-js-sdk";
-import type { MatrixClient, Room } from "matrix-js-sdk";
+import type { MatrixClient, MatrixEvent, Room } from "matrix-js-sdk";
+import { fetchEventOnce } from "@/app/lib/replyTarget";
 import { getMemberDisplayName } from "@/app/lib/matrixDisplay";
 import { senderLabel } from "@/app/lib/discordSender";
 import { formatDiscordTime, snippet } from "@/app/lib/textFormat";
 import { stripReplyFallback } from "@/app/lib/stripReplyFallback";
 import { mediaKindLabel } from "@/app/lib/mediaKind";
+import { BarButton } from "@/app/components/chrome";
 
 // Discord's pins popover for a Matrix room: opened from the pin button in
 // the room's top bar (Timeline's header), a panel over the timeline listing
@@ -73,17 +74,11 @@ export function PinnedMessages({
     for (const id of ids) {
       if (room.findEventById(id) || fetched.has(id) || inFlightRef.current.has(id)) continue;
       inFlightRef.current.add(id);
-      client.fetchRoomEvent(room.roomId, id)
-        .then(async (raw) => {
-          const ev = new MatrixEvent(raw);
-          await client.decryptEventIfNeeded(ev).catch(() => {});
-          return ev;
-        })
-        .catch(() => null)
-        .then((ev) => {
-          inFlightRef.current.delete(id);
-          setFetched((m) => new Map(m).set(id, ev));
-        });
+      // Shared with the reply quotes: one request per id however many ask.
+      void fetchEventOnce(client, room, id).then((got) => {
+        inFlightRef.current.delete(id);
+        setFetched((m) => new Map(m).set(id, got === "unavailable" ? null : got));
+      });
     }
   }, [open, client, room, ids, fetched]);
 
@@ -111,11 +106,11 @@ export function PinnedMessages({
 
   return (
     <div className="absolute top-1 right-2 left-2 sm:left-auto sm:w-96 max-h-[60%] overflow-y-auto z-20 rounded-lg bg-raised border border-edge-strong shadow-lg">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-edge">
-            <span className="text-xs font-medium text-body">Pinned messages</span>
-            <button type="button" onClick={() => { setNotice(null); onClose(); }} aria-label="Close pinned messages" className="ml-auto text-muted hover:text-strong text-xs">
-              ✕
-            </button>
+          {/* 36px of content (box-content: the border is extra), so the ✕ —
+              a touch BarButton, the head's full height — is 40×36. */}
+          <div className="box-content flex items-center gap-2 h-9 pl-3 border-b border-edge">
+            <span className="flex-1 text-xs font-medium text-body">Pinned messages</span>
+            <BarButton size="touch" icon={<span className="text-xs">✕</span>} label="Close pinned messages" onClick={() => { setNotice(null); onClose(); }} />
           </div>
           {notice && <p className="px-3 py-1.5 text-2xs text-muted">{notice}</p>}
           {ids.length === 0 && <p className="px-3 py-2 text-2xs text-muted">No pinned messages yet.</p>}

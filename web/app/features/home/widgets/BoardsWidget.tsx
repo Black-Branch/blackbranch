@@ -141,7 +141,7 @@ function Row({ face, r, highlight }: { face: FaceId; r: BoardRow; highlight: boo
   const animClass = usernameStyleAnimClass(r.style);
   const nameRef = useAnimFenceRef(animClass !== "", nameInkRef);
   const name = (
-    <span ref={nameRef} className={animClass} style={{ color: r.color ?? undefined, ...usernameStyleCSS(r.style, r.color) }}>
+    <span ref={nameRef} className={animClass} style={{ color: r.color ?? undefined, ...usernameStyleCSS(r.style, r.color, r.name) }}>
       {r.name}
     </span>
   );

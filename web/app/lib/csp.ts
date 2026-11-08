@@ -61,7 +61,7 @@ export function contentSecurityPolicy(o: CspOrigins = {}): string {
   // (live) or www.sandbox.paypal.com (sandbox credentials — the only
   // environment it can be verified in, so both hosts are required or the
   // button is invisible under test).
-  "frame-src https://stream.place https://www.youtube.com https://player.twitch.tv https://js.stripe.com https://checkout.stripe.com https://hooks.stripe.com https://www.paypal.com https://www.sandbox.paypal.com",
+  "frame-src https://stream.place https://www.youtube.com https://player.twitch.tv https://player.kick.com https://js.stripe.com https://checkout.stripe.com https://hooks.stripe.com https://www.paypal.com https://www.sandbox.paypal.com",
   "object-src 'none'",
   // No form on the site posts anywhere but here (every one is handled in script; Stripe and PayPal
   // run their own forms inside their own frames), so an injected <form> cannot send a viewer's

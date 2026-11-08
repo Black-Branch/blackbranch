@@ -53,7 +53,9 @@ test("a setting the host renders asks for a render when it changes; any other se
     assert.deepEqual(readdirSync(dirs.requests), []);
     // The quiet hour and time zone become the host's timers (install/blackbranch backup_timers):
     // without a render they waited for the next backup to re-render them, a night late.
-    for (const key of ["matrix.federation", "matrix.registration", "updates.quietHour", "site.timeZone"]) {
+    // Every mail setting too (A2-05): MAS reads them only from its rendered config.
+    const mail = ["mail.smtp.host", "mail.smtp.port", "mail.smtp.mode", "mail.smtp.username", "mail.smtp.password", "mail.from"];
+    for (const key of ["matrix.federation", "matrix.registration", "updates.quietHour", "site.timeZone", ...mail]) {
       assert.equal(await requestRenderFor(key, dirs), true, key);
       assert.deepEqual(readdirSync(dirs.requests), ["render.req"], key);
       rmSync(join(dirs.requests, "render.req"));

@@ -12,6 +12,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "SITE_NAME",
       "NEXT_PUBLIC_SITE_NAME"
@@ -33,6 +34,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "SITE_DESCRIPTION"
     ],
@@ -51,6 +53,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "SITE_HOME_HEADING"
     ],
@@ -69,6 +72,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "SITE_HOME_INTRO"
     ],
@@ -88,6 +92,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "SITE_SHORT_NAME"
     ],
@@ -106,6 +111,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "SITE_TAGLINE"
     ],
@@ -124,6 +130,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "SITE_ICON_SET"
     ],
@@ -161,6 +168,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "permanent": true,
     "env": [
       "SITE_ORIGIN",
       "AUTH_URL"
@@ -182,6 +190,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "permanent": true,
     "env": [
       "SITE_API_ORIGIN"
     ],
@@ -201,6 +210,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "permanent": true,
     "env": [
       "SITE_API_WS_ORIGIN"
     ],
@@ -220,6 +230,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "LEGAL_OPERATOR"
     ],
@@ -238,6 +249,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "LEGAL_CONTACT_EMAIL"
     ],
@@ -256,6 +268,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "LEGAL_GOVERNING_LAW"
     ],
@@ -274,6 +287,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "LEGAL_EFFECTIVE_DATE"
     ],
@@ -505,6 +519,309 @@ const INSTANCE_KEYS = [
     "description": "How many weeks keep one backup each, beyond the daily ones. Unset = 4."
   },
   {
+    "key": "mail.smtp.host",
+    "kind": "serverName",
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "MAIL_SMTP_HOST"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Mail server",
+    "description": "The SMTP server the sign-in service sends mail through (smtp.example.com; your mail provider names it). Unset = no mail: no password recovery, and sign-up asks for no address."
+  },
+  {
+    "key": "mail.smtp.port",
+    "kind": "number",
+    "integer": true,
+    "min": 1,
+    "max": 65535,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "MAIL_SMTP_PORT"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Mail server port",
+    "description": "Unset = the usual one for the connection: 587 for STARTTLS, 465 for TLS, 25 for plain."
+  },
+  {
+    "key": "mail.smtp.mode",
+    "kind": "enum",
+    "values": [
+      "starttls",
+      "tls",
+      "plain"
+    ],
+    "default": "starttls",
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "MAIL_SMTP_MODE"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Mail connection",
+    "description": "starttls (the usual, port 587), tls (port 465) or plain (unencrypted: only for a mail server on this machine's own network)."
+  },
+  {
+    "key": "mail.smtp.username",
+    "kind": "string",
+    "maxLength": 255,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "MAIL_SMTP_USERNAME"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Mail server user name",
+    "description": "The user name the mail server signs in with. Unset = no sign-in (a relay that needs none)."
+  },
+  {
+    "key": "mail.from",
+    "kind": "string",
+    "maxLength": 255,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "MAIL_FROM"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Mail sender address",
+    "description": "The address mail comes from. Unset = noreply@ the site's domain (your mail provider must allow it)."
+  },
+  {
+    "key": "signin.google.enabled",
+    "kind": "bool",
+    "default": false,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "upstreamId": "01M6W7E48RDHCVFV08SQ68SZTB",
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_GOOGLE_ENABLED"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Sign in with Google",
+    "description": "Make the app in the Google Cloud console: APIs & Services → Credentials → Create credentials → OAuth client ID, type Web application. Paste the redirect URL below under Authorised redirect URIs, then copy the client id and secret here."
+  },
+  {
+    "key": "signin.google.clientId",
+    "kind": "string",
+    "maxLength": 255,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_GOOGLE_CLIENT_ID"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Google client id",
+    "description": "The OAuth client's id (it ends in .apps.googleusercontent.com)."
+  },
+  {
+    "key": "signin.discord.enabled",
+    "kind": "bool",
+    "default": false,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "upstreamId": "01M6W7E48SQRP7WM6CF3PM0QQH",
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_DISCORD_ENABLED"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Sign in with Discord",
+    "description": "Make the app in the Discord Developer Portal: Applications → New Application, then OAuth2. Add the redirect URL below under Redirects, then copy the client id and secret here."
+  },
+  {
+    "key": "signin.discord.clientId",
+    "kind": "string",
+    "maxLength": 255,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_DISCORD_CLIENT_ID"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Discord client id",
+    "description": "The application's client id (a long number, on its OAuth2 page)."
+  },
+  {
+    "key": "signin.twitch.enabled",
+    "kind": "bool",
+    "default": false,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "upstreamId": "01M6W7E48SP2C7JKD41P73GKF0",
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_TWITCH_ENABLED"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Sign in with Twitch",
+    "description": "Make the app in the Twitch developer console: Applications → Register Your Application, category Website Integration, with the redirect URL below as its OAuth Redirect URL. Copy the client id; New Secret gives the secret. This is its own app, not the one Twitch chat uses."
+  },
+  {
+    "key": "signin.twitch.clientId",
+    "kind": "string",
+    "maxLength": 255,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_TWITCH_CLIENT_ID"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Twitch client id",
+    "description": "The application's client id."
+  },
+  {
+    "key": "signin.oidc.enabled",
+    "kind": "bool",
+    "default": false,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_OIDC_ENABLED"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Sign in with your OpenID server",
+    "description": "Your own sign-in server (Authentik, Keycloak, Zitadel, Authelia or any OpenID Connect server). Fill in its address first: the redirect URL below appears once it is saved. Make a confidential OAuth2 / OpenID client there with that URL, then fill in its client id and secret here. The URL belongs to that address: another server gets another URL, and people who signed in through the old one do not carry over (switch back to the old address and they do)."
+  },
+  {
+    "key": "signin.oidc.issuer",
+    "kind": "url",
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_OIDC_ISSUER"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "OpenID server address",
+    "description": "Its issuer address, exactly as the server names itself: https://… (the sign-in service accepts no http:// address), with or without a trailing / as the server has it. The Doctor checks that it answers as this address."
+  },
+  {
+    "key": "signin.oidc.clientId",
+    "kind": "string",
+    "maxLength": 255,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_OIDC_CLIENT_ID"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "OpenID client id",
+    "description": "The client's id on your OpenID server."
+  },
+  {
+    "key": "signin.oidc.humanName",
+    "kind": "string",
+    "maxLength": 40,
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "instance",
+    "env": [
+      "SIGNIN_OIDC_NAME"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "OpenID button name",
+    "description": "What the sign-in button says after \"Continue with\". Unset = the server's address."
+  },
+  {
     "key": "matrix.serverName",
     "kind": "serverName",
     "default": null,
@@ -513,6 +830,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "permanent": true,
     "env": [
       "MATRIX_SERVER_NAME"
     ],
@@ -533,6 +851,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "permanent": true,
     "env": [
       "MATRIX_HOMESERVER_URL"
     ],
@@ -588,6 +907,7 @@ const INSTANCE_KEYS = [
     "module": "core",
     "secret": false,
     "reload": "restart",
+    "hostRendered": true,
     "tier": "instance",
     "env": [
       "MATRIX_FEDERATION"
@@ -610,6 +930,7 @@ const INSTANCE_KEYS = [
     "module": "core",
     "secret": false,
     "reload": "restart",
+    "hostRendered": true,
     "tier": "instance",
     "env": [
       "MATRIX_REGISTRATION"
@@ -728,6 +1049,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "permanent": true,
     "env": [
       "MATRIX_OAUTH_ISSUER",
       "MAS_ISSUER"
@@ -748,6 +1070,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "permanent": true,
     "env": [
       "MATRIX_OAUTH_CLIENT_ID",
       "MAS_CLIENT_ID"
@@ -775,7 +1098,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Discord bridge username template",
-    "description": "The bridge's username_template, e.g. discord_{{.}}: how a Discord user's Matrix id is built."
+    "description": "How the bridge builds a Discord user's Matrix id. mautrix-discord: its username_template, e.g. discord_{{.}}. Out Of Your Element: its namespace_prefix followed by {{.Username}}, e.g. _ooye_{{.Username}}."
   },
   {
     "key": "discordBridge.displaynameTemplate",
@@ -793,7 +1116,121 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Discord bridge display-name template",
-    "description": "The bridge's displayname_template. Its fixed tail (e.g. \" (Discord)\") is stripped for display; its {{if .Bot}}…{{end}} text marks bot accounts."
+    "description": "The bridge's displayname_template. Its fixed tail (e.g. \" (Discord)\") is stripped for display; its {{if .Bot}}…{{end}} text marks bot accounts. Out Of Your Element adds neither: {{or .Nick .GlobalName .Username}}."
+  },
+  {
+    "key": "community.serviceLocalpart",
+    "kind": "localpart",
+    "default": "blackbranch",
+    "productDefault": true,
+    "scope": "public",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "tier": "install",
+    "permanent": true,
+    "env": [
+      "COMMUNITY_LOCALPART"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Community account name",
+    "description": "The name of the account this install uses to make and look after the community's rooms (@name:server). Set when the site was installed; it never changes."
+  },
+  {
+    "key": "community.reconciler",
+    "kind": "bool",
+    "default": false,
+    "scope": "public",
+    "module": "core",
+    "secret": false,
+    "reload": "restart",
+    "tier": "install",
+    "env": [
+      "COMMUNITY_RECONCILER"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Rooms kept as set here",
+    "description": "Whether the server keeps the community's rooms the way the Admin Panel sets them. On for a new install; off on a site set up before this existed."
+  },
+  {
+    "key": "community.keepElementEdits",
+    "kind": "bool",
+    "default": false,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "COMMUNITY_KEEP_ELEMENT_EDITS"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Keep changes made in Element",
+    "description": "Off: a change made to a community channel outside this panel (in Element, say) is put back the way the panel has it, and the panel says what it put back. On: such a change is kept and only listed, for streamers who also run the community from Element. While this is on, changes made HERE to a channel that already exists (its name, topic, picture, who can see or post in it, how long it keeps messages, where it sits) are not applied either: they are listed as differences too. New channels, who is in which channel, and who is a moderator are still applied."
+  },
+  {
+    "key": "community.bridgeAccounts",
+    "kind": "list",
+    "default": [],
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "COMMUNITY_BRIDGE_ACCOUNTS"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Bridge accounts",
+    "description": "Accounts that belong to a chat bridge, each a full Matrix id like @bot:example.com. Their power is left alone and they are never kicked."
+  },
+  {
+    "key": "community.retentionCapDays",
+    "kind": "number",
+    "integer": true,
+    "min": 0,
+    "max": 3650,
+    "default": 365,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "COMMUNITY_RETENTION_CAP_DAYS"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Longest a channel keeps messages",
+    "description": "The most days any channel may keep its messages, from 1 to 3650. 0 means no limit: messages are kept forever, at the cost of disk. Each channel picks its own time up to this; a channel that picks none keeps them this long. Applied to the server at its next start."
+  },
+  {
+    "key": "community.setupChannels",
+    "kind": "list",
+    "default": [],
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "COMMUNITY_SETUP_CHANNELS"
+    ],
+    "packages": [
+      "web"
+    ],
+    "surface": "setup",
+    "label": "Channels listed at setup",
+    "description": "The channels the setup pages listed beyond #general and #forum. They become the community's channels the first time the server takes the community into the Community page, which manages them from then on."
   },
   {
     "key": "streamer.displayName",
@@ -955,6 +1392,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "YOUTUBE_VOD_PLAYLIST"
     ],
@@ -1047,7 +1485,8 @@ const INSTANCE_KEYS = [
       "native",
       "streamplace",
       "youtube",
-      "twitch"
+      "twitch",
+      "kick"
     ],
     "default": [],
     "scope": "public",
@@ -1062,7 +1501,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Player sources switched off",
-    "description": "The live sources the watch page does not offer: native (the site's own player), streamplace, youtube, twitch. Empty = all of them. Switched in the Stream tab; switching every one off is ignored."
+    "description": "The live sources the watch page does not offer: native (the site's own player), streamplace, youtube, twitch, kick. Empty = all of them. Switched in the Stream tab; switching every one off is ignored."
   },
   {
     "key": "stripe.publishableKey",
@@ -1122,7 +1561,7 @@ const INSTANCE_KEYS = [
       "web"
     ],
     "label": "Outside subscribe link",
-    "description": "Where the Subscribe button goes when the site cannot sell the Supporter subscription itself: card payments off, or no Supporter price set at Stripe. For example a Patreon page. Unset then = no Subscribe button."
+    "description": "Where the Subscribe button goes, used only when neither Stripe nor PayPal sells the Supporter subscription (no Stripe Supporter price and no PayPal plan). For example a Patreon page. Unset then = no Subscribe button."
   },
   {
     "key": "money.supportLine",
@@ -1154,6 +1593,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "CURRENCY_NAME"
     ],
@@ -1174,6 +1614,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "CURRENCY_NAME_PLURAL"
     ],
@@ -1194,6 +1635,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "CURRENCY_SYMBOL"
     ],
@@ -1212,6 +1654,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "CURRENCY_ICON"
     ],
@@ -1232,6 +1675,7 @@ const INSTANCE_KEYS = [
     "secret": false,
     "reload": "restart",
     "tier": "install",
+    "settable": true,
     "env": [
       "COMMUNITY_SCORE_NAME"
     ],
@@ -1284,6 +1728,126 @@ const INSTANCE_KEYS = [
     ],
     "label": "Leaderboard boards switched off",
     "description": "The boards the Leaderboard does not offer: points (points earned), credit (the vote score), creditRate (the vote score per 100 messages), streams, messages (top messages), emotes (top emotes). Empty = all of them."
+  },
+  {
+    "key": "chat.autoPin.off",
+    "kind": "bool",
+    "default": false,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "CHAT_AUTO_PIN_OFF"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Turn off auto-pin",
+    "description": "On = upvotes never pin a message by themselves; only a moderator pins."
+  },
+  {
+    "key": "chat.autoPin.votes",
+    "kind": "number",
+    "integer": true,
+    "min": 1,
+    "max": 100,
+    "default": 3,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "CHAT_AUTO_PIN_VOTES"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Upvotes to pin",
+    "description": "How many more upvotes than downvotes a message needs to pin itself in a quiet chat."
+  },
+  {
+    "key": "chat.autoPin.chattersPerVote",
+    "kind": "number",
+    "integer": true,
+    "min": 1,
+    "max": 1000,
+    "default": 12,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "CHAT_AUTO_PIN_CHATTERS_PER_VOTE"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Chatters per extra upvote",
+    "description": "In a busier chat a message needs one more upvote for every this many people who chatted in the last 15 minutes."
+  },
+  {
+    "key": "chat.autoPin.maxVotes",
+    "kind": "number",
+    "integer": true,
+    "min": 1,
+    "max": 100,
+    "default": 6,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "CHAT_AUTO_PIN_MAX_VOTES"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Most upvotes ever needed",
+    "description": "However busy the chat, a message never needs more upvotes than this. Set it too high and nothing ever pins itself."
+  },
+  {
+    "key": "chat.autoPin.minutes",
+    "kind": "number",
+    "integer": true,
+    "min": 1,
+    "max": 120,
+    "default": 10,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "CHAT_AUTO_PIN_MINUTES"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Minutes pinned",
+    "description": "How long a message the upvotes pinned stays at the top of chat. A moderator's pin stays until it is taken down."
+  },
+  {
+    "key": "chat.spotlight.off",
+    "kind": "bool",
+    "default": false,
+    "scope": "server",
+    "module": "core",
+    "secret": false,
+    "reload": "live",
+    "tier": "instance",
+    "env": [
+      "CHAT_SPOTLIGHT_OFF"
+    ],
+    "packages": [
+      "web"
+    ],
+    "label": "Turn off the streamer highlight",
+    "description": "On = clicking a chat message no longer highlights it for everyone, and a highlight showing now is taken down."
   },
   {
     "key": "currency.purchasable",
@@ -2013,7 +2577,7 @@ const INSTANCE_KEYS = [
     "scope": "server",
     "module": "youtube",
     "secret": false,
-    "reload": "restart",
+    "reload": "live",
     "tier": "instance",
     "env": [
       "MODULE_YOUTUBE"
@@ -2358,6 +2922,101 @@ const INSTANCE_KEYS = [
     ],
     "label": "Bucket secret key",
     "description": "The backup bucket's secret key (backup target s3). Read by the server's backup job, never by the site."
+  },
+  {
+    "key": "mail.smtp.password",
+    "kind": "secret",
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": true,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "secret",
+    "env": [
+      "MAIL_SMTP_PASSWORD"
+    ],
+    "packages": [
+      "stream-api"
+    ],
+    "label": "Mail server password",
+    "description": "The mail server's password (with its user name). Read by the server when it renders the sign-in service's config, never by the site."
+  },
+  {
+    "key": "signin.google.clientSecret",
+    "kind": "secret",
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": true,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "secret",
+    "env": [
+      "SIGNIN_GOOGLE_CLIENT_SECRET"
+    ],
+    "packages": [
+      "stream-api"
+    ],
+    "label": "Google client secret",
+    "description": "The Google client's secret. Read by the server when it renders the sign-in service's config, never by the site."
+  },
+  {
+    "key": "signin.discord.clientSecret",
+    "kind": "secret",
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": true,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "secret",
+    "env": [
+      "SIGNIN_DISCORD_CLIENT_SECRET"
+    ],
+    "packages": [
+      "stream-api"
+    ],
+    "label": "Discord client secret",
+    "description": "The Discord application's client secret. Read by the server when it renders the sign-in service's config, never by the site."
+  },
+  {
+    "key": "signin.twitch.clientSecret",
+    "kind": "secret",
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": true,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "secret",
+    "env": [
+      "SIGNIN_TWITCH_CLIENT_SECRET"
+    ],
+    "packages": [
+      "stream-api"
+    ],
+    "label": "Twitch client secret",
+    "description": "The Twitch application's client secret. Read by the server when it renders the sign-in service's config, never by the site."
+  },
+  {
+    "key": "signin.oidc.clientSecret",
+    "kind": "secret",
+    "default": null,
+    "scope": "server",
+    "module": "core",
+    "secret": true,
+    "reload": "restart",
+    "hostRendered": true,
+    "tier": "secret",
+    "env": [
+      "SIGNIN_OIDC_CLIENT_SECRET"
+    ],
+    "packages": [
+      "stream-api"
+    ],
+    "label": "OpenID client secret",
+    "description": "The OpenID client's secret. Read by the server when it renders the sign-in service's config, never by the site."
   },
   {
     "key": "matrix.oauth.clientSecret",
@@ -3086,6 +3745,7 @@ const MODULES = [
       "stream-ingest"
     ],
     "legacyOn": true,
+    "appliesLive": true,
     "description": "Reads the chat of your YouTube live streams into site chat. Off: nothing is read from YouTube and no YouTube setup page is shown.",
     "api": {
       "files": []
@@ -3228,6 +3888,21 @@ const MODULES = [
         "fields": [
           "stripe.supporterPriceId"
         ],
+        "test": null
+      },
+      {
+        "id": "portal",
+        "title": "The customer portal",
+        "need": "optional",
+        "explain": "Subscribers manage and cancel their card subscription in Stripe's customer portal, which Stripe opens only once its settings were saved. Settings → Billing → Customer portal: choose what subscribers may do (at least cancel), then press Save. Do it in the same mode as the key (live, or test for test keys). Until then \"Manage subscription\" answers that the site has not finished setting it up. Check on the key above says when the portal was never saved.",
+        "links": [
+          {
+            "label": "Stripe: customer portal",
+            "url": "https://dashboard.stripe.com/settings/billing/portal"
+          }
+        ],
+        "paste": [],
+        "fields": [],
         "test": null
       },
       {
@@ -3613,10 +4288,18 @@ function parseInstanceValue(entry, raw) {
     }
     return { ok: true, value: v };
   }
+  if (kind === 'localpart') {
+    // A Matrix user name, kept to the characters the homeserver's config and its regex take as they are.
+    if (!/^[a-z0-9._=-]{1,64}$/.test(s)) return { ok: false, error: 'expected a Matrix user name: 1-64 of a-z 0-9 . _ = -' };
+    return { ok: true, value: s };
+  }
   if (kind === 'localpartTemplate') {
-    const parts = s.split('{{.}}');
+    // ONE placeholder, and it says which bridge: {{.}} is mautrix-discord's numeric Discord id,
+    // {{.Username}} Out Of Your Element's cleaned Discord name (web/app/lib/discordSender.ts).
+    const actions = s.match(/\{\{.*?\}\}/g) || [];
+    const parts = actions.length === 1 && ['{{.}}', '{{.Username}}'].includes(actions[0]) ? s.split(actions[0]) : [];
     if (parts.length !== 2 || !(parts[0] + parts[1]) || !parts.every((p) => /^[a-z0-9._=/+-]*$/.test(p))) {
-      return { ok: false, error: 'expected a Matrix localpart with exactly one {{.}}, e.g. discord_{{.}}' };
+      return { ok: false, error: 'expected a Matrix localpart with exactly one {{.}} or {{.Username}}, e.g. discord_{{.}} or _ooye_{{.Username}}' };
     }
     return { ok: true, value: s };
   }
@@ -3730,9 +4413,27 @@ async function runProviderCheck(test, get, fetchImpl) {
       if (want && String(want) !== id) return { ok: false, code: 'mismatch', id };
       return { ok: true, code: 'accepted', id };
     };
+    // Stripe's customer portal: billingPortal.sessions.create needs a DEFAULT configuration, which
+    // exists only once the account's portal settings were saved (per mode, live or test). Without
+    // it every subscriber's "Manage subscription" — the one in-site way to cancel — is refused.
+    const stripePortal = async (key) => {
+      const res = await fetchImpl('https://api.stripe.com/v1/billing_portal/configurations?is_default=true&limit=1', {
+        headers: { authorization: `Bearer ${key}` }, signal: timeout() });
+      if (!res.ok) return verdict(res);
+      const list = (await json(res))?.data;
+      return Array.isArray(list) && list.length > 0 ? null : { ok: false, code: 'no_portal' };
+    };
+    if (test === 'stripe-portal') {
+      const miss = need('stripe.secretKey'); if (miss) return miss;
+      const key = String(get('stripe.secretKey'));
+      const mode = /^(sk|rk)_live_/.test(key) ? 'live' : 'test';
+      const r = await stripePortal(key);
+      return r ? { ...r, mode } : { ok: true, code: 'accepted', mode };
+    }
     if (test === 'stripe') {
       // Read-only: the account, then one page of each object type the site reads. A restricted key
       // without one of those Read permissions answers 403 for that type alone — listed, never text.
+      // Then the customer portal (stripePortal above).
       const miss = need('stripe.secretKey'); if (miss) return miss;
       const key = String(get('stripe.secretKey'));
       const mode = /^(sk|rk)_live_/.test(key) ? 'live' : 'test';
@@ -3746,7 +4447,11 @@ async function runProviderCheck(test, get, fetchImpl) {
         if (why === 'limited' || res.status === 403) { denied.push(name); continue; }
         return { ok: false, code: res.status === 401 || why === 'rejected' ? 'rejected' : 'http_error', status: res.status };
       }
-      return denied.length ? { ok: false, code: 'denied', denied, mode } : { ok: true, code: 'accepted', mode };
+      const portal = await stripePortal(key);
+      if (portal && portal.code === 'limited') denied.push('billing_portal');
+      if (denied.length) return { ok: false, code: 'denied', denied, mode };
+      if (portal && !portal.ok) return { ...portal, mode };
+      return { ok: true, code: 'accepted', mode };
     }
     if (test === 'stripe-webhook') {
       // The destination for THIS site's address exists, is enabled and sends every handled event.

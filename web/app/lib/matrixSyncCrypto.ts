@@ -19,7 +19,8 @@
 //     REFRESH_MS, so time-based upkeep (fallback-key expiry) keeps running.
 //
 // A third rule lives in `refusedKeyUploadFetch` below (the client's fetch): a one-time-key upload
-// the server refuses for holding too many already.
+// the server refuses for holding too many already. `markTrackedDevicesStale` is the device-list
+// door the client calls once per start.
 //
 // Type-only: nothing here imports the SDK, so the shape is checked against node_modules by
 // matrixSyncCrypto.test.ts, which fails when an SDK or engine upgrade changes it.
@@ -88,6 +89,25 @@ export function installSyncCryptoDoor(crypto: unknown, now: () => number = Date.
     const next = planSyncChanges(state, changes ?? {}, now());
     return next ? original.call(this, next) : Promise.resolve([]);
   };
+  return true;
+}
+
+type DeviceListDoor = { markAllTrackedUsersAsDirty?: () => Promise<void> };
+
+/**
+ * Ask the server again for the devices of everyone the engine tracks. Call once per client start,
+ * after the first PREPARED. The client syncs from a MemoryStore, so every start is an initial
+ * /sync, which carries no device-list changes, while the engine's device cache persists in
+ * IndexedDB: a person who added a device while this page was closed would otherwise never get our
+ * room keys on it. (The server still reports a change for a short while after it happens, which
+ * hides this on a quick reload.) The method is RustCrypto's, not CryptoApi's — the SDK calls it
+ * itself only on sliding sync — so its shape is pinned against node_modules in
+ * matrixSyncCrypto.test.ts. Returns false when the backend lacks it.
+ */
+export async function markTrackedDevicesStale(crypto: unknown): Promise<boolean> {
+  const door = crypto as DeviceListDoor | null;
+  if (!door || typeof door.markAllTrackedUsersAsDirty !== "function") return false;
+  await door.markAllTrackedUsersAsDirty();
   return true;
 }
 

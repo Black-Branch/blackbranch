@@ -34,8 +34,11 @@ import { normalizePlatform } from "./nativePlatform.ts";
 export type CensusSource = PlayerSource | "none";
 export type CensusMap = Map<string, { source: CensusSource; at: number }>;
 
+// Every player the live row can show (LiveSource) plus the featured streamer, the radio and "none".
+// kick since v171 (the Kick embed, decision 0135): before it a Kick viewer cast no vote, and one who
+// switched to Kick stayed counted on the source they left until that sample expired.
 const SOURCES: readonly CensusSource[] = [
-  "native", "streamplace", "youtube", "twitch", "community", "radio", "none",
+  "native", "streamplace", "youtube", "twitch", "kick", "community", "radio", "none",
 ];
 
 /**

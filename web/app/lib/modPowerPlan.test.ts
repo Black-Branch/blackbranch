@@ -147,7 +147,9 @@ test("the plan's caller hands it the install's staff accounts from the mods answ
   assert.match(raw, /\n\}\n?$/, "END not read");
   assert.match(raw, /modDemotePlan\(rooms, modIds, myUserId, MOD_POWER, keepIds\)/);
   const route = readFileSync(join(process.cwd(), "app/api/community/mods/route.ts"), "utf8");
-  assert.match(route, /keepIds: \[\.\.\.staffMatrixIds\(\)\]/);
+  assert.match(route, /keepIds: staffMatrixIds,/);
+  const answer = readFileSync(join(process.cwd(), "app/lib/community/modsAnswer.ts"), "utf8");
+  assert.match(answer, /keepIds: \[\.\.\.deps\.keepIds\(\)\]/);
 });
 
 test("a bridge event counts only from a sender ABOVE mod level (or a staff account): a mod cannot plant one to keep power", () => {

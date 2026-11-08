@@ -62,6 +62,8 @@ function InlineEmote({ attrs }: { attrs: MxAttrs }) {
       src={attrs.src}
       alt={attrs.alt ?? ""}
       title={attrs.title ?? attrs.alt}
+      // A phone has no hover: EmoteNameBubble shows this name on a tap.
+      data-emote-name={attrs.title || attrs.alt || undefined}
       loading="lazy"
       decoding="async"
       style={{

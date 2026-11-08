@@ -551,9 +551,10 @@ export function createCommandRunner({ setSendError, showNotice, support }: RunDe
           : r.reason === "banned" ? DM_BANNED : "Couldn't look that name up — try again.");
         return;
       }
-      if (!r.people.length) { setSendError(`No one else here goes by ${q}.`); return; }
+      if (!r.people.length) { setSendError(`No one else goes by ${q}.`); return; }
       const body = text?.trim() || undefined;
-      const opened = r.people.length === 1
+      // Only a name typed in full opens (and sends) at once; a near match asks who was meant.
+      const opened = r.people.length === 1 && r.exact
         ? requestDm({ kind: "open", to: r.people[0]!, text: body })
         : requestDm({ kind: "pick", query: q, people: r.people, text: body });
       if (!opened) setSendError("Direct messages open in the chat panel — send it from there.");

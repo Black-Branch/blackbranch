@@ -33,6 +33,9 @@ export type { TipDraft } from "./types";
 // charges in), written by formatPrice, never with a literal "$".
 const PRESETS = [3, 5, 10, 25];
 
+/** The line under the name box for a signed-in tipper (ADR 0145). */
+const TIP_NAME_HINT = "Your own name, or a blank box, shows with your badges and colours. Any other name shows plain, not linked to you.";
+
 export function TipForm(props: {
   onSubmit: (draft: TipDraft) => void;
   busy: boolean;
@@ -126,11 +129,6 @@ export function TipForm(props: {
   const [name, setName] = useState(() => props.initialDraft?.displayName ?? props.initialName ?? "");
   const [donateAnon, setDonateAnon] = useState(() => props.initialDraft?.anonymous ?? false);
   const anonHelpId = useId();
-  // Whether a name was prefilled from a signed-in account — independent of
-  // the CURRENT `name` state, which changes as the person types (and which a
-  // remembered draft can also repopulate), so the hint below stays correct
-  // for the whole life of the form, not just its first render.
-  const hadPrefilledName = Boolean(props.initialName && props.initialName.trim() !== "");
   // The Announce switch (Qorm-for-all-income piece 3): off turns this form
   // into a quiet Qorm purchase. Ignored when signed out — a guest gets no
   // switch and always tips (see `initialAnnounce`'s doc above).
@@ -259,8 +257,10 @@ export function TipForm(props: {
             </button>
           );
         })}
-        <div className="relative">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted">
+        {/* The sign sits IN the row, not over a fixed padding: a sign wider than "$" (a "CHF") can
+            never run into the digits. The focus ring is the row's. */}
+        <label className="flex w-28 items-center gap-1 rounded-lg border border-control bg-canvas px-3 py-2 focus-within:border-emerald-500 has-[:disabled]:opacity-50">
+          <span className="shrink-0 text-sm text-muted">
             {currencySign()}
           </span>
           <input
@@ -275,9 +275,10 @@ export function TipForm(props: {
               props.onAmountChange?.();
             }}
             disabled={controlsDisabled}
-            className="w-28 rounded-lg border border-control bg-canvas py-2 pl-7 pr-3 text-sm text-heading outline-none focus:border-emerald-500 disabled:opacity-50"
+            aria-label="Other amount"
+            className="min-w-0 flex-1 bg-transparent text-sm text-heading outline-none"
           />
-        </div>
+        </label>
       </div>
 
       {/* A tip pays 1 Qorm per USD cent. Always shown — even a guest sees
@@ -305,16 +306,12 @@ export function TipForm(props: {
             aria-label="Your name"
             className="mt-3 w-full rounded-lg border border-control bg-canvas px-3 py-2 text-sm text-heading outline-none focus:border-emerald-500 disabled:opacity-50"
           />
-          {hadPrefilledName && name.trim() === "" && (
-            // Only for a signed-in person, and only while the box is actually
-            // empty: donate/route.ts re-fills a blank, non-anonymous name
-            // from site.users.display_name for them, which is correct — but an
-            // empty box otherwise reads as "this will be Anonymous", which for a
-            // signed-in person it is not.
-            // A signed-out person never sees this: for them a blank box really
-            // does mean Anonymous.
+          {props.signedIn && (
+            // What each choice shows in chat (ADR 0145): blank or the account's own name wears the
+            // account (donate/route.ts fills a blank from it); any other name is a plain card;
+            // the anonymous line below covers the third. Always shown, so typing moves nothing.
             <p className="mt-1 text-xs text-body-dim">
-              Leave blank to use your account name, or tick &quot;Tip anonymously&quot;.
+              {TIP_NAME_HINT}
             </p>
           )}
 

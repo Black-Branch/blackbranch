@@ -10,7 +10,7 @@ const { NATIVE_SQL, isNativePlatform } = require('./native-platform');
 /** The longest announcement — web's /api/mod/announce holds the same limit. */
 const ANNOUNCE_MAX = 300;
 
-function registerChatMod(app, { pool, msgBuffer, broadcast, redactBuffered, requireInternal, wrap }) {
+function registerChatMod(app, { pool, msgBuffer, broadcast, redactBuffered, touchBuffered, requireInternal, wrap }) {
   // The streamer's highlighted message — see POST /chat/spotlight at the bottom. Declared
   // first because the delete/purge routes below clear it when its row goes:
   // a highlight on a deleted message would otherwise sit on stream with
@@ -27,10 +27,10 @@ function registerChatMod(app, { pool, msgBuffer, broadcast, redactBuffered, requ
     const { platform, messageId, score } = req.body;
     if (!platform || messageId == null || score == null)
       return res.status(400).json({ error: 'platform, messageId, score required' });
-    // Keep the catch-up buffer in sync so new connections see current scores
+    // Keep the catch-up buffer in sync so new and resuming connections see current scores
     const m = msgBuffer.find(b =>
       b.type === 'message' && b.platform === platform && String(b.id) === String(messageId));
-    if (m) m.score = Number(score);
+    if (m) { m.score = Number(score); touchBuffered(m); }
     broadcast({ type: 'vote', platform, messageId, score: Number(score) });
     res.json({ ok: true });
   }));

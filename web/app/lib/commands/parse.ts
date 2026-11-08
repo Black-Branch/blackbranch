@@ -191,6 +191,23 @@ export function suggestFor(
   return [];
 }
 
+/** The name typed so far when the caret is in `/dm`'s (or `/message`'s) name — its completion asks
+ *  the server for EVERY account, not the people in chat (ticket #193). Null elsewhere. */
+export function dmNameToken(p: Parsed): string | null {
+  return p.isCommand && p.node?.run === "dm" && p.completing === "arg" && p.argIndex === 0 ? p.token : null;
+}
+
+/** The server's people as palette rows: the username goes in, the display name beside it, or the
+ *  full Matrix id when two of them share the username (accounts on other servers), so the pick
+ *  names exactly one person. */
+export function personSuggestions(people: readonly { matrixId: string; username: string; displayName: string | null }[]): Suggestion[] {
+  const shared = (u: string) => people.filter((p) => p.username.toLowerCase() === u.toLowerCase()).length > 1;
+  return people.map((p) => {
+    const name = shared(p.username) ? p.matrixId : p.username;
+    return { value: name, label: name, desc: p.displayName && p.displayName !== p.username ? p.displayName : "", kind: "user" as const };
+  });
+}
+
 /**
  * Replace ONLY the caret's token, returning the new line and caret position.
  * A trailing space is added so the next token can be typed straight away.

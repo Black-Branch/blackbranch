@@ -35,6 +35,8 @@ export type TabItem<K extends string = string> = {
   group?: string;
   /** Rail: 1 = nested under the item before it (indented). */
   depth?: 0 | 1;
+  /** Rail: how many things wait there (a pending count), drawn beside the label; 0 or absent = none. */
+  count?: number;
 };
 
 export type UseTabListArgs<K extends string> = {

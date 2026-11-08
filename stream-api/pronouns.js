@@ -2,7 +2,8 @@
 // Pronouns — the one parser and the one writer.
 //
 // Held on the canonical identity (stream.users.pronouns), so one value covers the
-// site, Twitch, YouTube and Kick. Everything that sets them goes through here:
+// site, Twitch, YouTube and Kick — and a write covers every identity of the person (a site account
+// whose own identity and a linked platform identity were never merged keeps them in step). Everything that sets them goes through here:
 //   · the site's Edit profile / `/pronouns` and a mod's card (POST /identity/pronouns)
 //   · `!he` `!she/her` `!pronouns she` … in any chat — web and stream-ingest ask
 //     POST /identity/pronoun-command instead of carrying regexes of their own
@@ -18,7 +19,7 @@
 // refilled from alejo.io.
 
 const { instanceConfig } = require('./instance-config');
-const { NATIVE_PLATFORM } = require('./native-platform');
+const { NATIVE_PLATFORM, NATIVE_SQL } = require('./native-platform');
 
 const PRONOUN_VALUES = ['he/him', 'she/her', 'they/them'];
 const PRONOUN_SET = new Set(PRONOUN_VALUES);
@@ -106,15 +107,29 @@ function createPronouns({ pool, resolveCanonical = async (c) => c, resolveOrCrea
     return v;
   }
 
+  /** Set (or clear, value null) the pronouns of the PERSON `cid` is: `cid` and every other identity
+   *  of the site account(s) it belongs to — the account's own native identity and each linked
+   *  platform identity — so site lines and platform lines show the same value (k, 2026-10-25: no
+   *  merge; the writer covers every canonical). An unlinked chatter is just `cid`. */
   async function set(cid, value, source = 'self') {
     if (value != null && !PRONOUN_SET.has(value)) throw new Error('bad pronouns');
     if (!SOURCES.has(source)) throw new Error('bad source');
     const r = await pool.query(
-      `UPDATE stream.users SET pronouns = $1::text, pronouns_source = $3::text
-        WHERE id = $2 AND ($3::text <> 'alejo' OR pronouns_source = 'alejo' OR (pronouns IS NULL AND pronouns_source IS NULL))`,
+      `WITH acct AS (
+         SELECT matrix_id FROM site.platform_links WHERE canonical_id = $2
+         UNION SELECT platform_id FROM stream.links WHERE platform IN ${NATIVE_SQL} AND canonical = $2),
+       person AS (
+         SELECT $2::text AS id
+         UNION SELECT canonical_id FROM site.platform_links WHERE matrix_id IN (SELECT matrix_id FROM acct)
+         UNION SELECT canonical FROM stream.links WHERE platform IN ${NATIVE_SQL} AND platform_id IN (SELECT matrix_id FROM acct))
+       UPDATE stream.users SET pronouns = $1::text, pronouns_source = $3::text
+        WHERE id IN (SELECT id FROM person)
+          AND ($3::text <> 'alejo' OR pronouns_source = 'alejo' OR (pronouns IS NULL AND pronouns_source IS NULL))
+       RETURNING id`,
       [value, cid, source]
     );
     cache.delete(cid);
+    for (const row of r.rows || []) cache.delete(row.id);
     return r.rowCount > 0;
   }
 

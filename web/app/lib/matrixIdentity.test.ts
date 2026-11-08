@@ -41,6 +41,9 @@ const CLIENT_BOUND: Record<string, string> = {
   "lib/useHiddenIgnoreSync.ts": "writes m.ignored_user_list + account data to match the Behavior hide list; mounted by ChatSidebar, which already holds the client via useChatSplitView",
   "components/SecureAccountPrompt.tsx": "real crypto state — whether this account is secured",
   "components/MatrixInput.tsx": "uploads and sends events to a room",
+  "components/UserVerificationPrompt.tsx": "runs another person's verification on the running client; renders nothing until it is ready and starts nothing",
+  "components/MemberCard.tsx": "hands its Verify request (requestVerificationDM, on room.client) to the provider's pending slot",
+  "lib/useCommunityHistory.ts": "a ban's \"Delete message history\" from the Mod Panel or a live-chat card: the mod chose an action that redacts in the rooms, so it starts the client on that intent and redacts from it",
   "components/PresenceBeat.tsx": "reads the client's sync status to know the community view is live — not answerable by useMatrixIdentity's id/signed-in boolean",
 };
 
@@ -87,8 +90,6 @@ test("the identity-only surfaces read the session, not the client", () => {
   // The seven decoupled in cycle 4. Named explicitly — a regression here is
   // silent (the surface still renders, it just needs the client again).
   const IDENTITY_ONLY = [
-    "components/MatrixAppsHint.tsx",
-    "components/MatrixAppsList.tsx",
     "components/UserCard.tsx",
     "components/UserMenu.tsx",
     "lib/useContentSuggestion.ts",

@@ -3,7 +3,9 @@
 // the same in every locale; "standard" keeps each place's own default look.
 export const TS_FORMATS = ["standard", "24s", "24", "12", "12s", "rel"] as const;
 export type TsFormat = (typeof TS_FORMATS)[number];
-export type TsPlace = "live" | "community-header" | "community-hover";
+/** community-gutter: a grouped row's hover time in the Cozy gutter — the hover form without
+ *  seconds, so the widest format still fits the avatar slot and its two insets. */
+export type TsPlace = "live" | "community-header" | "community-hover" | "community-gutter";
 
 const p2 = (n: number) => String(n).padStart(2, "0");
 
@@ -30,15 +32,29 @@ function dayPrefix(d: Date, now: Date): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+/** The Community head's stamp in two parts: the day ("Today at", "Yesterday at", a date) and
+ *  the time. A narrow pane hides the day (the day divider above already says it); the full
+ *  stamp stays the tooltip. "rel" has no day part. */
+export function communityHeaderParts(d: Date, fmt: TsFormat, now: Date = new Date()): { day: string; time: string } {
+  if (fmt === "rel") return { day: "", time: relative(d, now) };
+  const time = fmt === "standard" ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : clock(d, fmt);
+  return { day: dayPrefix(d, now), time };
+}
+
+const NO_SECONDS: Partial<Record<TsFormat, Exclude<TsFormat, "standard" | "rel">>> = { "24s": "24", "12s": "12" };
+
 export function formatChatTime(d: Date, fmt: TsFormat, place: TsPlace, now: Date = new Date()): string {
+  if (place === "community-header") {
+    const { day, time } = communityHeaderParts(d, fmt, now);
+    return day ? `${day} ${time}` : time;
+  }
   if (fmt === "rel") return relative(d, now);
+  if (place === "community-gutter") fmt = NO_SECONDS[fmt] ?? fmt;
   if (fmt === "standard") {
     if (place === "live") return clock(d, "24s");
-    const t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    return place === "community-header" ? `${dayPrefix(d, now)} ${t}` : t;
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
-  const t = clock(d, fmt);
-  return place === "community-header" ? `${dayPrefix(d, now)} ${t}` : t;
+  return clock(d, fmt);
 }
 
 // Indent-to-time pads wrapped lines past the timestamp column; each format has

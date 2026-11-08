@@ -119,6 +119,8 @@ export function ChatComposerField({
   onFocus,
   onBlur,
   combobox,
+  attachments,
+  enterKeyHint = "send",
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -178,6 +180,15 @@ export function ChatComposerField({
     controls: string | undefined;
     activeDescendant: string | undefined;
   };
+  /**
+   * Files waiting to be sent, drawn above the text inside the field's column
+   * (MatrixInput's chips). In flow, so it flags Bar growth; the overlays below
+   * are positioned against the text box only, never over it.
+   */
+  attachments?: React.ReactNode;
+  /** The phone keyboard's Return key: "send" (default) where Enter sends; "enter" where it adds a line
+   *  (the community composer with Return = new line). */
+  enterKeyHint?: "send" | "enter";
 }) {
   // The picker is portalled, so it needs a real element to anchor against
   // rather than an `absolute` parent.
@@ -185,167 +196,170 @@ export function ChatComposerField({
   const warmPicker = () => preparePicker(emotes, personalEmotes ?? NO_EMOTES);
 
   return (
-    <div className="relative flex-1 min-w-0">
-      <textarea
-        ref={inputRef as React.RefObject<HTMLTextAreaElement>}
-        value={value}
-        rows={1}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        onSelect={onSelect}
-        maxLength={maxLength}
-        // NO NATIVE `placeholder` — it is rendered as an overlay below.
-        //
-        // A textarea's placeholder is real content for `fieldSizing: content`,
-        // and it WRAPS like any other text. At 390px "Send a message…" needs
-        // two lines, which pushes the field past its collapsed ceiling
-        // (CTL_SIZE) and makes `overflow-y: auto` paint a scrollbar beside an
-        // EMPTY field. ::placeholder cannot fix that: per spec
-        // it only accepts the ::first-line properties, so `white-space` and
-        // `text-overflow` do not apply, and the wrapping is inherited from the
-        // textarea itself — which cannot be set to nowrap without breaking
-        // every real multi-line draft.
-        //
-        // The placeholder would also be the field's accessible name, so it
-        // moves to aria-label.
-        aria-label={placeholder}
-        // The page's only Send key: this field sends on Enter; the terminal's box does not say Send.
-        enterKeyHint="send"
-        // Combobox only when a consumer wired one — the role PROMISES a popup,
-        // and the aria-controls/-activedescendant ids must not dangle while the
-        // popup is closed (they'd point at elements that don't exist).
-        role={combobox ? "combobox" : undefined}
-        aria-autocomplete={combobox ? "list" : undefined}
-        aria-expanded={combobox ? combobox.expanded : undefined}
-        aria-controls={combobox?.expanded ? combobox.controls : undefined}
-        aria-activedescendant={combobox?.expanded ? combobox.activeDescendant : undefined}
-        disabled={disabled}
-        // Focusing the field is intent to write — maybe with emotes: start the
-        // picker's first screens now so it opens painted (emotePickerWarm).
-        onFocus={() => { warmPicker(); onFocus?.(); }}
-        onBlur={onBlur}
-        // Shape and growth are STATEFUL — see `.chat-input-field` in globals.css.
-        //   • at rest: a one-line pill (radius 999px)
-        //   • expanded: up to 7 lines, radius relaxed to 1rem so the curve stops
-        //     clipping the first/last characters of the top and bottom rows
-        //
-        // `bg-surface-1`, a step DEEPER than the row it sits in — the field is
-        // a well, the controls beside it are raised. Both at `surface-2`, the
-        // row would read as one undifferentiated grey slab.
-        // NO focus ring. A 1px ring is painted as a box-shadow just outside a 1px
-        // border in a near-identical colour — two soft edges stacked, which reads
-        // as a thick blurry outline rather than a crisp one. The
-        // focused state is carried by the border alone, brightened one step.
-        className={`chat-input-field${expanded ? " is-expanded" : ""} block w-full bg-surface-1 border border-edge px-4 py-1 outline-none focus:border-edge-bright resize-none leading-tight`}
-        // The bottom Bar grows past its token only for a descendant that says
-        // so (chrome.css) — the field is the one that knows.
-        data-chrome-grow={expanded || undefined}
-        // A DATA ATTRIBUTE drives the accent, not a class and not an inline
-        // borderColor. Inline styles beat the `focus:border-edge-bright`
-        // utility unconditionally, which would freeze the border at one colour
-        // and cost the field its focus affordance — the border is the ONLY thing
-        // carrying focus here (there is deliberately no ring). The attribute
-        // lets globals.css express rest and focus as two ordinary rules.
-        data-accent={accentColor ? "on" : undefined}
-        style={{
-          ...(accentColor ? { "--composer-accent": accentColor } : null),
-          fontSize: CHAT_FONT,
-          fontFamily: "var(--chat-font-family, inherit)",
-          color: "var(--chat-text-color, #e8e6e3)",
-          // Collapsed height is the control diameter, so a field you have
-          // clicked away from lines up with the buttons exactly and a long draft
-          // stops eating the chat above it. `fieldSizing: content` grows it up to
-          // this ceiling; the ceiling is what actually animates.
-          // Collapsed = exactly ONE natural line (the same expression the control
-          // diameter is built from), so settling never squeezes the text.
-          maxHeight: expanded ? `calc(${CHAT_FONT} * 7)` : CTL_SIZE,
-          // Scrollable ONLY when expanded. A real draft past the expanded
-          // 7-line ceiling still has to scroll; collapsed, the field holds at
-          // most one line, so there is nothing to scroll to and `auto` could
-          // only ever produce a phantom bar.
-          overflowY: expanded ? "auto" : "hidden",
-          fieldSizing: "content",
-        } as React.CSSProperties}
-      />
-      {/* The placeholder, as an ordinary element so it can actually be
-          truncated: `truncate` = nowrap + hidden + ellipsis, none of which the
-          native ::placeholder honours. Absolutely positioned, so it never
-          contributes to `fieldSizing: content` and cannot change the field's
-          height at any width. Hidden from the a11y tree — the same string is
-          the textarea's aria-label, and announcing it twice is worse than not
-          at all.
-          Only ever visible while the field is EMPTY, which is also the only
-          time the field is guaranteed collapsed (`expanded` = focused AND has
-          text), so a single centred line is the whole story. */}
-      {/* Shown whenever the field is EMPTY — focused or not: focus alone never
-          hides it (only a draft does). */}
-      {!value && note && <RefusalNoteLine note={note} />}
-      {!value && !note && placeholder && (
-        <span
-          aria-hidden="true"
-          // `text-muted`: a raw white-25% placeholder composites to
-          // rgb(78,78,80) on the field — 2.24:1, which fails AA outright. Of the
-          // ladder's rungs, `faint` (1.78:1) is DARKER and the wrong direction;
-          // `muted` lands at 3.84:1 and still reads clearly as a placeholder.
-          className="chat-input-placeholder absolute inset-0 px-4 py-1 leading-tight truncate text-muted pointer-events-none select-none"
+    <div className="flex-1 min-w-0">
+      {attachments ? <div data-chrome-grow data-attachments className="mb-1">{attachments}</div> : null}
+      <div className="relative">
+        <textarea
+          ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+          value={value}
+          rows={1}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          onSelect={onSelect}
+          maxLength={maxLength}
+          // NO NATIVE `placeholder` — it is rendered as an overlay below.
+          //
+          // A textarea's placeholder is real content for `fieldSizing: content`,
+          // and it WRAPS like any other text. At 390px "Send a message…" needs
+          // two lines, which pushes the field past its collapsed ceiling
+          // (CTL_SIZE) and makes `overflow-y: auto` paint a scrollbar beside an
+          // EMPTY field. ::placeholder cannot fix that: per spec
+          // it only accepts the ::first-line properties, so `white-space` and
+          // `text-overflow` do not apply, and the wrapping is inherited from the
+          // textarea itself — which cannot be set to nowrap without breaking
+          // every real multi-line draft.
+          //
+          // The placeholder would also be the field's accessible name, so it
+          // moves to aria-label.
+          aria-label={placeholder}
+          // Send where this field sends on Enter (the terminal's box never says Send).
+          enterKeyHint={enterKeyHint}
+          // Combobox only when a consumer wired one — the role PROMISES a popup,
+          // and the aria-controls/-activedescendant ids must not dangle while the
+          // popup is closed (they'd point at elements that don't exist).
+          role={combobox ? "combobox" : undefined}
+          aria-autocomplete={combobox ? "list" : undefined}
+          aria-expanded={combobox ? combobox.expanded : undefined}
+          aria-controls={combobox?.expanded ? combobox.controls : undefined}
+          aria-activedescendant={combobox?.expanded ? combobox.activeDescendant : undefined}
+          disabled={disabled}
+          // Focusing the field is intent to write — maybe with emotes: start the
+          // picker's first screens now so it opens painted (emotePickerWarm).
+          onFocus={() => { warmPicker(); onFocus?.(); }}
+          onBlur={onBlur}
+          // Shape and growth are STATEFUL — see `.chat-input-field` in globals.css.
+          //   • at rest: a one-line pill (radius 999px)
+          //   • expanded: up to 7 lines, radius relaxed to 1rem so the curve stops
+          //     clipping the first/last characters of the top and bottom rows
+          //
+          // `bg-surface-1`, a step DEEPER than the row it sits in — the field is
+          // a well, the controls beside it are raised. Both at `surface-2`, the
+          // row would read as one undifferentiated grey slab.
+          // NO focus ring. A 1px ring is painted as a box-shadow just outside a 1px
+          // border in a near-identical colour — two soft edges stacked, which reads
+          // as a thick blurry outline rather than a crisp one. The
+          // focused state is carried by the border alone, brightened one step.
+          className={`chat-input-field${expanded ? " is-expanded" : ""} block w-full bg-surface-1 border border-edge px-4 py-1 outline-none focus:border-edge-bright resize-none leading-tight`}
+          // The bottom Bar grows past its token only for a descendant that says
+          // so (chrome.css) — the field is the one that knows.
+          data-chrome-grow={expanded || undefined}
+          // A DATA ATTRIBUTE drives the accent, not a class and not an inline
+          // borderColor. Inline styles beat the `focus:border-edge-bright`
+          // utility unconditionally, which would freeze the border at one colour
+          // and cost the field its focus affordance — the border is the ONLY thing
+          // carrying focus here (there is deliberately no ring). The attribute
+          // lets globals.css express rest and focus as two ordinary rules.
+          data-accent={accentColor ? "on" : undefined}
           style={{
+            ...(accentColor ? { "--composer-accent": accentColor } : null),
             fontSize: CHAT_FONT,
             fontFamily: "var(--chat-font-family, inherit)",
-          }}
-        >
-          {placeholder}
-        </span>
-      )}
-      {/* The emote button is the ONLY thing still inside the field, and it stays
-          there on purpose: it acts on the text you are writing, so it belongs in
-          the text's box. Everything that acts on the MESSAGE (tools, destination,
-          attach) now lives outside — which is also what let the field's
-          right-inset rules collapse from a four-way matrix to one. */}
-      <div
-        className="absolute right-2 top-1 bottom-1 flex items-center"
-        style={{ fontSize: CHAT_FONT }}
-      >
-        <button
-          ref={emoteBtnRef}
-          type="button"
-          onClick={() => setShowEmotePicker((p) => !p)}
-          onMouseDown={keepFocus}
-          // Reaching for the button (hover / keyboard focus / the press before the
-          // click) starts the picker's first screens — see emotePickerWarm.
-          onPointerEnter={warmPicker}
-          onPointerDown={warmPicker}
-          onFocus={warmPicker}
-          title="Emotes"
-          aria-label="Emotes"
-          className={`chat-emote-btn items-center justify-center rounded-full transition-colors ${
-            showEmotePicker ? "text-strong" : "text-secondary hover:text-body"
-          }`}
-        >
-          <Smiley size="1.1em" weight={showEmotePicker ? "fill" : "bold"} />
-        </button>
-      </div>
-      {counterMax != null && expanded && (
-        <CharCounter
-          length={value.length}
-          max={counterMax}
-          className="absolute right-10 bottom-1 pointer-events-none select-none"
+            color: "var(--chat-text-color, #e8e6e3)",
+            // Collapsed height is the control diameter, so a field you have
+            // clicked away from lines up with the buttons exactly and a long draft
+            // stops eating the chat above it. `fieldSizing: content` grows it up to
+            // this ceiling; the ceiling is what actually animates.
+            // Collapsed = exactly ONE natural line (the same expression the control
+            // diameter is built from), so settling never squeezes the text.
+            maxHeight: expanded ? `calc(${CHAT_FONT} * 7)` : CTL_SIZE,
+            // Scrollable ONLY when expanded. A real draft past the expanded
+            // 7-line ceiling still has to scroll; collapsed, the field holds at
+            // most one line, so there is nothing to scroll to and `auto` could
+            // only ever produce a phantom bar.
+            overflowY: expanded ? "auto" : "hidden",
+            fieldSizing: "content",
+          } as React.CSSProperties}
+        />
+        {/* The placeholder, as an ordinary element so it can actually be
+            truncated: `truncate` = nowrap + hidden + ellipsis, none of which the
+            native ::placeholder honours. Absolutely positioned, so it never
+            contributes to `fieldSizing: content` and cannot change the field's
+            height at any width. Hidden from the a11y tree — the same string is
+            the textarea's aria-label, and announcing it twice is worse than not
+            at all.
+            Only ever visible while the field is EMPTY, which is also the only
+            time the field is guaranteed collapsed (`expanded` = focused AND has
+            text), so a single centred line is the whole story. */}
+        {/* Shown whenever the field is EMPTY — focused or not: focus alone never
+            hides it (only a draft does). */}
+        {!value && note && <RefusalNoteLine note={note} />}
+        {!value && !note && placeholder && (
+          <span
+            aria-hidden="true"
+            // `text-muted`: a raw white-25% placeholder composites to
+            // rgb(78,78,80) on the field — 2.24:1, which fails AA outright. Of the
+            // ladder's rungs, `faint` (1.78:1) is DARKER and the wrong direction;
+            // `muted` lands at 3.84:1 and still reads clearly as a placeholder.
+            className="chat-input-placeholder absolute inset-0 px-4 py-1 leading-tight truncate text-muted pointer-events-none select-none"
+            style={{
+              fontSize: CHAT_FONT,
+              fontFamily: "var(--chat-font-family, inherit)",
+            }}
+          >
+            {placeholder}
+          </span>
+        )}
+        {/* The emote button is the ONLY thing still inside the field, and it stays
+            there on purpose: it acts on the text you are writing, so it belongs in
+            the text's box. Everything that acts on the MESSAGE (tools, destination,
+            attach) now lives outside — which is also what let the field's
+            right-inset rules collapse from a four-way matrix to one. */}
+        <div
+          className="absolute right-2 top-1 bottom-1 flex items-center"
           style={{ fontSize: CHAT_FONT }}
-        />
-      )}
-      {showEmotePicker && (
-        <EmotePicker
-          anchorRef={emoteBtnRef}
-          emotes={emotes}
-          personal={personalEmotes}
-          personalNeedsRelink={personalNeedsRelink}
-          onSelect={(name) => {
-            onChange(value + name + " ");
-            const coarse = typeof window !== "undefined" && window.matchMedia(Q_POINTER_COARSE).matches;
-            if (focusAfterPick === "always" || !coarse) inputRef.current?.focus();
-          }}
-          onClose={() => setShowEmotePicker(false)}
-        />
-      )}
+        >
+          <button
+            ref={emoteBtnRef}
+            type="button"
+            onClick={() => setShowEmotePicker((p) => !p)}
+            onMouseDown={keepFocus}
+            // Reaching for the button (hover / keyboard focus / the press before the
+            // click) starts the picker's first screens — see emotePickerWarm.
+            onPointerEnter={warmPicker}
+            onPointerDown={warmPicker}
+            onFocus={warmPicker}
+            title="Emotes"
+            aria-label="Emotes"
+            className={`tap-hit-44 chat-emote-btn items-center justify-center rounded-full transition-colors ${
+              showEmotePicker ? "text-strong" : "text-secondary hover:text-body"
+            }`}
+          >
+            <Smiley size="1.1em" weight={showEmotePicker ? "fill" : "bold"} />
+          </button>
+        </div>
+        {counterMax != null && expanded && (
+          <CharCounter
+            length={value.length}
+            max={counterMax}
+            className="absolute right-10 bottom-1 pointer-events-none select-none"
+            style={{ fontSize: CHAT_FONT }}
+          />
+        )}
+        {showEmotePicker && (
+          <EmotePicker
+            anchorRef={emoteBtnRef}
+            emotes={emotes}
+            personal={personalEmotes}
+            personalNeedsRelink={personalNeedsRelink}
+            onSelect={(name) => {
+              onChange(value + name + " ");
+              const coarse = typeof window !== "undefined" && window.matchMedia(Q_POINTER_COARSE).matches;
+              if (focusAfterPick === "always" || !coarse) inputRef.current?.focus();
+            }}
+            onClose={() => setShowEmotePicker(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -25,7 +25,7 @@ const platforms = { platforms: [
   { key: "twitch", label: "Twitch", setUp: true, embed: { source: "twitch", on: true }, title: "A stream title", category: "Just Chatting", titleNote: "From Twitch", manageUrl: "https://dashboard.twitch.tv/", setupHref: "/admin/platforms?sub=twitch" },
   { key: "youtube", label: "YouTube", setUp: true, embed: { source: "youtube", on: false }, title: null, category: null, titleNote: "Read while live on YouTube", manageUrl: null, setupHref: "/admin/platforms?sub=youtube" },
   { key: "native", label: "Site player", setUp: true, embed: { source: "native", on: true }, title: null, category: null, titleNote: "Plays the Streamplace stream", manageUrl: null, setupHref: "/admin/platforms?sub=streamplace" },
-  { key: "kick", label: "Kick", setUp: false, embed: null, title: null, category: null, titleNote: "Not set up", manageUrl: null, setupHref: "/admin/platforms?sub=kick" },
+  { key: "kick", label: "Kick", setUp: false, embed: { source: "kick", on: false }, title: null, category: null, titleNote: "Not set up", manageUrl: null, setupHref: "/admin/platforms?sub=kick" },
 ] };
 const doctor = { rows: [{ id: "a", title: "Database", status: "ok" }, { id: "b", title: "Backups", status: "fail" }] };
 
@@ -96,7 +96,8 @@ test("live, income off: graphs and platforms draw, no money is REQUESTED and non
     assert.doesNotMatch(html, /\$/);
     assert.match(html, /A stream title/);
     assert.match(html, /Not set up — set it up/);
-    assert.match(html, /No embed on the site/);
+    assert.doesNotMatch(html, /No embed on the site/, "Kick's embed is a switch like the others (decision 0135)");
+    assert.ok(m.el.querySelector('[data-platform="kick"] [aria-label="Kick on the watch page"]'), "the Kick row carries its embed switch");
     assert.match(html, /1 failing/);
     assert.match(html, /First to look at: Backups/);
   } finally { await m.done(); }
@@ -159,7 +160,7 @@ test("an embed switch writes the ONE setting through the Admin Panel's writer; t
     await act(async () => { tw.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
     await settle();
     assert.ok(calls.includes("PUT /api/admin/instance/player.embedsOff"), calls.join(", "));
-    assert.deepEqual(JSON.parse(bodies[bodies.length - 1]!), { value: ["twitch", "youtube"] }, "the whole list of what is off — this one plus the ones already off");
+    assert.deepEqual(JSON.parse(bodies[bodies.length - 1]!), { value: ["twitch", "youtube", "kick"] }, "the whole list of what is off — this one plus the ones already off");
     const yt = m.el.querySelector('[aria-label="YouTube on the watch page"]') as HTMLButtonElement;
     assert.equal(yt.getAttribute("aria-checked"), "false");
   } finally { await m.done(); }
@@ -190,6 +191,27 @@ test("chat readers: each platform's reader state from the ingest, a failed one w
     assert.match(yt.textContent ?? "", /Failed/);
     assert.equal(yt.querySelector("[data-reader-error]")?.textContent, "Chromium could not start: libnss3.so missing");
     assert.match(m.el.innerHTML, /Chat bot: off/);
+  } finally { await m.done(); }
+});
+
+test("chat readers: each platform's live detection shows as a chip, with why it can't tell and YouTube's auto-stop note", async () => {
+  const at = new Date(now - 60_000).toISOString();
+  serve({ readers: { reachable: true, health: { ...readers.health, liveness: {
+    twitch: { state: "live", since: at, lastAnswerAt: at, scheduledStart: null, evidence: "helix-live", misses: 0, stale: false },
+    youtube: { state: "unknown", since: at, lastAnswerAt: null, scheduledStart: null, evidence: "unrecognized-page", misses: 0, stale: true },
+    kick: null, streamplace: null,
+  } } } });
+  const m = await mount();
+  try {
+    const tw = m.el.querySelector('[data-reader="twitch"] [data-live]')!;
+    assert.equal(tw.getAttribute("data-live"), "live");
+    assert.equal(tw.textContent, "Live");
+    const yt = m.el.querySelector('[data-reader="youtube"] [data-live]')!;
+    assert.equal(yt.getAttribute("data-live"), "unknown");
+    assert.match(yt.textContent ?? "", /Can't tell — YouTube showed a consent or bot-check page/);
+    assert.match(yt.querySelector("[data-live-note]")?.textContent ?? "", /No answer for over 15 min/);
+    assert.match(yt.querySelector("[data-youtube-note]")?.textContent ?? "", /only when auto-stop is on in YouTube Studio/);
+    assert.equal(m.el.querySelector('[data-reader="twitch"] [data-youtube-note]'), null, "the note is YouTube's only");
   } finally { await m.done(); }
 });
 

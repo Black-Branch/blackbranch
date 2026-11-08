@@ -7,7 +7,7 @@ import { donationTtsChars } from "@/app/lib/donationTts";
 import { createSlidingWindowLimiter, ipKey } from "@/app/lib/rateLimit";
 import { resolveTipDisplayName } from "@/app/lib/tipDisplayNameServer";
 import { PAY_MIN_CENTS, PAY_MAX_CENTS } from "@/app/lib/coins";
-import { SITE_CURRENCY } from "@/app/lib/moneyFormat";
+import { SITE_CURRENCY, formatPrice } from "@/app/lib/moneyFormat";
 import { currencyName } from "@/app/lib/currency";
 import { instanceBool } from "@/app/lib/instanceConfigServer";
 import { orderPurpose, pointsOrders } from "@/app/lib/paypalPointsOrder";
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
     // Same range as the Store's card path (billing/points/route.ts) and a tip
     // — the shared PAY_MIN_CENTS/PAY_MAX_CENTS constants, never a copy.
     if (cents < PAY_MIN_CENTS || cents > PAY_MAX_CENTS) {
-      return new Response(`Amount must be between $${PAY_MIN_CENTS / 100} and $${PAY_MAX_CENTS / 100}`, { status: 400 });
+      return new Response(`Amount must be between ${formatPrice(PAY_MIN_CENTS)} and ${formatPrice(PAY_MAX_CENTS)}`, { status: 400 });
     }
     const buyer = (await auth())?.user?.id ?? null;
     if (!buyer) return new Response(`Sign in to buy ${currencyName()}`, { status: 401 });
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (cents < PAY_MIN_CENTS || cents > PAY_MAX_CENTS) {
-    return new Response(`Amount must be between $${PAY_MIN_CENTS / 100} and $${PAY_MAX_CENTS / 100}`, { status: 400 });
+    return new Response(`Amount must be between ${formatPrice(PAY_MIN_CENTS)} and ${formatPrice(PAY_MAX_CENTS)}`, { status: 400 });
   }
 
   const session = await auth();
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
   const rawMsg = typeof body?.message === "string" ? sanitizeChatMessage(body.message, maxMessage + 1) : "";
   if (rawMsg.length > maxMessage) {
     return new Response(
-      `A $${(cents / 100).toFixed(2)} tip carries a message of up to ${maxMessage} characters.`,
+      `A ${formatPrice(cents, SITE_CURRENCY, "minor")} tip carries a message of up to ${maxMessage} characters.`,
       { status: 400 }
     );
   }

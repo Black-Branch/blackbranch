@@ -6,6 +6,8 @@ import SettingsHydrator from "./components/SettingsHydrator";
 import DeviceHealthReporter from "./components/DeviceHealthReporter";
 import ClientErrorReporter from "./components/ClientErrorReporter";
 import ServiceWorkerRegistrar from "./components/ServiceWorkerRegistrar";
+import LiveFavicon from "./components/LiveFavicon";
+import EmoteNameBubble from "./components/EmoteNameBubble";
 import { BackDebugOverlay } from "./components/chrome";
 import { BadgesProvider } from "./lib/BadgesContext";
 import { SponsorClockProvider } from "./lib/SponsorClockContext";
@@ -183,7 +185,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             var _OV=false; try{ _OV=location.pathname==='/chat'||location.pathname==='/overlay/chat'; }catch(e){}
             var _SC=_OV?'ov:':'', _rLS=window.localStorage;
             // Behavior settings these pages never offer follow the SITE live (registry SITE_SCOPED_LS).
-            var _SITE={'chatStyle_mentionSound':1,'chatStyle_mentionHl':1,'chatStyle_upvoteHl':1,'chatStyle_eventHl':1,'chatStyle_spotlight':1,'chatStyle_ownTint':1,'chatStyle_profanityFilter':1,'chatStyle_hideBots':1,'chatStyle_firstMark':1,'chatStyle_unreadDots':1,'chatStyle_mxDeleted':1,'chatStyle_mxEditedTag':1,'chatStyle_mxUnread':1,'chatStyle_mxHideMuted':1,'chatStyle_mxReceipts':1,'chatStyle_mxTyping':1};
+            var _SITE={'chatStyle_mentionSound':1,'chatStyle_mentionHl':1,'chatStyle_upvoteHl':1,'chatStyle_eventHl':1,'chatStyle_spotlight':1,'chatStyle_ownTint':1,'chatStyle_profanityFilter':1,'chatStyle_hideBots':1,'chatStyle_firstMark':1,'chatStyle_unreadDots':1,'chatStyle_mxDeleted':1,'chatStyle_mxEditedTag':1,'chatStyle_mxUnread':1,'chatStyle_mxHideMuted':1,'chatStyle_mxReceipts':1,'chatStyle_mxTyping':1,'chatStyle_mxReturnKey':1};
             // /chat window + /overlay/chat OBS source = isolated "ov:" keyspace (mirrors
             // settingsRegistry.settingGet): a read falls back to the site value and
             // lazily seeds the scoped key, so first paint doesn't flash and the
@@ -247,10 +249,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             }
             var _fw = parseFloat(localStorage.getItem('theme_frameWidth')); if (!isNaN(_fw)) document.documentElement.style.setProperty('--frame-width', _fw + 'px');
             var _pgap = parseFloat(localStorage.getItem('theme_panelGap')); if (!isNaN(_pgap)) document.documentElement.style.setProperty('--panel-gap', _pgap + 'px');
+            /* Edge to edge: the mark only; the phone rule in globals.css sets --panel-gap: 0 and no frame under 608 px. */
+            if (localStorage.getItem('theme_phoneEdgeToEdge') === '1') document.documentElement.classList.add('phone-edge');
           } catch(e) {}
           try {
             var _fs = localStorage.getItem('chatFontSize');
             if (_fs) document.documentElement.style.setProperty('--chat-font-size', _fs);
+            if (localStorage.getItem('chatStyle_mxPhoneText') === '16') document.documentElement.style.setProperty('--mx-font-size', '1rem');
             var _lh = parseFloat(localStorage.getItem('chatStyle_lineHeight'));
             if (_lh > 0) document.documentElement.style.setProperty('--chat-line-height', String(_lh)); // guard mirrors registry flt(_, n>0)
             var _fw = parseInt(localStorage.getItem('chatStyle_fontWeight'), 10);
@@ -259,6 +264,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             if (_tc) document.documentElement.style.setProperty('--chat-text-color', _tc);
             var _tsc = localStorage.getItem('chatStyle_tsColor');
             if (_tsc) document.documentElement.style.setProperty('--chat-ts-color', _tsc);
+            var _mnc = localStorage.getItem('chatStyle_mentionColor');
+            if (_mnc) document.documentElement.style.setProperty('--chat-mention', _mnc);
+            var _hlc = localStorage.getItem('chatStyle_highlightColor');
+            if (_hlc) document.documentElement.style.setProperty('--chat-highlight', _hlc);
             var _es = parseFloat(localStorage.getItem('chatStyle_emoteSize'));
             if (_es > 0) document.documentElement.style.setProperty('--chat-emote-size', _es + 'em'); // guard mirrors registry flt(_, n>0)
             var _eo = parseInt(localStorage.getItem('chatStyle_emoteOverlap'), 10);
@@ -281,7 +290,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             var _tsf = localStorage.getItem('chatStyle_tsFont');
             if (_tsf) document.documentElement.style.setProperty('--chat-ts-font', _tsf);
             var _tss = parseFloat(localStorage.getItem('chatStyle_tsSize'));
-            if (_tss > 0) document.documentElement.style.setProperty('--chat-ts-size', 'calc(var(--chat-font-size, 0.875rem) * ' + _tss + ')');
+            if (_tss > 0) { document.documentElement.style.setProperty('--chat-ts-size', 'calc(var(--chat-font-size, 0.875rem) * ' + _tss + ')'); document.documentElement.style.setProperty('--chat-ts-scale', String(_tss)); }
             var _us = parseFloat(localStorage.getItem('chatStyle_usernameSat'));
             if (!isNaN(_us)) document.documentElement.style.setProperty('--chat-username-sat', String(_us));
             var _sh = localStorage.getItem('chatStyle_shadow');
@@ -531,6 +540,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <BackDebugOverlay />
         <SettingsHydrator />
         <ServiceWorkerRegistrar />
+        {/* The red dot on the tab icon while live (ticket #190). */}
+        <LiveFavicon />
+        {/* A tap on an emote shows its name (phones have no hover title). */}
+        <EmoteNameBubble />
         {/* The inert target for page-presentation windows:
             there is no single shell element otherwise — providers render
             children bare — and inert applies to the flat-tree subtree, so a

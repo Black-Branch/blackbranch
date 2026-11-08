@@ -135,11 +135,11 @@ test("a state stamp on a full disk keeps what it held: the federation switch is 
   try {
     // The switch is on, and the last render recorded it for the times the database is down.
     writeFileSync(path.join(h.fake, "cfg/matrix.federation"), "true");
-    mkdirSync(path.join(h.home, "state"));
+    mkdirSync(path.join(h.home, "state"), { recursive: true });
     writeFileSync(path.join(h.home, "state/federation"), "on\n");
     runLimited(h, 0, ["render"]);
     assert.equal(readFileSync(path.join(h.home, "state/federation"), "utf8"), "on\n", "the stamp was emptied by a write that failed");
-    assert.deepEqual(readdirSync(path.join(h.home, "state")).filter((f) => f !== "federation"), [], "no half-written stamp left beside it");
+    assert.deepEqual(readdirSync(path.join(h.home, "state")).filter((f) => f !== "federation" && f !== "community-name"), [], "no half-written stamp left beside it");
   } finally { rmSync(h.home, { recursive: true, force: true }); }
 });
 

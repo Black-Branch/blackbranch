@@ -31,12 +31,11 @@ export function oneLine(err) {
  * @param {{
  *   starters: Record<string, () => Promise<object>>,
  *   choose: () => { enabled: string[], unknown: string[], note: string, signatures?: Record<string, string> },
- *   onApplied?: (name: string) => void,   // a reader started, or stopped because it was switched off
  *   now?: () => number,
  *   log?: Pick<Console, 'log'|'warn'|'error'>,
  * }} opts
  */
-export function createPlatformStarter({ starters, choose, onApplied = () => {}, now = () => Date.now(), log = console }) {
+export function createPlatformStarter({ starters, choose, now = () => Date.now(), log = console }) {
   const handles = new Map(); // name → the started reader's handle
   const sigs = new Map();    // name → the values its reader was started with
   const states = new Map();  // name → { state, since, error }
@@ -68,7 +67,6 @@ export function createPlatformStarter({ starters, choose, onApplied = () => {}, 
       handles.set(name, h);
       sigs.set(name, sig);
       setState(name, 'running');
-      onApplied(name);
       log.log(`[main] ${name} started`);
     } catch (err) {
       const error = oneLine(err);
@@ -89,19 +87,15 @@ export function createPlatformStarter({ starters, choose, onApplied = () => {}, 
       lastNote = platforms.note;
       log[platforms.unknown.length ? 'warn' : 'log'](`[main] ${platforms.note}${why ? ` (${why})` : ''}`);
     }
-    // A reader switched off has applied its switch as surely as one that started: onApplied for
-    // both, or the settings report keeps the boot value and the panel waits for a restart.
     for (const name of [...handles.keys()]) {
       if (!wanted.includes(name)) {
         await stopOne(name, 'switched off in the settings');
         setState(name, 'off');
-        onApplied(name);
       }
     }
     for (const name of Object.keys(starters)) {
       if (!wanted.includes(name) && !handles.has(name) && states.get(name)?.state !== 'off') {
         setState(name, 'off');
-        onApplied(name);
       }
     }
     for (const name of wanted) {

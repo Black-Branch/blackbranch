@@ -13,6 +13,13 @@ import type { NextRequest } from "next/server";
 // valid there), and the mxc:// shape guard. The routes keep only their
 // route-specific persistence (Matrix profile write / site.users row).
 
+const TYPE_WORDS: Record<string, string> = { "image/png": "PNG", "image/jpeg": "JPEG", "image/gif": "GIF", "image/webp": "WebP" };
+/** "PNG, JPEG or WebP" for the refusal. */
+function typeWords(mimes: readonly string[]): string {
+  const w = mimes.map((m) => TYPE_WORDS[m] ?? m);
+  return w.length > 1 ? `${w.slice(0, -1).join(", ")} or ${w.at(-1)}` : (w[0] ?? "");
+}
+
 export type MediaUploadResult =
   | { ok: true; mx: MatrixSession; contentUri: string }
   | { ok: false; response: Response };
@@ -23,12 +30,15 @@ export async function uploadImageToMatrixMedia(
     field,
     maxBytes,
     cooldown,
+    mimes,
   }: {
     /** Multipart field name — also the fallback filename stem. */
     field: string;
     maxBytes: number;
     /** Per-route instance, so e.g. an avatar upload doesn't spend the banner slot. */
     cooldown: ReturnType<typeof createCooldown>;
+    /** The image types this route takes, read from the bytes; omitted = every type hasValidImageMagic knows. */
+    mimes?: readonly string[];
   }
 ): Promise<MediaUploadResult> {
   const mx = await getMatrixSession().catch(() => null);
@@ -75,6 +85,9 @@ export async function uploadImageToMatrixMedia(
 
   // Derive MIME from magic bytes rather than trusting the client-provided type
   const mime = sniffImageMime(new Uint8Array(buffer));
+  if (mimes && !mimes.includes(mime)) {
+    return { ok: false, response: new Response(`Images only (${typeWords(mimes)})`, { status: 400 }) };
+  }
   const fileName = file instanceof File ? file.name : `${field}.png`;
 
   // Upload to the session's own homeserver's media repo. This request SENDS megabytes, so it gets a

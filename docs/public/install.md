@@ -172,7 +172,12 @@ again, and you are back on the same page.
    own account (so they are yours), and the federation switch, off by default: no other Matrix
    server can reach yours, and yours reaches none. You can switch it on later. And **who can join**:
    *anyone* (open sign-up: viewers make their own accounts) or *only accounts I make* (closed). There
-   is no default: the page asks.
+   is no default: the page asks. The page also lists the community's first channels as names you can
+   edit: `#general` and `#forum` are made right away; the rest (`#announcements` and `#off-topic` to
+   start with) are made by the server's first community run, within about 10 minutes of finishing
+   setup, without you opening any other Matrix app. From then on Admin Panel → Site → Community
+   manages the channels, categories and roles, and the server keeps the rooms the way that page sets
+   them ([operate.md](operate.md#the-communitys-rooms-kept-by-the-server)).
 8. **Finish.** The quiet hour (when backups and security updates run), whether to send anonymous bug
    reports to the project (off by default), optional **phone alerts** (two private
    [ntfy](https://ntfy.sh) topics, one for urgent problems and one for the rest; the setup page takes both or
@@ -185,7 +190,7 @@ again, and you are back on the same page.
 
 Until you finish, nobody can sign up on your chat server; your own account is made by page 1. After
 that, sign-up follows your answer to *who can join* (the Finish page shows it). To change it later:
-Admin Panel → Site → Site → Community → **Let people make accounts** → Yes or No.
+Admin Panel → Site → Community, card Federation and sign-up: **Let people make accounts** → Yes or No.
 
 The setup link expired, or you lost it before page 1? On the server: `sudo blackbranch setup-link`
 prints it again while no account exists; `sudo blackbranch setup-link --new` makes a fresh one.
@@ -197,22 +202,34 @@ prints it again while no account exists; `sudo blackbranch setup-link --new` mak
   **Doctor**.
 - Open the **Doctor** (`https://example.com/admin/doctor`, or `sudo blackbranch doctor` on the
   server). Every row should be green; each red one has a one-line fix. Rows for parts you skipped say so.
-- Read [operate.md](operate.md): backups, restores, updates, password resets, moving to a bigger server.
+- Optional: give the site a mail server in **Admin Panel → Site → Site, card Mail** (your mail provider's SMTP
+  details), then run `sudo blackbranch mail test you@example.com`. With mail, people can reset a
+  forgotten password themselves and a new account confirms its address; without it, neither
+  ([operate.md](operate.md#mail-and-password-resets)).
+- Optional: let people sign in with Google, Discord, Twitch or your own OpenID server in **Admin
+  Panel → Site → Site, card Sign-in providers**: each one switched on adds a "Continue with …" button
+  ([operate.md](operate.md#sign-in-with-google-discord-twitch-or-your-own-server)).
+- Read [operate.md](operate.md): backups, restores, updates, mail and password resets, moving to a bigger server.
 
 ## Known limits of this preview
 
-- **Mail:** the site sends no email yet. Sign-up needs no address; a forgotten password is reset on
-  the server ([operate.md](operate.md#password-resets)).
+- **Mail** is optional and sends only the sign-in service's messages (password recovery, address
+  checks); the site itself sends no email. Without a mail server, a forgotten password is reset on
+  the server ([operate.md](operate.md#mail-and-password-resets)).
 - **YouTube** reads chat only; posting into YouTube chat comes later. Viewers cannot link a YouTube
   account to their site account.
 - **OBS control** is one browser source, the rig page, which connects out from OBS, so it works from
   any network: the bot's voice, its avatar, scene switching and the timer's pause scene. A browser
   source cannot show or hide OBS's other sources or mute audio; those are not offered. The store's
   sound clips are off on a fresh install. The on-stream overlays (alerts, support bar, reminder bubble, poll, sticker) are
-  separate browser sources, listed with their addresses in Admin Panel → Utility → Overlays.
+  separate browser sources, listed with their addresses in Admin Panel → Utility → OBS, card Overlays.
 - **The Discord bridge** comes later.
-- **The Forums tab** says forums are not available: the site reads forum rooms through a read-only
-  account that the installer does not make yet. The `#forum` room itself works in the community.
+- **The community's rooms:** a change made in Element is never taken into the Admin Panel yet. With
+  **Keep changes made in Element** on, it is only listed, and the panel's own changes to a channel
+  that already exists wait too (new channels, roles, who is in which channel and bans still apply).
+  A supporter enters a channel for supporters by accepting the invite the community account sends.
+  A ban or timeout given while the server is in the middle of a run reaches the rooms on the next
+  run, at most 10 minutes later.
 - **Updates:** releases are published on the beta channel only; the stable channel has none yet. A
   server installed from a clone follows stable until you run `sudo blackbranch update --channel beta`,
   and until then it sees no new release. Your install still works either way.

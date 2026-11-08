@@ -8,9 +8,12 @@
 // doctor's. (Updates that go back: install/update.test.mjs, "alerts".)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, renameSync, mkdtempSync, copyFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fakeHome } from "./scratch-home.mjs";
@@ -55,9 +58,9 @@ function alertHome(channel = {}) {
 }
 const EMAIL = (h) => `'cat > ${h.mail}; printf %s "$BB_ALERT_SUBJECT" > ${h.subject}'`;
 // The nightly backup refused before anything ran: the target is not usable.
-const failingBackup = (h) => {
+const failingBackup = (h, extra = {}) => {
   const t = path.join(h.home, "state/target"); writeFileSync(t, "BK_TARGET=floppy\n");
-  return h.run({ BB_BACKUP_TARGET_FILE: t }, "backup", "--scheduled");
+  return h.run({ BB_BACKUP_TARGET_FILE: t, ...extra }, "backup", "--scheduled");
 };
 
 test("no channel: the failed nightly backup is in the log only, and the backup's own outcome is unchanged", async () => {
@@ -67,7 +70,7 @@ test("no channel: the failed nightly backup is in the log only, and the backup's
     assert.equal(r.status, 1, "the backup still fails");
     assert.match(r.stderr, /nothing was backed up: the target is not usable/);
     assert.match(r.stderr, /ALERT: example\.test: the nightly backup failed\n {3}The nightly backup failed at \S+\. The last good backup: none yet\./);
-    assert.match(r.stdout + r.stderr, /no alert channel is set \(BB_ALERT_NTFY_URL or BB_ALERT_EMAIL_COMMAND in \.env\): this alert is in the log only/);
+    assert.match(r.stdout + r.stderr, /no alert channel is set \(no alerts topic in Admin Panel → Site → Site, card Alerts to your phone, and no BB_ALERT_NTFY_URL or BB_ALERT_EMAIL_COMMAND in \.env\): this alert is in the log only/);
     assert.equal(h.curlArgv(), "", "nothing was sent anywhere");
   } finally { rmSync(h.home, { recursive: true, force: true }); }
 });
@@ -88,6 +91,88 @@ test("ntfy: the failed nightly backup is published once, in fixed words; the top
     for (const where of [r.stdout, r.stderr, h.curlArgv(), h.calls()]) assert.ok(!where.includes(TOPIC), "the topic was printed or put on a command line");
     assert.ok(h.curlArgv().length > 0, "vacuity: curl's command line was recorded");
   } finally { n.close(); rmSync(h.home, { recursive: true, force: true }); }
+});
+
+// The site's own alerts topic (Admin Panel → Site → Site, card Alerts to your phone) is the box's
+// channel too when .env names no topic: read inside the stream-api image (alerts/topic.cjs), the last
+// one read kept root-only for when the database is down.
+const storedTopic = (h, wake, quiet = "") => writeFileSync(path.join(h.fake, "alert-topic-out"), `NTFY_WAKE=${wake}\nNTFY_QUIET=${quiet}\n`);
+
+test("no host topic, a topic saved in the Admin Panel: the failed nightly backup is pushed to it once; the topic never reaches the output", async () => {
+  const n = await ntfy();
+  const h = alertHome();
+  try {
+    storedTopic(h, n.url);
+    const r = await failingBackup(h);
+    assert.equal(r.status, 1, "the backup still fails");
+    assert.equal(n.got.length, 1, "published once, to the site's topic");
+    assert.equal(n.got[0].url, `/${TOPIC}`); assert.equal(n.got[0].priority, "4");
+    assert.equal(n.got[0].title, "Black Branch example.test: the nightly backup failed");
+    assert.match(r.stdout + r.stderr, /alert sent: ntfy/);
+    assert.match(h.calls(), /compose run --rm --no-deps -T -v \S+\/release\/install\/alerts:\/bb-alerts:ro --entrypoint node stream-api \/bb-alerts\/topic\.cjs/);
+    for (const where of [r.stdout, r.stderr, h.curlArgv(), h.calls()]) assert.ok(!where.includes(TOPIC), "the topic was printed or put on a command line");
+    const cache = path.join(h.home, "state/alert-topic.env");
+    assert.equal(statSync(cache).mode & 0o777, 0o600, "the topic last read is root's only");
+  } finally { n.close(); rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("the site's topics: urgent alerts to the urgent one, the rest to the quiet one; the database down uses the ones last read (restart, retry)", async () => {
+  const wake = await ntfy(), quiet = await ntfy();
+  const h = alertHome();
+  try {
+    storedTopic(h, wake.url, quiet.url);
+    let r = await h.run({}, "alerts", "test");
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(quiet.got.length, 1, "a test alert (priority 3) goes to the quiet topic"); assert.equal(wake.got.length, 0);
+    r = await failingBackup(h);
+    assert.equal(wake.got.length, 1, "a failed backup (priority 4) goes to the urgent topic");
+    // Restart with the database down: the reader cannot run; the topics last read still carry the alert.
+    rmSync(path.join(h.fake, "alert-topic-out"));
+    r = await failingBackup(h, { FAKE_ALERT_TOPIC_STATUS: "1" });
+    assert.equal(r.status, 1);
+    assert.equal(wake.got.length, 2, "sent through the topic last read");
+    // Retry: the reader works again and now finds no topic (removed in the Admin Panel) — logged only.
+    r = await failingBackup(h);
+    assert.equal(wake.got.length, 2, "a removed topic is not used from the cache");
+    assert.match(r.stdout + r.stderr, /this alert is in the log only/);
+  } finally { wake.close(); quiet.close(); rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("a topic in .env wins over the site's: the site's is never read", async () => {
+  const host = await ntfy(), site = await ntfy();
+  const h = alertHome({ BB_ALERT_NTFY_URL: host.url });
+  try {
+    storedTopic(h, site.url);
+    await failingBackup(h);
+    assert.equal(host.got.length, 1); assert.equal(site.got.length, 0);
+    assert.doesNotMatch(h.calls(), /bb-alerts/);
+  } finally { host.close(); site.close(); rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("alerts/topic.cjs resolves the two topics as stream-api does (env > stored, each standing in for the other), decrypted with its key", () => {
+  const app = mkdtempSync(path.join(tmpdir(), "bb-app-"));
+  try {
+    for (const f of ["instance-config.js", "instanceSchema.generated.js"]) copyFileSync(path.join(root, "stream-api", f), path.join(app, f));
+    const { encryptSecret } = createRequire(import.meta.url)(path.join(app, "instance-config.js"));
+    const mk = randomBytes(32);
+    const secrets = [{ key: "ntfy.quietUrl", ciphertext: encryptSecret("ntfy.quietUrl", "https://ntfy.example.test/quiet-topic", mk) }];
+    mkdirSync(path.join(app, "node_modules/pg"), { recursive: true });
+    writeFileSync(path.join(app, "node_modules/pg/index.js"), `const secrets = ${JSON.stringify(secrets)};
+class Pool { async query(sql) { return { rows: sql.includes("instance_secrets") ? secrets : [] }; } async end() {} }
+module.exports = { Pool };\n`);
+    const run = (env) => spawnSync(process.execPath, [path.join(here, "alerts/topic.cjs")], { encoding: "utf8", env: { PATH: process.env.PATH, BB_APP_DIR: app, ...env } });
+    let r = run({ INSTANCE_MASTER_KEY: mk.toString("hex") });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, "NTFY_WAKE=https://ntfy.example.test/quiet-topic\nNTFY_QUIET=https://ntfy.example.test/quiet-topic\n", "one topic takes both");
+    r = run({ INSTANCE_MASTER_KEY: mk.toString("hex"), NTFY_WAKE_URL: "https://ntfy.example.test/wake/" });
+    assert.equal(r.stdout, "NTFY_WAKE=https://ntfy.example.test/wake\nNTFY_QUIET=https://ntfy.example.test/quiet-topic\n");
+    // Not an http(s) address: not a topic.
+    r = run({ INSTANCE_MASTER_KEY: mk.toString("hex"), NTFY_WAKE_URL: "file:///etc/passwd" });
+    assert.equal(r.stdout, "NTFY_WAKE=https://ntfy.example.test/quiet-topic\nNTFY_QUIET=https://ntfy.example.test/quiet-topic\n");
+    // A key that does not decrypt is an error (the host then uses the topic last read), never an empty topic.
+    r = run({ INSTANCE_MASTER_KEY: randomBytes(32).toString("hex") });
+    assert.notEqual(r.status, 0); assert.equal(r.stdout, "");
+  } finally { rmSync(app, { recursive: true, force: true }); }
 });
 
 test("email: the command reads the whole message, headers first; $BB_ALERT_SUBJECT holds the subject", async () => {
@@ -241,7 +326,7 @@ test("the daily check's floors are the doctor's, and its timer and unit ship and
   assert.match(read("systemd/blackbranch-check.service"), /\nExecStart=\/usr\/local\/bin\/blackbranch alerts check\n/);
   const timer = read("systemd/blackbranch-check.timer");
   assert.match(timer, /\nOnCalendar=\*-\*-\* 09:00:00\n/); assert.match(timer, /\nPersistent=true\n/); assert.match(timer, /\nUnit=blackbranch-check\.service\n/);
-  assert.match(bb, /\nBUNDLE_UNITS=\([^)]*blackbranch-check\.service blackbranch-check\.timer\)/);
+  assert.match(bb, /\nBUNDLE_UNITS=\([^)]*blackbranch-check\.service blackbranch-check\.timer[\s)]/);
   assert.match(bb, /systemctl is-enabled -q blackbranch-check\.timer 2>\/dev\/null \|\| systemctl enable -q --now blackbranch-check\.timer/);
   // The address reaches curl on a descriptor, never its command line; the command never sees argv either.
   assert.match(bb, /-K <\(printf 'url = "%s"\\n' "\$url"\)/);

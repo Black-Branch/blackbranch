@@ -38,5 +38,5 @@ test("HomeView signed in renders the left column with the card, not the sign-in 
   }));
   assert.ok(!html.includes("<header"), "signed in: no pitch header");
   assert.ok(html.includes('data-home-left="card"'), "the left column is the card slot");
-  assert.ok(html.includes("md:grid-cols-[minmax(240px,300px)_1fr]"), "two columns when signed in too");
+  assert.ok(html.includes("@[36.5rem]:grid-cols-[minmax(240px,300px)_1fr]"), "two columns when signed in too, where the pane has room");
 });

@@ -124,7 +124,7 @@ export default function UpdatesPanel() {
             {check?.refused
               ? <>It cannot be applied on this box: {check.refused}</>
               : avail.security
-                ? <>A security release applies itself at the quiet hour (Site → Running the site), never while the stream is live. Apply it now to not wait.</>
+                ? <>A security release applies itself at the quiet hour (Admin Panel → Site → Site, card Running the site), never while the stream is live. Apply it now to not wait.</>
                 : <>A feature release waits for you. A backup is made first; the site is down for a few minutes; if the new release fails its health check the box goes back to this one and its data.</>}
           </p>
         </section>

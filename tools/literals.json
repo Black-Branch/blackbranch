@@ -39,7 +39,8 @@
         "@paypal\\.com$": "PayPal's own sender addresses, which its webhook payloads carry",
         "@blackbranch\\.app$": "the project's own addresses",
         "\\.service$": "a systemd template unit (name@instance.service), not an address",
-        "^git@": "an ssh git remote, not an address"
+        "^git@": "an ssh git remote, not an address",
+        "^(?:anton@korkork\\.com|astigma@astigmatic\\.com|cody@zone38\\.net|diner@fontdiner\\.com|impallari@gmail\\.com|luciano@latinotype\\.com|mail@iginomarini\\.com|peter\\.hull@oikoi\\.com|team@latofonts\\.com|vern@newtypography\\.co\\.uk|wmk69@o2\\.pl)$": "the font designers' addresses in the copyright notices of the fonts the site bundles (web/app/fonts/**/licenses/): the OFL and Apache licences require those notices to travel unchanged with every copy. Exactly these addresses; a new font's notice adds its own here, by hand"
       } },
     { "name": "live payment key",
       "re": "\\b(?:sk|rk)_live_[a-z0-9]{12,}",

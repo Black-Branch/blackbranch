@@ -8,10 +8,12 @@
 // that row — so a COPY of the cookie taken before any of them authorizes nothing afterwards.
 // Without this check the copy would keep working until the JWT expired.
 //
-// Four answers:
+// Five answers:
 //   live        — the row exists for this account, and the account is not deleted.
 //   revoked     — no such row (or no session id at all: a JWT older than per-session rows, which
-//                 every sign-in since migration v24 carries), or the account is deleted.
+//                 every sign-in since migration v24 carries). Signed out; the Matrix token route
+//                 tells the browser to KEEP its crypto store (matrixSession.ts).
+//   deleted     — the account is deleted. Signed out, and the browser wipes its stores.
 //   unavailable — the database did not answer. Fails CLOSED: no user, and the shared guards answer
 //                 503 so a client retries rather than treating it as a sign-out. Never a throw:
 //                 @auth/core clears the session cookie when the callback throws, which would sign
@@ -27,7 +29,7 @@ import { federatedSessionAllowed } from "./federatedSignInSwitch.ts";
 //   refused     — the account is on another Matrix server that the sign-in policy no longer admits
 //                 (federatedSignInSwitch.ts). Signed out, but not revoked: the row is kept and the
 //                 browser's crypto store is left alone, so re-opening the server restores it.
-type SiteSessionState = "live" | "revoked" | "unavailable" | "refused";
+type SiteSessionState = "live" | "revoked" | "deleted" | "unavailable" | "refused";
 
 type Query = (sql: string, params: unknown[]) => Promise<{ rows: { deleted: boolean }[] }>;
 const defaultQuery: Query = (sql, params) => pool.query<{ deleted: boolean }>(sql, params);
@@ -38,7 +40,7 @@ async function siteSessionState(sub: unknown, sessionId: unknown, query: Query, 
   if (typeof sub !== "string" || !sub) return "revoked";
   // A malformed id is refused here: sent to the uuid column it would error, and read as "unavailable".
   if (typeof sessionId !== "string" || !UUID.test(sessionId)) return "revoked";
-  if (isMarkedDeleted(sub)) return "revoked";
+  if (isMarkedDeleted(sub)) return "deleted";
   // Asked on every request, from memory: a server the policy stops admitting loses access at once.
   if (!allowed(sub)) return "refused";
   try {
@@ -48,7 +50,8 @@ async function siteSessionState(sub: unknown, sessionId: unknown, query: Query, 
        WHERE s.session_id = $1 AND s.matrix_id = $2`,
       [sessionId, sub],
     );
-    return rows[0] && !rows[0].deleted ? "live" : "revoked";
+    if (!rows[0]) return "revoked";
+    return rows[0].deleted ? "deleted" : "live";
   } catch {
     return "unavailable";
   }

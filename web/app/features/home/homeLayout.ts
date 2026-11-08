@@ -12,7 +12,8 @@ export type HomeWidgetDef = {
   title: string;
   /** The title below `md` (the phone): the VODs widget is "Last stream" there. */
   narrowTitle?: string;
-  /** Across the whole grid (the status card). */
+  /** Its own full-width row above the list grid (the status card) — never a col-span-full
+   *  inside it, which would keep auto-fit's empty tracks open (#237). */
   full?: true;
 };
 

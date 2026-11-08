@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { actionFor, classify, classifyWith, compileTerms, BLOCKLIST } from "./blacklist.ts";
+import { actionFor, classify, classifyWith, compileTerms, termRegex, BLOCKLIST } from "./blacklist.ts";
 import { stripComments } from "./testSource.ts";
 
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -92,11 +92,56 @@ test("plural forms of a listed term are the same term", () => {
   // and a y-ending term pluralizes as -ies.
   const severe = BLOCKLIST.find((e) => e.severity === 4)!;
   assert.equal(classify(`${severe.term}s`).action, "block", "plural bypassed the filter");
-  assert.equal(classify(`${severe.term}es`).action, "block", "es-plural bypassed the filter");
+  // "es" is a plural only after s, x, z, ch, sh or o — pin it on a list term
+  // that takes it, so the es branch cannot silently disappear.
+  const esTerm = BLOCKLIST.find((e) => e.severity >= 2 && /^[a-z]+(?:[sxzo]|ch|sh)$/.test(e.term))!;
+  assert.notEqual(classify(`${esTerm.term}es`).action, "allow", "es-plural bypassed the filter");
   assert.equal(classify(`${severe.term}s`.split("").join(" ")).action, "block", "spaced plural bypassed the filter");
   const yTerm = BLOCKLIST.find((e) => e.term.endsWith("y") && /^[a-z]+$/.test(e.term));
   if (yTerm) {
     assert.notEqual(classify(`${yTerm.term.slice(0, -1)}ies`).action, "allow", "ies-plural bypassed the filter");
+  }
+});
+
+test("\"es\" is a plural only after s, x, z, ch, sh or o (spic does not match Spices)", () => {
+  // Prod 2026-10-29: three "Pumpkin Spices ..." lines were held as the level-4
+  // racial term "spic"; the old tail let an "e" in before the plural "s" after
+  // any stem. Mirrors stream-api/blacklist.test.js.
+  for (const innocent of ["Pumpkin Spices", "spices", "spice", "spiced", "Spices are great"]) {
+    assert.equal(classify(innocent).action, "allow", `"${innocent}" was flagged`);
+  }
+  for (const hit of ["spic", "spics", "s.p.i.c.s", "you spics there"]) {
+    assert.equal(classify(hit).action, "block", `"${hit}" got through`);
+  }
+  assert.equal(classify("beaner").action, "block");
+  assert.equal(classify("beaners").action, "block");
+  // An "o" stem keeps its "-oes" plural (a severity-3 term: held).
+  assert.equal(classify("negroes").action, "hold");
+  assert.equal(classify("negros").action, "hold");
+  // Hissing stems keep "es", with separator tolerance; other stems never take it.
+  const re = (t: string) => termRegex(t, "i")!;
+  const esPlurals: [string, string][] = [["box", "boxes"], ["class", "classes"], ["buzz", "buzzes"],
+    ["church", "churches"], ["wish", "wishes"], ["hero", "heroes"], ["box", "b o x e s"]];
+  for (const [stem, plural] of esPlurals) {
+    assert.equal(re(stem).test(plural), true, `"${stem}" missed "${plural}"`);
+  }
+  assert.equal(re("slur").test("slures"), false);
+  assert.equal(re("tranny").test("trannies"), true);
+  assert.equal(re("tranny").test("trannys"), true);
+});
+
+test("restart: a rebuilt override list keeps the plural rule", () => {
+  // The active list is recompiled from mod overrides on every load; the
+  // compiled entries must carry the same rule as the shipped ones.
+  const patterns = compileTerms([{ term: "spic", severity: 4 }]);
+  assert.equal(classifyWith(patterns, "Pumpkin Spices latte").action, "allow");
+  assert.equal(classifyWith(patterns, "s p i c s").action, "block");
+});
+
+test("retry: the same line classified twice gets the same verdict", () => {
+  for (let i = 0; i < 2; i++) {
+    assert.equal(classify("Pumpkin Spices").action, "allow", `attempt ${i + 1}`);
+    assert.equal(classify("spics").action, "block", `attempt ${i + 1}`);
   }
 });
 

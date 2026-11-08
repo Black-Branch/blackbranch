@@ -94,10 +94,11 @@ test("the three display readers go through the one helper", () => {
 const BOTH_TABLES = [
   "app/api/auth/link/streamplace/callback/route.ts",
   "app/api/mod/identity/resolve/route.ts",
-  "app/api/mod/purge/route.ts",
   "app/lib/boards.ts",
   "app/lib/canonicalIdentity.ts",
   "app/lib/identitySpan.ts",
+  // The purge route's every-identity read, moved into its testable lib unchanged (A3-03): not a new reader.
+  "app/lib/modPurge.ts",
   "app/lib/platformAccountLink.ts",
   "app/lib/platformMod/shared.ts",
   "lib/socialCredit.ts",

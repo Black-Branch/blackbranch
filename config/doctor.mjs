@@ -30,11 +30,20 @@
  * @property {'ok'|'none'|'missing'} hostState  none = not a bundle install; missing = a bundle not checked yet
  * @property {any} site       site facts, or null
  * @property {string|null} siteError  why the site's facts are missing (null when present)
+ * @property {boolean} [setupRunning]  the update's run: setup has not finished (the doctor reads host.setup)
  */
 
 export const DOCTOR = (() => {
   /** The release's database version: the newest migration it ships (install/doctor.test.mjs). */
-  const SCHEMA_VERSION = 164;
+  const SCHEMA_VERSION = 176;
+  // Where a stuck operator gets help: the project's ONE copy of these addresses. install.sh's summary
+  // reads the three lines below by their text (help_line), so each stays one quoted literal.
+  const HELP_DOCS = 'https://blackbranch.app/docs/';
+  const HELP_DISCORD = 'https://discord.gg/uFJbHMbaE';
+  const HELP_REPORT = 'sudo blackbranch doctor --report';
+  const HELP = Object.freeze({ docs: HELP_DOCS, discord: HELP_DISCORD, report: HELP_REPORT });
+  /** The one help line: the install summary, the doctor's printout and the Admin Panel's Doctor. */
+  const helpLine = () => `Need help? Guides: ${HELP_DOCS} · Ask: ${HELP_DISCORD} · Attach the report from ${HELP_REPORT}`;
   const MIN_MEMORY_MIB = 3600; // a "4 GB" server reports a little less than 4096 MiB
   const MIN_DISK_FREE_PCT = 15;
   const MIN_CERT_DAYS = 14;
@@ -42,6 +51,8 @@ export const DOCTOR = (() => {
   const MAX_VERIFY_AGE_D = 8; // weekly, with a day's slack
   const FEED_QUIET_H = 72; // a feed not read for 3 days is said out loud
   const INGEST_QUIET_MIN = 15; // stream-ingest reports to stream-api at least every 5 minutes
+  const RUN_QUIET_MIN = 30; // the community reconciler's timer runs every 10 minutes
+  const RUN_LIMIT_MIN = 20; // a run longer than its unit's limit crashed (web community/runLimit.ts RUN_LIMIT_MS)
   /** The checks an update can affect: the update's health check needs each of them not to fail
    *  (and the site's own facts to be there). Evaluated by the release being checked. */
   const UPDATE_CHECKS = ['door.answers', 'db.reachable', 'db.schema', 'db.vector', 'matrix.synapse', 'matrix.mas', 'matrix.issuer',
@@ -50,10 +61,13 @@ export const DOCTOR = (() => {
   const AREAS = ['Box', 'Front door', 'Services', 'Database', 'Matrix', 'Secrets', 'Modules', 'Media', 'Payments', 'Platforms', 'Alerts', 'Backups', 'Updates'];
   const NAME_LABEL = { site: 'the site', api: 'api.', matrix: 'matrix.' };
   const PLATFORM_LABEL = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube', streamplace: 'Streamplace' };
+  /** The sign-in provider slots: [slot, its row's name, who answers its discovery]. */
+  const SIGNIN_SLOTS = [['google', 'Google', 'Google'], ['discord', 'Discord', 'Discord'], ['twitch', 'Twitch', 'Twitch'], ['oidc', 'your OpenID server', 'your OpenID server']];
+  const SETUP_WAITING = 'waiting for setup to finish';
 
   const ok = (detail = '') => ({ status: 'ok', detail });
   const fail = (detail, fix) => ({ status: 'fail', detail, ...(fix ? { fix } : {}) });
-  const warn = (detail) => ({ status: 'warn', detail });
+  const warn = (detail, fix) => ({ status: 'warn', detail, ...(fix ? { fix } : {}) });
   const grey = (detail) => ({ status: 'grey', detail });
   const list = (xs) => xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
   const names = (xs) => list(xs.map((n) => NAME_LABEL[n] || n));
@@ -61,6 +75,12 @@ export const DOCTOR = (() => {
   const hoursSince = (h, at) => { const n = Date.parse(h.at), t = Date.parse(at); return Number.isNaN(n) || Number.isNaN(t) ? null : Math.floor((n - t) / 3_600_000); };
   const minutesWords = (m) => m < 1 ? 'just now' : m < 120 ? `${m} min ago` : agoWords(Math.floor(m / 60));
   const agoWords = (hours) => hours < 1 ? 'less than an hour ago' : hours < 48 ? `${hours} h ago` : `${Math.floor(hours / 24)} days ago`;
+  /** Whole minutes from `at` to the site's own time; null when either is unreadable. */
+  const minutesSince = (s, at) => { const n = Date.parse(s.at), t = Date.parse(at); return Number.isNaN(n) || Number.isNaN(t) ? null : Math.max(0, Math.floor((n - t) / 60_000)); };
+  const count = (n) => (Number.isInteger(n) && n > 0 ? n : 0);
+  const things = (n) => `${n} ${n === 1 ? 'thing' : 'things'}`;
+  /** A clock time the site formatted in its own time zone ("14:02", "14:02 UTC"), or '' when it is not one. */
+  const clockWords = (c) => (typeof c === 'string' && /^\d{2}:\d{2}( UTC)?$/.test(c) ? c : '');
   // A payment provider's row: off = ok; on = its webhook Test. A key that lacks the permission to
   // read webhooks ('limited') is grey "check by hand", never red: the site cannot know.
   const providerRow = (p, name) => {
@@ -213,7 +233,86 @@ export const DOCTOR = (() => {
         if (starting.length && g.ok !== true) return warn(`${list(starting.map(([id]) => label(id)))} still starting after two minutes`);
         return ok(r.map(([id, v]) => `${label(id)}: ${v.state}`).join(' · '));
       } },
+    // stream-ingest's per-platform live detection (its /health `liveness`, cut to fixed shapes by the
+    // host): each configured platform's state, its evidence code (printed as-is: this file imports no
+    // vocabulary) and `stale`, the vocabulary's ONE stale rule computed by stream-ingest. This row reads
+    // the boolean and never repeats the window. A platform that can't tell holds an open stream open
+    // (ADR 0134 E10), so a long silence is said here; amber at worst, never an update check.
+    { id: 'ingest.liveness', area: 'Services', side: 'host', title: 'Live detection answers for every configured platform',
+      fix: 'The site\'s Stream tab (admins only) shows each platform\'s live state and why it can\'t tell; sudo blackbranch logs stream-ingest.',
+      judge: (h) => {
+        const g = h.ingest;
+        if (!g || typeof g !== 'object') return grey('not checked');
+        if (g.answered !== true) return grey('stream-ingest did not answer on its health port (not running, or older than this check)');
+        if (!g.liveness || typeof g.liveness !== 'object') return grey('stream-ingest did not report live detection (older than this check)');
+        const set = Object.entries(g.liveness).filter(([, v]) => v && typeof v === 'object');
+        if (!set.length) return ok('no platform is set up for live detection');
+        const label = (id) => PLATFORM_LABEL[id] || id;
+        const code = (v) => (typeof v.evidence === 'string' && v.evidence ? v.evidence : 'no code');
+        const stale = set.filter(([, v]) => v.stale === true);
+        if (stale.length) {
+          const quiet = (v) => { const m = minutesSince(h, v.lastAnswerAt || v.since); return m === null ? '' : ` for ${m} min`; };
+          const words = stale.map(([id, v]) => `${label(id)}: no answer${quiet(v)} (${code(v)})`).join('; ');
+          // YouTube showing this server a consent or bot-check page: the Data API key lets the
+          // check ask YouTube's API instead of reading the page.
+          const page = stale.some(([id, v]) => id === 'youtube' && v.evidence === 'unrecognized-page');
+          return warn(`${words}; an open stream stays open while it can't tell`, page
+            ? 'YouTube shows this server a consent or bot-check page: set youtube.apiKey (Admin Panel → Platforms → YouTube, the YouTube Data API key) so live detection asks YouTube\'s API; sudo blackbranch logs stream-ingest.'
+            : undefined);
+        }
+        const word = (v) => (v.state === 'live' ? 'live' : v.state === 'offline' ? 'offline' : v.state === 'upcoming' ? 'scheduled' : `can't tell (${code(v)})`);
+        return ok(set.map(([id, v]) => `${label(id)}: ${word(v)}`).join(' · '));
+      } },
 
+    // The Discord bridge (Out Of Your Element, compose profile `discord`): off until a bot token is
+    // set. Switched on: its settings file as rendered, then the bridge's own word for what it does
+    // (install/ooye/entrypoint.js), then its container's health. OOYE answers only once Discord and
+    // the homeserver let it in, and it keeps trying by itself, so this is never an update check.
+    { id: 'discord.bridge', area: 'Services', side: 'host', title: 'Discord bridge',
+      fix: 'Run sudo blackbranch logs ooye: it says what Discord or the homeserver answered. A refused token: set the bot token of this install\'s own Discord application again.',
+      judge: (h) => {
+        const d = h.discord;
+        if (!d || typeof d !== 'object' || !isBool(d.profile) || !isBool(d.token)) return grey('not checked');
+        if (!d.profile && !d.token) return grey('off: no Discord bot token is set');
+        if (!d.profile) return warn('off: a Discord bot token is set, but the bridge is not switched on',
+          'Add discord to COMPOSE_PROFILES in the install\'s .env (for example COMPOSE_PROFILES=tunnel,discord), then run sudo blackbranch up.');
+        if (!d.token) return fail('switched on, but no Discord bot token is set',
+          'Set DISCORD_BOT_TOKEN in the install\'s .env to the bot token of this install\'s own Discord application, then run sudo blackbranch up.');
+        const up = 'Run sudo blackbranch up: it writes the bridge\'s settings file, and the bridge reads it by itself.';
+        if (d.registration === 'missing' || d.answer === 'waiting-settings') return fail('switched on, but waiting for its settings file', up);
+        if (d.registration === 'differs') return fail('switched on, but its settings file differs from a fresh render', up);
+        if (d.answer === 'waiting-storage') return fail('switched on, but it cannot keep its database: its storage belongs to another user',
+          'Run sudo blackbranch logs ooye: it names the owner of its storage (the bridge-data volume must belong to uid 1000).');
+        if (d.state === 'healthy') return ok('on and running: Discord and the homeserver let it in');
+        if (d.state === 'starting') return grey('on: starting');
+        if (d.state === 'unhealthy') return fail('on, but it does not answer: Discord or the homeserver has not let it in yet (it keeps trying)');
+        const st = typeof d.state === 'string' && /^[a-z]{1,20}$/.test(d.state) ? d.state : 'not running';
+        return fail(`switched on, but its container is ${st === 'missing' ? 'not there' : st}`, 'Run sudo blackbranch up; if it stays red, sudo blackbranch logs ooye says why.');
+      } },
+    // The Discord bot (the bridge's own Discord application): whether Discord lets it in, its two
+    // privileged switches the bridge needs, and whether it is in the Discord server the community was
+    // imported from (Admin Panel → Site → Discord). Asked by the host through the bridge (the token
+    // stays there); the facts carry no name or id.
+    { id: 'discord.bot', area: 'Services', side: 'host', title: 'Discord bot sees the server',
+      fix: 'Admin Panel → Site → Discord, Bot: paste the bot token again, or add the bot to the Discord server with the link there.',
+      judge: (h) => {
+        const d = h.discord, b = h.discordBot;
+        if (d && typeof d === 'object' && (d.profile === false || d.token === false)) return grey('off: the Discord bridge is off');
+        if (!b || typeof b !== 'object') return grey('not checked');
+        if (b.checked !== true) return grey('not checked: the bridge is not running');
+        if (b.ok !== true) {
+          if (b.status === 401) return fail('Discord refused the bot token', 'Admin Panel → Site → Discord, Bot: reset the token in Discord\'s Developer Portal (your application, Bot) and paste the new one.');
+          if (b.status === null) return warn('Discord did not answer the bot (it is asked again at the next check)');
+          return fail(`Discord answered ${Number.isInteger(b.status) ? b.status : 'with an error'} for the bot`);
+        }
+        const off = [b.members === false ? 'Server Members' : '', b.content === false ? 'Message Content' : ''].filter(Boolean);
+        if (off.length) return warn(`the bot's ${list(off)} switch is off on Discord: the bridge cannot see ${b.content === false ? 'what people write' : 'who is in the server'}`,
+          'Discord\'s Developer Portal → your application → Bot: switch on Server Members Intent and Message Content Intent, then save.');
+        if (b.guild === 'present') return ok('the bot sees the Discord server the community was imported from');
+        if (b.guild === 'absent') return fail('the bot is not in the Discord server the community was imported from',
+          'Add it again with the link on Admin Panel → Site → Discord (Bot), then press Check again there.');
+        return grey('on: no Discord server imported yet (Admin Panel → Site → Discord, Import)');
+      } },
     { id: 'db.reachable', area: 'Database', side: 'site', title: 'Postgres answers',
       fix: 'sudo blackbranch status; if postgres is not healthy, sudo blackbranch logs postgres.',
       judge: (h, s) => s.db && s.db.reachable ? ok() : fail('the site cannot reach its database') },
@@ -323,6 +422,156 @@ export const DOCTOR = (() => {
         if (!s.db || !isBool(s.db.baseline)) return grey('set; could not read how the database started');
         return s.db.baseline ? fail('set on an install that started from the baseline') : ok('set, on a database built by the migration chain');
       } },
+    // The install's own account that runs the community's rooms (an application service: its
+    // registration file beside homeserver.yaml, and a token that must answer as that account).
+    // "Delete my account" erases the Matrix account last; when the account server refused or was down
+    // then, the site retries every hour (web matrixEraseRetry.ts). Counts and fixed codes only.
+    { id: 'accounts.matrixErase', area: 'Matrix', side: 'site', title: 'Deleted accounts: their Matrix accounts are removed',
+      fix: 'The site retries every hour. If it keeps failing, the site\'s sign-in client cannot deactivate accounts: give it the account server\'s admin grant (the bundle renders it; on another homeserver, list the client in MAS policy.data.admin_clients), or deactivate each account by hand at the account server; the site marks it done on its next retry.',
+      judge: (h, s) => {
+        const d = s.deletions;
+        if (!d || !Number.isInteger(d.matrixPending)) return grey('the site could not count them');
+        const n = d.matrixPending;
+        if (n <= 0) return ok('no deleted account is waiting on its Matrix account');
+        const codes = Array.isArray(d.codes) ? d.codes.filter((c) => typeof c === 'string' && /^[a-z0-9_]{1,40}$/.test(c)) : [];
+        const why = codes.length ? ` (last answer${codes.length > 1 ? 's' : ''}: ${codes.join(', ')})` : '';
+        return fail(`${n} deleted account${n === 1 ? ' still has' : 's still have'} an active Matrix account${why}; the site retries every hour`);
+      } },
+    // Optional mail (A2-05): with a mail server set, the sign-in service sends password recovery and
+    // address checks through it. Judged by the last `blackbranch mail test` the host recorded.
+    { id: 'mail.sends', area: 'Matrix', side: 'host', title: 'Mail: the sign-in service can send (password recovery, address checks)',
+      fix: 'Check the mail server, port, connection, user name and password (Admin Panel → Site → Site, card Mail, or MAIL_SMTP_* in .env) with your mail provider, then run sudo blackbranch mail test <your address> again.',
+      judge: (h) => {
+        const m = h.mail;
+        if (!m || (m.set !== true && m.set !== false)) return grey('not checked');
+        if (!m.set) return grey('no mail server is set: no password recovery, and sign-up asks for no address');
+        const t = m.test;
+        if (!t || (t.ok !== true && t.ok !== false)) return grey('set, not tested yet: run sudo blackbranch mail test <your address>');
+        const hrs = hoursSince(h, t.at);
+        const when = hrs === null ? '' : ` (${agoWords(hrs)})`;
+        const code = typeof t.code === 'string' && /^[a-z_]{1,40}$/.test(t.code) ? t.code : 'failed';
+        return t.ok ? ok(`a test message was sent ${hrs === null ? 'earlier' : agoWords(hrs)}`) : fail(`the last test message was not sent: ${code}${when}`);
+      } },
+    // Sign-in providers (ADR 0154): one row per slot. On = the render offers it (complete), the sign-in
+    // service's own table has it enabled (listed), and the provider's discovery document answers this
+    // server, naming the address the sign-in service is given (MAS refuses one that does not).
+    ...SIGNIN_SLOTS.map(([slot, name, who]) => (
+      { id: `signin.${slot}`, area: 'Matrix', side: 'host', title: `Sign in with ${name}`,
+        fix: `Check the ${name} settings (Admin Panel → Site → Site, card Sign-in providers), then run sudo blackbranch render.`,
+        judge: (h) => {
+          const s = h.signin;
+          if (!s || s.read !== true) return grey(s && s.read === false ? 'the sign-in settings could not be read' : 'not checked');
+          const p = s.slots && s.slots[slot];
+          if (!p || p.on !== true) return grey('off');
+          if (p.complete !== true) return fail('on, but its client id or secret is not set or not usable: nobody sees the button',
+            `Fill in every ${name} field (Admin Panel → Site → Site, card Sign-in providers); sudo blackbranch render says which one it left out and why.`);
+          if (p.listed === null || p.listed === undefined) return grey('on; whether the sign-in service offers it could not be checked (its database did not answer)');
+          if (p.listed !== true) return fail('on, but the sign-in service does not offer it yet', 'Run sudo blackbranch render (it restarts the sign-in service); if it stays red, sudo blackbranch logs mas.');
+          const d = p.discovery;
+          if (!d || !Number.isInteger(d.status)) return grey(`on the sign-in page; whether ${who} answers could not be checked`);
+          if (d.status === 0) return fail(`on the sign-in page, but ${who} does not answer this server`, `Check that this server can reach ${who} (its address, and this server's outgoing network).`);
+          if (d.status !== 200) return fail(`on the sign-in page, but ${who} answered ${d.status}`, `Check the address of ${who}; it must serve /.well-known/openid-configuration.`);
+          if (d.issuer !== true) return fail(`on the sign-in page, but ${who} names a different address for itself: sign-in through it fails`,
+            'Copy the issuer address exactly as your OpenID server names it (its /.well-known/openid-configuration "issuer"), with or without the trailing /.');
+          return ok(`on the sign-in page, and ${who} answers`);
+        } })),
+    { id: 'community.service', area: 'Matrix', side: 'host', title: 'The community service account answers',
+      fix: 'Run sudo blackbranch up; if it stays red, sudo blackbranch community token-check',
+      judge: (h) => {
+        const c = h.community;
+        if (!c || typeof c !== 'object') return grey('not checked');
+        // A person already has the name (an upgraded install): nothing is registered over their id.
+        if (c.nameTaken === true) {
+          const name = typeof c.localpart === 'string' && /^[a-z0-9._=-]{1,64}$/.test(c.localpart) ? `@${c.localpart}` : 'it was given';
+          return fail(`Someone already uses the name ${name} on this server, so the community has no account of its own`,
+            'Set COMMUNITY_LOCALPART in the install\'s .env to a name nobody uses on this server, then run sudo blackbranch up.');
+        }
+        // Never checked (the database did not answer): nothing is registered until it does.
+        if (c.nameChecked === false) {
+          const name = typeof c.localpart === 'string' && /^[a-z0-9._=-]{1,64}$/.test(c.localpart) ? `@${c.localpart}` : 'it was given';
+          return fail(`Could not check whether the name ${name} is free, so nothing is registered for it`,
+            'Run sudo blackbranch up again once the database answers.');
+        }
+        if (c.registration === 'missing') return fail('the registration file is missing');
+        if (c.registration === 'differs') return fail('the registration file differs from a fresh render');
+        if (c.whoami === 'wrong') return fail('its token answers as another account');
+        if (c.whoami === 'refused') return fail('the homeserver refused its token');
+        if (c.registration !== 'match') return grey('the config does not render, so the registration was not compared');
+        if (c.whoami === 'ok') return ok('registered, and its token answers as the account');
+        if (c.whoami === 'unreachable') return grey('Synapse did not answer, so the account was not asked');
+        return grey('Synapse is not running, so the account was not asked');
+      } },
+    // The rooms kept as the Community page sets them (spec 2026-10-23 §4.1): what the last finished
+    // run found changed outside the page, and whether runs still happen. The site reads its run log
+    // (site.community_runs) into fixed facts — counts and times, never a run's own error text.
+    { id: 'community.drift', area: 'Matrix', side: 'site', title: 'The community\'s rooms are as the Community page sets them',
+      fix: 'Run sudo blackbranch community reconcile --mode report and read its output',
+      fixOutside: 'Run the community reconciler in report mode where it runs and read its output.',
+      judge: (h, s) => {
+        const c = s.community;
+        if (!c || typeof c !== 'object') return grey('the site did not report');
+        const r = c.lastFinished;
+        if (!r || typeof r !== 'object') return grey(c.reconciler === true ? 'no run has finished yet' : 'switched off, and no run yet');
+        const at = clockWords(r.clock);
+        if (r.ok === false) return fail(`the last run${at ? `, at ${at},` : ''} failed`);
+        // Notes that mean rooms were not looked after at all: amber, never a quiet green.
+        const w = r.warns && typeof r.warns === 'object' ? r.warns : {};
+        const last = at ? ` (last run at ${at})` : '';
+        if (count(w.no_hub_access) > 0) return { ...warn(`the community's own account is not in the community's main space, so nothing is kept${last}`),
+          fix: 'Invite the community account to the main space and give it full power there; the next run joins it.' };
+        if (count(w.cannot_read) > 0) return { ...warn(`the community's own account cannot read ${count(w.cannot_read)} ${count(w.cannot_read) === 1 ? 'room' : 'rooms'}, so ${count(w.cannot_read) === 1 ? 'it is' : 'they are'} not kept${last}`),
+          fix: 'Invite the community account to each room the Community page lists as unreadable and give it full power there.' };
+        if (count(w.bridge_account_unlisted) > 0) return { ...warn(`${count(w.bridge_account_unlisted)} ${count(w.bridge_account_unlisted) === 1 ? 'room looks' : 'rooms look'} bridged by an account not listed as a bridge account${last}`),
+          fix: 'Admin Panel → Site → Community lists them: add the account under Bridge accounts if that is right.' };
+        if (count(w.bridge_accounts_unknown) > 0) return { ...warn(`in ${count(w.bridge_accounts_unknown)} bridged ${count(w.bridge_accounts_unknown) === 1 ? 'room' : 'rooms'} nobody is removed, because the bridge's own accounts are not known${last}`),
+          fix: 'Admin Panel → Site → Community lists them.' };
+        if (count(r.left) > 0) return { ...warn(`${things(r.left)} ${r.left === 1 ? 'differs' : 'differ'} from the Community page and ${r.left === 1 ? 'was' : 'were'} left as ${r.left === 1 ? 'it is' : 'they are'}${at ? ` (last run at ${at})` : ''}`),
+          fix: 'Admin Panel → Site → Community lists them.' };
+        if (count(r.putBack) > 0) return { ...warn(`${things(r.putBack)} ${r.putBack === 1 ? 'was' : 'were'} put back${at ? ` at ${at}` : ''}`),
+          fix: 'Nothing to do: the Community page\'s settings were put back. Admin Panel → Site → Community shows what changed.' };
+        return ok(`nothing to put back${at ? ` (last run at ${at})` : ''}`);
+      } },
+    { id: 'community.lastRun', area: 'Matrix', side: 'site', title: `The community's rooms were checked in the last ${RUN_QUIET_MIN} minutes`,
+      fix: 'Run sudo blackbranch community on: it starts the 10-minute timer again and a run right away.',
+      fixOutside: 'Start the community reconciler\'s timer where it runs.',
+      judge: (h, s) => {
+        const c = s.community;
+        if (!c || typeof c !== 'object') return grey('the site did not report');
+        const on = c.reconciler === true;
+        const l = c.latest;
+        if (!l || typeof l !== 'object') return on ? warn('no run yet') : grey('switched off, and no run yet');
+        const at = clockWords(l.clock);
+        if (!l.finishedAt) {
+          // A run writes its row when it starts: one younger than the run limit is going, not stale.
+          const m = minutesSince(s, l.startedAt);
+          if (m !== null && m < RUN_LIMIT_MIN) return ok(`running${at ? ` since ${at}` : ''}`);
+          return warn(`a run started${at ? ` at ${at}` : ''} and never finished`);
+        }
+        const m = minutesSince(s, l.finishedAt);
+        if (m === null) return grey('the last run\'s time is not readable');
+        if (!on) return grey(`switched off — the last run was ${minutesWords(m)}`);
+        return m > RUN_QUIET_MIN ? warn(`the last run was ${minutesWords(m)}`) : ok(`the last run was ${minutesWords(m)}`);
+      } },
+    // The homeserver's retention block is rendered from the install's cap (render.sh, ADR 0139): the
+    // Community page's "Forever" and its days are true only while the two agree. A homeserver the
+    // bundle does not render keeps its own settings, which nothing here can change.
+    { id: 'community.retention', area: 'Matrix', side: 'both', title: 'The server keeps messages as long as the cap says',
+      fix: 'Run sudo blackbranch up',
+      fixOutside: 'The homeserver is managed outside Black Branch: its own retention settings apply.',
+      judge: (h, s, input) => {
+        if (input.hostState === 'none') return grey('managed outside Black Branch — the server\'s own retention settings apply');
+        if (input.hostState !== 'ok') return grey('not checked yet: run sudo blackbranch doctor');
+        const r = h.retention;
+        if (!r || typeof r !== 'object') return grey('not checked');
+        if (r.rendered === false) return grey('this box does not render the server\'s config — the server\'s own retention settings apply');
+        const cap = s.community && s.community.retentionCapDays;
+        if (!Number.isInteger(cap) || cap < 0) return grey('the site did not report the cap');
+        const want = cap > 0 ? cap : null;
+        if (r.defaultDays === want && r.maxDays === want) return ok(cap > 0 ? `at most ${cap} days` : 'no limit: a channel keeps messages as long as it says, forever when it says nothing');
+        // A block some cap renders (both N days, or neither): a cap edited since the last start.
+        const capShape = r.defaultDays === r.maxDays && (r.defaultDays === null || (Number.isInteger(r.defaultDays) && r.defaultDays > 0));
+        return fail(capShape ? 'the cap was changed; the server applies it at its next start' : 'the server\'s retention settings do not match the cap');
+      } },
 
     { id: 'secrets.bootstrap', area: 'Secrets', side: 'host', title: 'Every bootstrap secret is present',
       fix: 'Restore .env (and matrix/mas-keys.yaml) from the backup: a lost secret cannot be made again without losing what it protects.',
@@ -373,7 +622,7 @@ export const DOCTOR = (() => {
         return ok(`${tests.length} passed${also}`);
       } },
     { id: 'modules.skipped', area: 'Modules', side: 'site', title: 'No setup step left skipped',
-      fix: 'Admin Panel: finish the steps that setup skipped.',
+      fix: 'Admin Panel → the page named beside each step: set its values there, and it leaves this list.',
       judge: (h, s) => {
         const k = Array.isArray(s.skipped) ? s.skipped : [];
         return k.length ? warn(`skipped: ${list(k)}`) : ok('none');
@@ -420,8 +669,8 @@ export const DOCTOR = (() => {
       } },
 
     // Payments + Platforms: the setup pages' own Tests, run without recording.
-    { id: 'payments.stripe', area: 'Payments', side: 'site', title: 'Stripe: this site\'s webhook exists, is enabled and sends every event',
-      fix: 'Admin Panel → Payments → Connections → Stripe: follow "The webhook" step (the address and the event list), then press Check.',
+    { id: 'payments.stripe', area: 'Payments', side: 'site', title: 'Stripe: this site\'s webhook exists, is enabled and sends every event, and the customer portal is saved',
+      fix: 'Admin Panel → Payments → Connections, card Stripe: follow "The webhook" step (the address and the event list) and "The customer portal" step (Stripe → Settings → Billing → Customer portal → Save), then press Check.',
       judge: (h, s) => providerRow(s.payments && s.payments.stripe, 'Stripe') },
     { id: 'payments.cloudflare', area: 'Payments', side: 'site', title: 'Stripe gets past Cloudflare\'s bot protection',
       fix: 'Free plan: Bot Fight Mode blocks Stripe, and no rule can make an exception to it, so turn Bot Fight Mode off (Cloudflare → your domain → Security → Settings → Bot traffic). Pro plan or higher: use Super Bot Fight Mode with a custom rule that skips it for the URI path /api/billing/webhook.',
@@ -432,8 +681,19 @@ export const DOCTOR = (() => {
         return grey('cannot be checked without a Cloudflare token, so check by hand: Bot Fight Mode off on a Free plan, or a Super Bot Fight Mode skip rule for /api/billing/webhook on a paid plan');
       } },
     { id: 'payments.paypal', area: 'Payments', side: 'site', title: 'PayPal: the webhook id exists and points at this site',
-      fix: 'Admin Panel → Payments → Connections → PayPal: follow "The webhook" step, paste the webhook id PayPal shows, then press Check.',
+      fix: 'Admin Panel → Payments → Connections, card PayPal: follow "The webhook" step, paste the webhook id PayPal shows, then press Check.',
       judge: (h, s) => providerRow(s.payments && s.payments.paypal, 'PayPal') },
+    // A partial refund of a community gift ends the unclaimed slots and gifts it pays for; money that
+    // covers no whole slot ends nothing (web giftServer.ts endGift) and is shown here.
+    { id: 'payments.giftRefunds', area: 'Payments', side: 'site', title: 'Every gift refund covered whole gifts',
+      fix: 'A partial refund of a community gift ended the unclaimed slots and gifts it covered; the rest of it covered only part of a slot, so no gift was ended for that part. Decide by hand: refund the rest in Stripe (the site then ends one more), or leave it.',
+      judge: (h, s) => {
+        const g = s.payments && s.payments.giftRefunds;
+        if (!g || !Number.isInteger(g.partial)) return grey('the site did not report');
+        return g.partial > 0
+          ? warn(`${g.partial} partial refund${g.partial === 1 ? '' : 's'} of a community gift in the last 90 days covered part of a slot`)
+          : ok('none in the last 90 days');
+      } },
     // A platform whose channel is set but that has nothing to test (no app keys) is "not checked",
     // never a pass: the row says what was actually accepted.
     { id: 'platforms.credentials', area: 'Platforms', side: 'site', title: 'Platform keys accepted',
@@ -456,17 +716,19 @@ export const DOCTOR = (() => {
       } },
 
     // Alerts: the push to whoever runs the site (stream-api/notify.js) is optional. Without a topic
-    // nothing is lost — the problems stay on this page — but nobody is told while away from it.
+    // nothing is lost — the problems stay on this page — but nobody is told while away from it. The
+    // host's own alerts (install/blackbranch alert) use the same topic when .env names none.
     { id: 'alerts.channel', area: 'Alerts', side: 'site', title: 'Alerts reach someone',
-      fix: 'Optional: Admin Panel → Site → Site, the "Alerts to your phone" card: paste an ntfy topic address (one is enough) and subscribe to that topic in the ntfy app.',
+      fix: 'Optional: Admin Panel → Site → Site, card Alerts to your phone: paste an ntfy topic address (one is enough) and subscribe to that topic in the ntfy app. The server\'s own alerts (a failed backup or update, low disk) go to it too.',
       judge: (h, s) => {
         const a = s.alerts;
         if (!a || typeof a.topics !== 'number') return grey('the chat service did not report');
-        if (a.topics === 0) return warn('Alerts reach nobody: no alert topic is set. Important problems stay visible here in the Admin Panel; external notifications are optional.');
-        return ok(a.topics === 1 ? 'one topic: urgent and quiet alerts both go to it' : 'urgent and quiet alerts each have a topic');
+        if (a.topics === 0) return warn('Alerts reach nobody: no alert topic is set. Important problems stay visible here in the Admin Panel; a failed backup or update is seen only here (unless the server\'s .env names a channel of its own).');
+        return ok(a.topics === 1 ? 'one topic: urgent and quiet alerts both go to it, the server\'s own (a failed backup or update, low disk) too'
+          : 'urgent and quiet alerts each have a topic; the server\'s own (a failed backup or update, low disk) go to them too');
       } },
     { id: 'backups.age', area: 'Backups', side: 'host', title: `The last good backup is less than ${MAX_BACKUP_AGE_H} hours old`,
-      fix: 'Run sudo blackbranch backup and read why it stops; sudo blackbranch status shows the last run. The nightly one runs at the quiet hour (Admin Panel → Site → Running the site).',
+      fix: 'Run sudo blackbranch backup and read why it stops; sudo blackbranch status shows the last run. The nightly one runs at the quiet hour (Admin Panel → Site → Site, card Running the site).',
       judge: (h) => {
         const b = h.backups;
         if (!b) return grey('not checked yet: run sudo blackbranch doctor');
@@ -494,7 +756,7 @@ export const DOCTOR = (() => {
         return days > MAX_VERIFY_AGE_D ? warn(`passed ${days} days ago; the weekly check has not run since`) : ok(`passed ${days === 0 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`}`);
       } },
     { id: 'backups.target', area: 'Backups', side: 'host', title: 'The backup target answers',
-      fix: 'Admin Panel → Site → Backups: check the address and keys, and that this server can reach it. For SFTP, the key sudo blackbranch backup key prints must be on that account.',
+      fix: 'Admin Panel → Site → Site, card Backups: check the address and keys, and that this server can reach it. For SFTP, the key sudo blackbranch backup key prints must be on that account.',
       judge: (h) => {
         const t = (h.backups && h.backups.target) || {};
         const where = TARGET_LABEL[t.kind] || 'the target';
@@ -556,7 +818,11 @@ export const DOCTOR = (() => {
     const h = input.host || {};
     const s = input.site || {};
     const hostGrey = input.hostState === 'none' ? 'not a bundle install' : 'not checked yet: run sudo blackbranch doctor';
-    const siteGrey = input.siteError ? `site unreachable (${input.siteError})` : 'site unreachable';
+    // Until setup finishes the site answers every API 503 ("this site is being set up"): that is the
+    // site waiting, not a site that does not answer (I01). Any other error, or a 503 after setup, is.
+    const setupWaits = input.setupRunning === true || (input.hostState === 'ok' && !!h.setup && h.setup.completed === false);
+    const siteGrey = setupWaits && /\b503\b/.test(input.siteError || '') ? SETUP_WAITING
+      : input.siteError ? `site unreachable (${input.siteError})` : 'site unreachable';
     return CHECKS.map((c) => {
       let v;
       if (c.side === 'later') v = grey('not checked in this release');
@@ -578,9 +844,11 @@ export const DOCTOR = (() => {
     { status: 'ok', words: 'ok', meaning: '' },
     { status: 'grey', words: 'not checked', meaning: 'switched off, or a fact was missing — each row says which' },
   ];
-  /** @param {DoctorRow[]} rows */
+  /** @param {DoctorRow[]} rows — while setup waits, the "not checked" group says so once. */
   function summary(rows) {
-    return GROUPS.map((g) => ({ ...g, n: rows.filter((x) => x.status === g.status).length }));
+    const waits = rows.some((x) => x.detail === SETUP_WAITING);
+    return GROUPS.map((g) => ({ ...g, ...(waits && g.status === 'grey' ? { meaning: `${g.meaning}; the site is ${SETUP_WAITING}` } : {}),
+      n: rows.filter((x) => x.status === g.status).length }));
   }
 
   /** The command's printout: the groups' counts, then every check by area; a failing or warning
@@ -601,7 +869,7 @@ export const DOCTOR = (() => {
       }
     }
     const n = (st) => rows.filter((x) => x.status === st).length;
-    out.push('', `${n('fail')} failing · ${n('warn')} to look at · ${n('ok')} ok · ${n('grey')} not checked`);
+    out.push('', `${n('fail')} failing · ${n('warn')} to look at · ${n('ok')} ok · ${n('grey')} not checked`, '', helpLine());
     return out.join('\n');
   }
 
@@ -628,5 +896,5 @@ export const DOCTOR = (() => {
     return { ok: bad.length === 0, failed: bad.map((r) => r.id), rows: bad };
   }
 
-  return Object.freeze({ SCHEMA_VERSION, AREAS, UPDATE_CHECKS, CHECKS: CHECKS.map(({ id, area, title, side, fix }) => ({ id, area, title, side, fix })), GROUPS, evaluate, summary, health, text, report });
+  return Object.freeze({ SCHEMA_VERSION, AREAS, UPDATE_CHECKS, CHECKS: CHECKS.map(({ id, area, title, side, fix }) => ({ id, area, title, side, fix })), GROUPS, HELP, helpLine, evaluate, summary, health, text, report });
 })();

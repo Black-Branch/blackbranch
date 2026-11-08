@@ -340,6 +340,10 @@ export const DEFAULTS = {
   sendBtnOn:          false,
   sendColor:          "#99c1f1",
   voteColor:          "",
+  // Empty = Default: the property is removed and globals.css keeps the colour
+  // each surface always had (its fallback), so nobody's chat changes until they pick.
+  mentionColor:       "",
+  highlightColor:     "",
   // Player-bar colours. These MUST match the :root defaults in globals.css —
   // the registry is what a Reset writes back, so a disagreement means "reset"
   // silently changes the look instead of restoring it.
@@ -365,6 +369,7 @@ export const DEFAULTS = {
   tsSize:             1,
   emoteAutoSuggest:   false,
   streamAutoMute:     false,
+  playerSmooth:       false,
   histLength:         "default" as HistoryLength,
   winDock:            "float",
   winFrom:            "bottom",
@@ -387,20 +392,34 @@ export const DEFAULTS = {
   mxReactSize:  "normal" as MxReactSize,
   mxDeleted:    "hide" as "hide" | "placeholder",
   mxEditedTag:  true,
-  mxUnread:     "dots" as "dots" | "counts",
+  // "Number on mentions" by default (k, 2026-11-06, the ADR 0116 exception): a mention shows
+  // Discord's red number, a plain unread stays a dot. A viewer's stored choice still wins.
+  mxUnread:     "mentions" as UnreadMode,
   mxHideMuted:  false,
   // Privacy (both ON by default). Off = no public receipt / no typing
   // event leaves this browser; see app/lib/matrixPrivacy.ts.
   mxReceipts:   true,
   mxTyping:     true,
+  // Phone switches. Each default is today's look (ADR 0116): flipping one is the owner's call.
+  communityPhoneText: "chat" as CommunityPhoneText,
+  phoneEdgeToEdge:    false,
+  communityReturnKey: "send" as ReturnKeyMode,
 };
 
-/** Community timeline layout: cozy = default, compact = tighter, bubbles = one tinted block per group. */
+/** Community timeline layout: cozy = default, Discord's (the picture in a gutter beside the message), compact = the picture in the name line, tighter; bubbles = one tinted block per group. */
 export type MxLayout = "cozy" | "compact" | "bubbles";
 const MX_LAYOUTS = ["cozy", "compact", "bubbles"] as const;
 /** Community reaction pills: normal = default; the multiplier lives in --mx-react-scale. */
 export type MxReactSize = "small" | "normal" | "large";
 const MX_REACT_SCALE: Record<MxReactSize, string> = { small: "0.85", normal: "1", large: "1.3" };
+/** Community unread marks (channel rows + the rail): dots = default, a blue dot (rose for a mention);
+ *  mentions = Discord's rose number on mentions only, a plain unread stays a dot; counts = a number on every unread. */
+export const UNREAD_MODES = ["dots", "mentions", "counts"] as const;
+export type UnreadMode = (typeof UNREAD_MODES)[number];
+/** Community text under 608 px: chat = the live chat's size (default); 16 = 1rem, Discord's size. */
+type CommunityPhoneText = "chat" | "16";
+/** The community composer's Return key: send = default; newline = Return adds a line, Ctrl/⌘+Return sends. */
+type ReturnKeyMode = "send" | "newline";
 
 export type Values = typeof DEFAULTS;
 export type SettingKey = keyof Values;
@@ -543,7 +562,9 @@ function applySeam(ctx: ApplyCtx) {
 // ─── control metadata (for rendering the menu) ────────────────────────────────
 export type Control =
   | { kind: "font";  label: string }
-  | { kind: "color"; label: string; fallbackKey?: SettingKey }
+  | { kind: "color"; label: string; fallbackKey?: SettingKey;
+      /** Empty means Default: the picker shows this colour and offers a Default button. */
+      defaultHex?: string }
   | { kind: "toggle"; label: string }
   | { kind: "weights"; label: string }
   | { kind: "choice"; label: string; options: readonly { value: string; label: string }[];
@@ -683,11 +704,23 @@ export const ENTRIES: Record<SettingKey, Entry> = {
     control: { kind: "font", label: "Font" } }),
   tsSize: E({ ls: "chatStyle_tsSize", prePaint: true,
     parse: flt((n) => n > 0),
-    effect: (v, ctx) => { setProp("--chat-ts-size", chatFontCalc(v as number)); applyWrap(ctx); },
+    // --chat-ts-scale too: the community's phone-text scope re-derives the size from its own chat size.
+    effect: (v, ctx) => { setProp("--chat-ts-size", chatFontCalc(v as number)); setProp("--chat-ts-scale", String(v)); applyWrap(ctx); },
     control: sx10("Size", 5, 15, "×") }),
   tsColor: E({ ls: "chatStyle_tsColor", prePaint: true,
     parse: str, effect: (v) => setProp("--chat-ts-color", v as string),
     control: { kind: "color", label: "Timestamp colour" } }),
+  // Mentions & highlights: a message that names you, and one holding one of your
+  // Behavior › Words. Two colours on purpose (ticket #229) — one meaning each, on
+  // the live chat and in Community alike.
+  mentionColor: E({ ls: "chatStyle_mentionColor", prePaint: true,
+    parse: str,
+    effect: (v) => ((v as string) ? setProp("--chat-mention", v as string) : rmProp("--chat-mention")),
+    control: { kind: "color", label: "Mention colour", defaultHex: "#f0b464" } }),
+  highlightColor: E({ ls: "chatStyle_highlightColor", prePaint: true,
+    parse: str,
+    effect: (v) => ((v as string) ? setProp("--chat-highlight", v as string) : rmProp("--chat-highlight")),
+    control: { kind: "color", label: "Highlight colour", defaultHex: "#f0b464" } }),
 
   // Emotes
   emoteSize: E({ ls: "chatStyle_emoteSize", prePaint: true,
@@ -726,6 +759,13 @@ export const ENTRIES: Record<SettingKey, Entry> = {
     serialize: ser1, parse: bool1,
     effect: () => window.dispatchEvent(new Event("storage")),
     control: { kind: "toggle", label: "Start stream muted" } }),
+  // Per-DEVICE, like streamAutoMute: a lossy network is this device's. The
+  // in-house player reads it with useSetting — a bigger receive buffer on the
+  // low-latency player, a longer HLS hold in compatibility mode (hlsConfig.ts).
+  playerSmooth: E({ ls: "chatStyle_playerSmooth", prePaint: false, deviceLocal: true,
+    serialize: ser1, parse: bool1,
+    effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_playerSmooth" })),
+    control: { kind: "toggle", label: "Smoother playback (adds delay)" } }),
 
   // Performance. Per-DEVICE — a phone's perf choices must never roam onto the
   // desktop via preset sync. Consumed via useLocalStorageString (the
@@ -1145,10 +1185,10 @@ export const ENTRIES: Record<SettingKey, Entry> = {
     effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_mxEditedTag" })),
     control: { kind: "toggle", label: "\"(edited)\" tag" } }),
   mxUnread: E({ ls: "chatStyle_mxUnread", prePaint: false, behavior: true,
-    parse: oneOf(["dots", "counts"] as const),
+    parse: oneOf(UNREAD_MODES),
     effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_mxUnread" })),
     control: { kind: "choice", label: "Unread channels", options: [
-      { value: "dots", label: "Dots" }, { value: "counts", label: "Counts" }] } }),
+      { value: "dots", label: "Dots" }, { value: "mentions", label: "Number on mentions" }, { value: "counts", label: "Counts" }] } }),
   mxHideMuted: E({ ls: "chatStyle_mxHideMuted", prePaint: false, behavior: true,
     serialize: ser1, parse: bool1,
     effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_mxHideMuted" })),
@@ -1160,6 +1200,23 @@ export const ENTRIES: Record<SettingKey, Entry> = {
   mxTyping: E({ ls: "chatStyle_mxTyping", prePaint: false, behavior: true,
     serialize: ser1, parse: bool1,
     control: { kind: "toggle", label: "Send typing" } }),
+  // Phone switches. The two looks act only under 608 px (globals.css): communityPhoneText writes
+  // --mx-font-size, which the community's `.mx-scope` root takes as its chat size; phoneEdgeToEdge
+  // marks <html> and the phone rule drops the panel gap and frame. The Return key is read by
+  // MatrixInput at the key press (useSetting).
+  communityPhoneText: E({ ls: "chatStyle_mxPhoneText", prePaint: true,
+    parse: oneOf(["chat", "16"] as const),
+    effect: (v) => { if (v === "16") setProp("--mx-font-size", "1rem"); else rmProp("--mx-font-size"); },
+    control: { kind: "choice", label: "Community text", options: [
+      { value: "chat", label: "Same as chat" }, { value: "16", label: "16 px" }] } }),
+  phoneEdgeToEdge: E({ ls: "theme_phoneEdgeToEdge", prePaint: true,
+    serialize: ser1, parse: bool1, effect: (v) => cls("phone-edge", v as boolean),
+    control: { kind: "toggle", label: "Edge to edge" } }),
+  communityReturnKey: E({ ls: "chatStyle_mxReturnKey", prePaint: false, behavior: true,
+    parse: oneOf(["send", "newline"] as const),
+    effect: () => window.dispatchEvent(new CustomEvent("bb:setting", { detail: "chatStyle_mxReturnKey" })),
+    control: { kind: "choice", label: "Return key", options: [
+      { value: "send", label: "Sends" }, { value: "newline", label: "New line" }] } }),
 };
 
 export const SETTING_KEYS = Object.keys(ENTRIES) as SettingKey[];

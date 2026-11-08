@@ -116,13 +116,27 @@ test("a fingertip gets a fingertip-sized target", () => {
 test("a long press opens the TOOLBAR, never a menu of its own", () => {
   // This is the "remove the tap-hold options" half. If a row ever again wires
   // its long press straight to a context menu, mobile has two menus again.
-  for (const p of ROWS) {
+  // Live chat only: the Community row's long press is its one sheet (next test).
+  for (const p of [CHAT]) {
     const src = read(...p);
     assert.match(src, /const handleLongPress = useCallback\(\(\) => \{ claimExclusive\(owner\); setBarOpen\(true\); \}, \[owner\]\)/,
       `${p.join("/")}'s long press no longer just claims and opens the toolbar`);
     assert.doesNotMatch(src, /handleLongPress[\s\S]{0,80}setCtxMenu/,
       `${p.join("/")}'s long press opens a context menu directly again — that is the second tier`);
   }
+});
+
+test("Community: a long press opens ONE sheet — never the toolbar, never the ⋯ menu", () => {
+  // Client polish F9 (Discord's long-press sheet) keeps ticket 13's rule: one surface per gesture.
+  // The behaviour is run in components/matrixRowLongPress.render.test.ts; this pins the wiring.
+  const src = read(...MATRIX);
+  const fn = /const handleLongPress = useCallback\(([\s\S]*?)\}, \[owner\]\);/.exec(src)?.[1] ?? "";
+  assert.ok(fn, "the Community row's long-press handler is gone");
+  assert.match(fn, /claimExclusive\(owner\); setSheet\(/, "the long press no longer claims, then opens the sheet");
+  assert.doesNotMatch(fn, /setBarOpen|setCtxMenu/, "the long press opens the toolbar or the ⋯ menu as well — two surfaces again");
+  assert.match(src, /const owner = useExclusiveOpen\(barOpen \|\| sheet !== null, closeMenus\)/,
+    "the sheet does not take part in the one-at-a-time registry");
+  assert.match(src, /<MessageSheet\b/, "the row renders no sheet");
 });
 
 test("the toolbar reflects the open flag, and an outside press closes it", () => {
@@ -269,7 +283,7 @@ test("exactly ONE row menu open, by construction", () => {
   assert.match(reg, /useState\(\(\) => Symbol\(/,
     "the owner token is not a lazily-initialised useState — a ref read during render is unsafe under concurrent rendering");
 
-  for (const p of ROWS) {
+  for (const p of [CHAT]) {
     const src = read(...p);
     assert.match(src, /const owner = useExclusiveOpen\(barOpen, closeBar\)/,
       `${p.join("/")} does not participate in the one-at-a-time registry`);

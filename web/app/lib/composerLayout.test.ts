@@ -288,7 +288,7 @@ const KEEP_FOCUS_SITES: Array<[string, number]> = [
   ["app/components/SendToButton.tsx", 4],         // send-to + its menu's items + the bound face + the help-desk indicator (shown only while support is live)
   ["app/components/ComposerToolsPopover.tsx", 1],
   ["app/components/ChatComposerField.tsx", 2],    // emote button + the refusal note's ✕
-  ["app/components/MatrixInput.tsx", 2],          // attach + send
+  ["app/components/MatrixInput.tsx", 3],          // attach + send + a staged file’s ✕
   // The message row and everything that hangs off it.
   // The 9th is the row toolbar's own CONTAINER, not a button: its padding and
   // inter-button gaps are tappable surface, and a press on a non-focusable

@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo } from "react";
 import { RoomStateEvent } from "matrix-js-sdk";
 import type { Room, RoomMember } from "matrix-js-sdk";
 import { Avatar } from "@/app/components/Avatar";
+import { memberAvatar } from "@/app/lib/matrixDisplay";
 import PlatformIcon from "@/app/components/PlatformIcon";
 import { PresenceDot } from "@/app/components/PresenceDot";
 import { useUserColors, useWantUserStyles } from "@/app/lib/useUserColors";
@@ -12,18 +13,25 @@ import { usernameColor } from "@/app/lib/avatarColor";
 import { memberContentColor } from "@/app/lib/matrixProfileColor";
 import { usePresence, presenceOf, matrixSnapshotOf } from "@/app/lib/usePresence";
 import { deriveState, presenceLine } from "@/app/lib/presenceState";
-import { groupMembers, type MemberView, type Category } from "@/app/lib/memberGroups";
+import { groupMembers, type MemberView, type Category, type MemberBadge } from "@/app/lib/memberGroups";
 import { MemberCard, memberName, fromDiscord, usernameStyle } from "@/app/components/MemberCard";
 import { siteName } from "@/app/lib/siteName";
+import { useCommunityLadder } from "@/app/lib/communityAnswer";
 
-// The members list: Admin > Moderators > Supporters > Members >
-// Discord, live people first inside each, a 14-day fold into "Inactive", the
-// Discord group collapsed by default (ghosts carry no presence and no
-// reachable "last active"), and the on-site counts in the heading.
+// The members list: Streamer > Staff > Mods > Bots > Supporters > Members >
+// Discord, from the server's role ladder (names, colours, which roles get a
+// group); the service account and the forum reader are never listed. Live
+// people first inside each, a 14-day fold into "Inactive", the Discord group
+// collapsed by default (ghosts carry no presence and no reachable "last
+// active"), and the on-site counts in the heading.
 
 const OPEN_KEY = "bb_members-open";
 type GroupKey = Category | "inactive";
-const DEFAULT_OPEN: Record<GroupKey, boolean> = { admin: true, mods: true, supporters: true, members: true, discord: false, inactive: false };
+const DEFAULT_OPEN: Record<GroupKey, boolean> = {
+  streamer: true, staff: true, mods: true, bots: true, supporters: true, members: true, discord: false, inactive: false };
+
+/** A row's badge by rung; its tooltip is the rung's word (memberGroups). */
+const BADGE_ICON: Record<MemberBadge["rung"], string> = { streamer: "👑", staff: "🛡️", mods: "🛡️", bots: "🤖" };
 
 function readOpen(): Record<GroupKey, boolean> {
   try {
@@ -53,6 +61,7 @@ export function MemberList({ room, myUserId, onMessage, moderationScope }: {
   const [card, setCard] = useState<{ m: RoomMember; x: number; y: number } | null>(null);
   const [open, setOpen] = useState<Record<GroupKey, boolean>>(readOpen);
   const dir = usePresence();
+  const ladder = useCommunityLadder();
   // `Date.now()` is impure and react-hooks/purity refuses it inside useMemo
   // (the brief's own form). This is the escape hatch MemberCard.tsx already
   // uses for the same rule, event-driven instead of a lazy one-shot: `now`
@@ -78,7 +87,7 @@ export function MemberList({ room, myUserId, onMessage, moderationScope }: {
   });
 
   // The rule runs once per poll tick / membership change, not per render.
-  const { groups, inactive, byId } = useMemo(() => {
+  const { groups, inactive, badges, byId } = useMemo(() => {
     const byId = new Map<string, { m: RoomMember; view: MemberView; lastActive: number | null; site: ReturnType<typeof presenceOf> }>();
     // Not just `!!dir`: a directory answer with an empty users map is
     // indistinguishable from "no answer yet" (in practice it means the route
@@ -101,19 +110,20 @@ export function MemberList({ room, myUserId, onMessage, moderationScope }: {
       byId.set(m.userId, { m, view, lastActive, site });
       return view;
     });
-    return { ...groupMembers(views), byId };
-  }, [members, dir, room, now]);
+    return { ...groupMembers(views, ladder), byId };
+  }, [members, dir, room, now, ladder]);
 
   const rows = (list: MemberView[]) => list.map((v) => {
     const entry = byId.get(v.userId);
     if (!entry) return null;
     const { m, lastActive, site } = entry;
+    const badge = badges.get(v.userId);
     return (
       <button key={v.userId} type="button" data-member={v.userId}
         onClick={(e) => setCard({ m, x: e.currentTarget.getBoundingClientRect().left, y: e.clientY })}
-        className="w-full px-3 py-1 flex items-center gap-2 hover:bg-surface-1 rounded-md text-left transition-colors">
+        className="mx-member w-full min-h-11 px-3 py-1 flex items-center gap-2 hover:bg-surface-1 rounded-md text-left transition-colors">
         <span className="relative shrink-0">
-          <Avatar mxcUrl={m.getMxcAvatarUrl()} name={v.label} size={26} />
+          <Avatar mxcUrl={memberAvatar(m)} name={v.label} size="md" />
           <span className="absolute -bottom-0.5 -right-0.5">
             <PresenceDot state={v.state} title={presenceLine(v.state, lastActive, now)} />
           </span>
@@ -125,8 +135,7 @@ export function MemberList({ room, myUserId, onMessage, moderationScope }: {
           </span>
           {site?.statusText && <span data-status-text className="block truncate text-3xs text-muted">{site.statusText}</span>}
         </span>
-        {m.powerLevel >= 100 && <span className="shrink-0 text-3xs" title="Admin">👑</span>}
-        {m.powerLevel >= 50 && m.powerLevel < 100 && <span className="shrink-0 text-3xs" title="Moderator">🛡️</span>}
+        {badge && <span data-badge className="shrink-0 text-3xs" title={badge.label}>{BADGE_ICON[badge.rung]}</span>}
       </button>
     );
   });
@@ -135,20 +144,23 @@ export function MemberList({ room, myUserId, onMessage, moderationScope }: {
   // button gave keyboard/AT users a focus stop that does nothing on
   // activation. Only the two collapsible headings (Discord, Inactive) are
   // buttons, and they carry aria-expanded so their state is announced.
-  const heading = (key: GroupKey, label: string, count: number, collapsible: boolean, shown?: boolean) =>
+  const heading = (key: GroupKey, label: string, count: number, collapsible: boolean, shown?: boolean, colour?: string | null) =>
     collapsible ? (
       <button type="button" data-group={key} aria-expanded={!!shown} onClick={() => toggle(key)}
         className="w-full px-3 text-3xs uppercase tracking-wider text-muted mb-1 text-left hover:text-body">
         {label} — {count}
       </button>
     ) : (
-      <p data-group={key} className="w-full px-3 text-3xs uppercase tracking-wider text-muted mb-1 text-left cursor-default">
+      <p data-group={key} className="w-full px-3 text-3xs uppercase tracking-wider text-muted mb-1 text-left cursor-default"
+        style={colour ? { color: colour } : undefined}>
         {label} — {count}
       </p>
     );
 
   return (
-    <div className="h-full overflow-y-auto no-scrollbar py-2">
+    // Always a narrow pane (data-mx-pane). Each row's picture is the avatar scale's md step
+    // (Discord's 32px member list), whatever the chat rows' Avatar-size slider.
+    <div data-mx-pane="narrow" className="h-full overflow-y-auto no-scrollbar py-2">
       {dir && (
         <p data-presence-counts className="px-3 pb-2 text-3xs text-muted">
           {dir.counts.onSite} on {siteName()} · {dir.counts.inCommunity} in the community
@@ -159,7 +171,7 @@ export function MemberList({ room, myUserId, onMessage, moderationScope }: {
         const shown = collapsible ? open[g.key] : true;
         return (
           <div key={g.key} className="mb-2">
-            {heading(g.key, g.label, g.members.length, collapsible, shown)}
+            {heading(g.key, g.label, g.members.length, collapsible, shown, g.colour)}
             <div data-group-rows={g.key}>{shown && rows(g.members)}</div>
           </div>
         );

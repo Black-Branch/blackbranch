@@ -15,7 +15,7 @@ import { legacyNativePlatform } from "./nativePlatform.ts";
  *  @test-only legacyStorage.test.ts checks every stem is still a product storage name, so the list
  *  cannot rot; production reads it in-module, inside carryLegacyStorageScript. */
 export const CARRIED_STEMS: readonly string[] = [
-  "behavior_lists", "chunk_reload", "enc-verdict:", "matrix_apps_hint", "members-open", "modpanel_geom",
+  "behavior_lists", "chunk_reload", "enc-verdict:", "members-open", "modpanel_geom",
   "pending-support", "preset_", "profilecard_geom", "pwa_nudge_dismissed", "recent_reactions",
   "secure_dismissed", "tipMethod", "tz_sent", "windock_",
 ];

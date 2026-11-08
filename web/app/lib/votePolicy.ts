@@ -59,15 +59,54 @@ export const VOTE_COOLING_TITLE =
 // deliberately, and it only tightens on a busy stream, where the data says
 // scores really are higher. Clamped so it can never run away if the site grows
 // past anything measured here.
-export const AUTO_PIN_BASE = 3;
-/** @test-only the curve's slope; callers ask `autoPinScore`, they never step it
- *  themselves. Exported so autoPin.test.ts asserts the step at its exact
- *  boundary rather than restating 12 and drifting from it. */
-export const AUTO_PIN_CHATTERS_PER_STEP = 12;
-/** @test-only the ceiling, for the same reason. Its whole job is to fail
- *  SILENTLY-proof: too high a bar does not error, it just means nothing is ever
- *  pinned again, so the test asserts the clamp rather than trusting it. */
-export const AUTO_PIN_MAX = 6;
+//
+// The streamer can change every number (ticket #189): Admin Panel › Site ›
+// Auto-pin, the `chat.autoPin.*` instance settings. The numbers above are the
+// schema defaults, and autoPin.test.ts pins the two together.
+
+/** Every number the crowd auto-pin applies. */
+export type AutoPinRules = {
+  /** The streamer switched the crowd auto-pin off: only a moderator pins. */
+  off: boolean;
+  /** Net upvotes needed in a quiet chat, and when the crowd size is unknown. */
+  base: number;
+  /** One more upvote needed per this many active chatters. */
+  chattersPerStep: number;
+  /** The bar never rises above this (nor falls under `base`). Too high a bar does not error, it
+   *  just means nothing is ever pinned again, which is why the default is 6, the most ever seen. */
+  max: number;
+  /** How long a crowd pin stays up. A moderator's pin never expires. */
+  ttlMs: number;
+};
+
+/** The product's own rules: the measured curve above, and ten minutes.
+ *  @test-only autoPin.test.ts pins it to today's numbers and to the schema defaults; the curve and
+ *  autoPinRulesFrom in this file are its runtime readers. */
+export const DEFAULT_AUTO_PIN: AutoPinRules = Object.freeze({ off: false, base: 3, chattersPerStep: 12, max: 6, ttlMs: 600_000 });
+
+/** Which setting feeds which rule, and its unit conversion (minutes to ms).
+ *  @test-only autoPin.test.ts proves every key exists in the schema with a default equal to
+ *  DEFAULT_AUTO_PIN; autoPinRulesFrom below is the reader. */
+export const AUTO_PIN_KEYS: Readonly<Record<keyof AutoPinRules, readonly [key: string, scale: number]>> = {
+  off: ["chat.autoPin.off", 1],
+  base: ["chat.autoPin.votes", 1],
+  chattersPerStep: ["chat.autoPin.chattersPerVote", 1],
+  max: ["chat.autoPin.maxVotes", 1],
+  ttlMs: ["chat.autoPin.minutes", 60_000],
+};
+
+/** The rules from a resolver (key to resolved value). A value of the wrong type falls to the
+ *  product default for THAT rule only: the settings layer has already validated it. */
+export function autoPinRulesFrom(get: (key: string) => unknown): AutoPinRules {
+  const off = get(AUTO_PIN_KEYS.off[0]);
+  const out: AutoPinRules = { ...DEFAULT_AUTO_PIN, off: typeof off === "boolean" ? off : DEFAULT_AUTO_PIN.off };
+  for (const rule of ["base", "chattersPerStep", "max", "ttlMs"] as const) {
+    const [key, scale] = AUTO_PIN_KEYS[rule];
+    const v = get(key);
+    if (typeof v === "number" && Number.isFinite(v) && v >= 1) out[rule] = v * scale;
+  }
+  return out;
+}
 
 /**
  * Net upvotes required to auto-pin, given how many people are chatting right now.
@@ -75,11 +114,16 @@ export const AUTO_PIN_MAX = 6;
  * @param activeChatters distinct authors in the recent window; `null` when that
  *   is unknown (no stream, query failed). Unknown falls back to the BASE — the
  *   permissive end — because refusing to pin is invisible to everyone, whereas
- *   pinning slightly too eagerly is at worst a 10-minute annoyance that the next
+ *   pinning slightly too eagerly is at worst a short annoyance that the next
  *   auto-pin replaces.
  */
-export function autoPinScore(activeChatters: number | null): number {
-  if (activeChatters == null || activeChatters < 0) return AUTO_PIN_BASE;
-  const stepped = AUTO_PIN_BASE + Math.floor(activeChatters / AUTO_PIN_CHATTERS_PER_STEP);
-  return Math.min(stepped, AUTO_PIN_MAX);
+export function autoPinScore(activeChatters: number | null, rules: AutoPinRules = DEFAULT_AUTO_PIN): number {
+  if (activeChatters == null || activeChatters < 0) return rules.base;
+  const stepped = rules.base + Math.floor(activeChatters / rules.chattersPerStep);
+  return Math.min(stepped, Math.max(rules.max, rules.base));
+}
+
+/** Milliseconds until a crowd pin made at `createdAtMs` is due to come down (0 = due now). */
+export function autoPinWaitMs(createdAtMs: number, nowMs: number, rules: AutoPinRules): number {
+  return Math.max(0, createdAtMs + rules.ttlMs - nowMs);
 }

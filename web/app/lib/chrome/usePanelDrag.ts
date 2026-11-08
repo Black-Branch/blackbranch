@@ -56,7 +56,7 @@
 // entry-height freeze exists to prevent.
 
 import { useCallback, useEffect, useRef, type RefObject, type PointerEvent as ReactPointerEvent } from "react";
-import { currentTranslateY, holdTranslate, releaseTranslate, setParkPad } from "./panelFollow";
+import { currentTranslateY, holdTranslate, paneCap, releaseTranslate, setParkPad } from "./panelFollow";
 import { DRAG_SLOP_PX, VELOCITY_WINDOW_MS, dragOffset, cancelTarget, releaseTarget, velocity, type Sample } from "./panelGesture";
 import { KB_LIFT_EVENT, type KbLiftDetail } from "@/app/lib/useViewportHeightVar";
 
@@ -125,14 +125,9 @@ export function usePanelDrag({ panel, layer, kind, restTranslate: restTranslateR
    *  change this is what stays — see `restTranslate` below. */
   const parkedVisibleH = useRef<number | null>(null);
 
-  /** The cap box's height against the LIVE ceiling. The layer's rect, never
-   *  `clientHeight`: the layer has no border, and `clientHeight` rounds to an
-   *  integer while the pane's real height is fractional. */
-  const capHeight = useCallback((): number => {
-    if (!layer) return 0;
-    const ceiling = parseFloat(layer.ownerDocument.defaultView?.getComputedStyle(layer).getPropertyValue("--pane-ceiling") ?? "") || 0;
-    return layer.getBoundingClientRect().height - ceiling;
-  }, [layer]);
+  /** The cap box's height against the LIVE ceiling (panelFollow.ts paneCap —
+   *  the top panel's pull reads the same one). */
+  const capHeight = useCallback((): number => paneCap(layer), [layer]);
 
   /** contentFit's scalar, and the cap, for a resting box of height `fitH`. */
   const geometry = useCallback((fitH: number): { fit: number; capH: number } => {

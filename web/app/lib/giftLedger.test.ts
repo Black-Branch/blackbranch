@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripComments } from "./testSource.ts";
-import { groupGiftPurchases, type GiftGivenRow, type GiftPendingRow } from "./giftLedger.ts";
+import { GIFT_GIVEN_DATES_SQL, groupGiftPurchases, type GiftGivenRow, type GiftPendingRow } from "./giftLedger.ts";
 
 const NOW = new Date("2026-09-14T12:00:00Z");
 
@@ -85,6 +85,16 @@ test("a purchase with only pending rows (nothing granted yet) still appears, wit
     sessionId: "cs_fresh", kind: "community", months: 2, anonymous: false, createdAt: "2026-09-14T11:00:00.000Z",
     recipients: [], waiting: 1, waitingUntil: "2026-12-13T11:00:00.000Z",
   });
+});
+
+// Review R5 (round 2): a gift queued behind its recipient's subscription began on the recipient's
+// renewal date — one person's billing data — and the gifter's list showed it as "active until <date>".
+// The server sends no date for a queued gift; the line says it is queued.
+test("a queued gift reaches the gifter with no date, marked queued", () => {
+  const queued: GiftGivenRow[] = [{ stripe_session_id: "cs_q", kind: "direct", months: 1, anonymous: false, created_at: "2026-10-20T00:00:00.000Z", recipient_name: "cleo", expires_at: null, queued: true }];
+  const [p] = groupGiftPurchases(queued, [], NOW);
+  assert.deepEqual(p!.recipients, [{ name: "cleo", expiresAt: null, active: false, queued: true }]);
+  assert.match(GIFT_GIVEN_DATES_SQL, /CASE WHEN g\.follows_subscription AND g\.starts_at > now\(\) THEN NULL ELSE g\.expires_at END AS expires_at/);
 });
 
 // ── The queries behind it (source scan of the server half) ───────────────────

@@ -4,6 +4,7 @@ import { setPendingSecretStorageKey } from "@/app/lib/MatrixClientContext";
 import { getOwnIdentity, refreshOwnIdentityFromServer, crossSigningResetUrl } from "@/app/lib/matrixCrypto";
 import { fetchServerDeviceKeys, diagnoseVerifyFailure, verifyFailureMessage } from "@/app/lib/matrixDeviceKeys";
 import { signOutEverything } from "@/app/lib/signOutEverything";
+import { rotateRecoveryKeyKeepingBackup, readServerBackup, BackupKeyMissingError, BackupStateUnreadableError, BACKUP_KEY_MISSING_MESSAGE, BACKUP_STATE_UNREADABLE_MESSAGE } from "@/app/lib/matrixRecoveryKey";
 import { copyText } from "@/app/lib/clipboard";
 import { getJson } from "@/app/lib/http";
 import type { RestoreProgress, EncryptionFlow, Schedule } from "@/app/lib/matrixCrypto";
@@ -268,24 +269,14 @@ export function useMatrixEncryptionSetup({
       let keyToShow = "";
 
       try {
-        await crypto.bootstrapSecretStorage({
-          setupNewKeyBackup: true,
-          setupNewSecretStorage: true,
-          createSecretStorageKey: async () => {
-            const privateKey = new Uint8Array(32);
-            window.crypto.getRandomValues(privateKey);
-            const encodedPrivateKey = encodeRecoveryKey(privateKey) ?? "";
-            keyToShow = encodedPrivateKey;
-            setPendingSecretStorageKey(privateKey);
-            return { privateKey, encodedPrivateKey, keyInfo: {} };
-          },
-        });
-
-        // Re-run non-destructively so the (unchanged) cross-signing private
-        // keys are re-encrypted under the new 4S key.
-        await crypto.bootstrapSecretStorage({
-          setupNewKeyBackup: false,
-          setupNewSecretStorage: false,
+        // Keeps the key backup and the history in it (matrixRecoveryKey.ts).
+        await rotateRecoveryKeyKeepingBackup(crypto, () => readServerBackup(client.http), async () => {
+          const privateKey = new Uint8Array(32);
+          window.crypto.getRandomValues(privateKey);
+          const encodedPrivateKey = encodeRecoveryKey(privateKey) ?? "";
+          keyToShow = encodedPrivateKey;
+          setPendingSecretStorageKey(privateKey);
+          return { privateKey, encodedPrivateKey, keyInfo: {} };
         });
       } finally {
         setPendingSecretStorageKey(null);
@@ -295,8 +286,10 @@ export function useMatrixEncryptionSetup({
       setSetupStep("show_key");
       await checkCrossSigningStatus();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
       setSetupStep(null);
+      if (e instanceof BackupKeyMissingError) { setSetupError(BACKUP_KEY_MISSING_MESSAGE); return; }
+      if (e instanceof BackupStateUnreadableError) { setSetupError(BACKUP_STATE_UNREADABLE_MESSAGE); return; }
+      const msg = e instanceof Error ? e.message : String(e);
       setSetupError(`Failed to rotate key: ${msg}`);
     }
   }

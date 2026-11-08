@@ -9,8 +9,9 @@ import { twitchBroadcasterId, twitchClientId } from "@/app/lib/twitch";
 import { escapeLeadingCommand } from "@/app/lib/outgoingText";
 import { getManifest } from "@/app/api/emotes/route";
 import { instanceString } from "@/app/lib/instanceConfigServer";
+import { sendInParts } from "@/app/lib/youtubeParts";
 import {
-  twitchSendOutcome, kickSendOutcome, refusalByClass, httpUnavailable, youtubeErrorOutcome, thrownFailure,
+  twitchSendOutcome, twitchDropCode, kickSendOutcome, refusalByClass, httpUnavailable, youtubeErrorOutcome, thrownFailure,
   kickForbiddenOutcome, bodyShape,
   type Unavailable,
 } from "@/app/lib/sendDelivery";
@@ -39,7 +40,8 @@ export type PlatformSendResult =
   | { ok: true; platformMsgId?: string }
   // "refused" = the platform answered and declined this message (followers-only,
   // AutoMod, duplicate…); `reason` is a short phrase for the sender (sendDelivery.ts).
-  | { ok: false; error: "not_linked" | "not_live" | "send_failed" | "missing_scope" | "unsupported_platform" | "refused"; reason?: string }
+  // `dropCode` = Twitch's drop_reason.code on a dropped message, for the operator's log only.
+  | { ok: false; error: "not_linked" | "not_live" | "send_failed" | "missing_scope" | "unsupported_platform" | "refused"; reason?: string; dropCode?: string }
   // Infrastructure — quota, rate limit, 5xx, timeout, our own config/throw: nothing
   // the viewer can act on (sendDelivery.ts). `code` is for the journal only.
   | ({ ok: false } & Unavailable);
@@ -122,8 +124,11 @@ async function sendTwitch(
   }
   // A 200 is not delivery: Helix answers is_sent:false (with a drop_reason) for a
   // message it dropped — AutoMod, followers-only, a duplicate.
-  const outcome = twitchSendOutcome(await res.json().catch(() => null));
-  if (!outcome.sent) return { ok: false, error: "refused", ...(outcome.reason ? { reason: outcome.reason } : {}) };
+  const body: unknown = await res.json().catch(() => null);
+  const outcome = twitchSendOutcome(body);
+  // The drop code goes to the operator's log only (copyFailureLog.ts); failureOf never passes it on.
+  const dropCode = twitchDropCode(body);
+  if (!outcome.sent) return { ok: false, error: "refused", ...(outcome.reason ? { reason: outcome.reason } : {}), ...(dropCode ? { dropCode } : {}) };
   return { ok: true, ...(outcome.id ? { platformMsgId: outcome.id } : {}) };
 }
 
@@ -378,6 +383,11 @@ async function sendYouTube(
   if (liveChatId && typeof liveChatId === "object") return { ok: false, ...liveChatId };
   if (!liveChatId) return { ok: false, error: "not_live" };
 
+  // Over 200 characters (a staff line): sent as parts, in order (youtubeParts.ts).
+  return sendInParts(message, (part) => postYouTubeLine(token, liveChatId, part, target));
+}
+
+async function postYouTubeLine(token: string, liveChatId: string, message: string, target: string): Promise<PlatformSendResult> {
   // NB: the REST path is liveChat/messages (with a slash) — liveChatMessages is
   // only the resource's docs name and 404s with an empty body. part=id makes
   // the response carry the created message's Data-API id ("LCC." format — the

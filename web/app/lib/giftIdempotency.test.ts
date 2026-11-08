@@ -70,10 +70,11 @@ test("the gift announce carries a session-derived spendId for stream-api dedup",
   assert.match(src, /spendId: `gift:\$\{sessionId\}`/,
     "announceGift has no spendId — a double announce credits the support bar twice; " +
     "/chat/event's outcome store can only dedup what carries an id");
-  const calls = src.match(/await announceGift\(/g) ?? [];
-  assert.equal(calls.length, 2, "announceGift call sites changed — re-verify both pass cs.id");
-  assert.match(src, /announceGift\(gifter, anonymous, "direct", months, \[recipient\], cs\.amount_total \?\? 0, cs\.id\)/,
-    "the direct-gift announce no longer passes the session id");
-  assert.match(src, /announceGift\(gifter, anonymous, "community", months, grantedNow, cs\.amount_total \?\? 0, cs\.id\)/,
-    "the community-gift announce no longer passes the session id");
+  // ONE announce per delivery, direct and community alike, carrying the session id (A1-04: it runs
+  // on every delivery, so its dedup key is what keeps a redelivery from crediting twice).
+  const calls = src.match(/await deps\.announce\(/g) ?? [];
+  assert.equal(calls.length, 1, "the announce call sites changed — re-verify each passes cs.id");
+  assert.match(src, /await deps\.announce\(\{[\s\S]{0,700}sessionId: cs\.id,/,
+    "the gift announce no longer passes the session id");
+  assert.match(src, /announce: announceGift,/, "production binds the announce to announceGift (the spendId above)");
 });

@@ -38,7 +38,7 @@ import EmptyState from "@/app/components/EmptyState";
  *
  * MEASURED, NOT EYEBALLED. It is the widest halo an EFFECT can emit, plus 1:
  *   • glow's outer bloom — `0 0 13px` (usernameStyles.ts) — the largest
- *   • un-pulse's 50% keyframe — `0 0 12px` (globals.css)
+ *   • Pulse's bloom layer — `0 0 12px` (globals.css `.un-pulse::after`)
  * `storeStylePreview.test.ts` re-derives that maximum from those two files and
  * fails if either grows past this, so a future effect with a bigger halo cannot
  * quietly start being clipped instead.

@@ -8,12 +8,14 @@ import { messageVisibleSql } from "@/app/lib/instanceSchema.generated.mjs";
 import { sourceVisible } from "@/app/lib/messageVisibility";
 import { isNativePlatform, normalizePlatform } from "@/app/lib/nativePlatform";
 import { pinSnapshotFrom } from "@/app/lib/pinSnapshot";
+import { autoPinWaitMs } from "@/app/lib/votePolicy";
+import { autoPinRules } from "@/app/lib/autoPinServer";
 
 // Pinned chat message (one active at a time — Twitch-style banner).
 //   GET    — current active pin (public; clients fetch on load, WS keeps live)
 //   POST   — mod pin: { platform, messageId } (snapshot resolved server-side)
 //   DELETE — mod unpin
-// Auto-pinning at +5 lives in /api/chat/vote.
+// Crowd auto-pinning lives in /api/chat/vote.
 
 type PinRow = {
   id: string;
@@ -63,16 +65,14 @@ async function broadcastPin(pin: ReturnType<typeof toClient> | null) {
   }
 }
 
-// Auto-pins (crowd upvote threshold) self-clear after 10 minutes — a mod pin
-// never does. Exported so /api/chat/vote can arm an in-process timer right
-// after creating an auto-pin (the common path — the banner disappears live
-// for anyone already looking); GET below double-checks lazily in case a
-// server restart dropped that timer. The `auto` guard in the UPDATE means
-// this can never touch a mod pin even if called with a stale/wrong id.
-export const AUTO_PIN_TTL_MS = 10 * 60 * 1000;
-
+// Auto-pins (crowd upvote threshold) self-clear after the streamer's minutes setting
+// (chat.autoPin.minutes) — a mod pin never does. /api/chat/vote arms an in-process timer
+// (lib/autoPinExpiry.ts) right after creating one, so the banner disappears live for anyone
+// already looking; GET below double-checks lazily in case a server restart dropped that timer.
+// The `auto` guard in the UPDATE means this can never touch a mod pin even if called with a
+// stale/wrong id.
 export async function expireAutoPinIfDue(id: number, createdAtMs: number): Promise<boolean> {
-  if (Date.now() - createdAtMs < AUTO_PIN_TTL_MS) return false;
+  if (autoPinWaitMs(createdAtMs, Date.now(), autoPinRules()) > 0) return false;
   const { rows } = await pool.query(
     `UPDATE site.pinned_messages SET active = FALSE, unpinned_at = now()
      WHERE id = $1 AND active AND auto RETURNING id`,

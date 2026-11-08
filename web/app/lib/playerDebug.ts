@@ -5,6 +5,9 @@
 // reloads, which matters because a reload is one of the things being chased); `?playerdebug=0`
 // switches it off. Same URL-switch idiom as `?kbdebug`.
 //
+// A remount's row names its cause (remountCause): what the box is keyed on that changed since it
+// last unmounted.
+//
 // While on, every pause, mute change, media reset (`emptied`), embed reload and player remount sends
 // ONE row to the client-error sink (source "player", so it rides the player's own budget in
 // clientError.ts) carrying the last events before it — and the time since the viewer's last tap or
@@ -26,6 +29,19 @@ export function readPlayerDebugSwitch(search: string, stored: string | null): { 
     return { on, store: on ? "1" : null };
   }
   return { on: stored === "1", store: undefined };
+}
+
+/** What the player box is keyed on (source, tab, VOD id, stored mode …), as text. */
+export type PlayerInputs = Readonly<Record<string, string>>;
+
+/** Why a remount happened: every input that differs between the player's last
+ *  life (`prev`, as it was when it unmounted) and this one — `key:old→new`,
+ *  comma-joined. "nothing-changed" = the page around the player remounted it. */
+export function remountCause(prev: PlayerInputs | null, next: PlayerInputs): string {
+  if (!prev) return "first-mount";
+  const keys = [...new Set([...Object.keys(prev), ...Object.keys(next)])];
+  const changed = keys.filter((k) => prev[k] !== next[k]).map((k) => `${k}:${prev[k] ?? "-"}→${next[k] ?? "-"}`);
+  return changed.length ? changed.join(",") : "nothing-changed";
 }
 
 /** Events that send a report when they happen (the rest only fill the log). */

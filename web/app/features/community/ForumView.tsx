@@ -8,7 +8,7 @@ import { subscribeRoomRefresh } from "@/app/lib/matrixRoomEvents";
 import type { Room, MatrixEvent } from "matrix-js-sdk";
 import { useMatrixClient } from "@/app/lib/MatrixClientContext";
 import { useBadges } from "@/app/lib/BadgesContext";
-import { Bar } from "@/app/components/chrome";
+import { Bar, BarButton } from "@/app/components/chrome";
 import { PostList } from "@/app/components/forum/PostList";
 import { ForumToolbar } from "@/app/components/forum/ForumToolbar";
 import { getMemberDisplayName } from "@/app/lib/matrixDisplay";
@@ -200,16 +200,16 @@ export function ForumView({
       <Bar slot="top" name="mx-header" center={
         <>
           {onBack && (
-            <button onClick={onBack} aria-label="Back" className="text-secondary hover:text-strong text-sm px-1 shrink-0">←</button>
+            <BarButton size="touch" icon={<span className="text-sm">←</span>} label="Back" onClick={onBack} />
           )}
           {onToggleDirectory && (
-            <button
+            <BarButton
+              size="touch"
+              icon={<span className="text-sm">☰</span>}
+              label={directoryOpen ? "Hide channels" : "Show channels"}
+              active={directoryOpen}
               onClick={onToggleDirectory}
-              title={directoryOpen ? "Hide channels" : "Show channels"}
-              className={`text-sm px-1 shrink-0 transition-colors ${directoryOpen ? "text-body" : "text-muted hover:text-strong"}`}
-            >
-              ☰
-            </button>
+            />
           )}
           <span className="text-accent shrink-0" title="Forum">
             <Chats size={15} weight="bold" />
@@ -218,13 +218,13 @@ export function ForumView({
             {room.name || room.roomId}
           </span>
           {onToggleMembers && (
-            <button
+            <BarButton
+              size="touch"
               onClick={onToggleMembers}
-              title={membersOpen ? "Hide members" : "Show members"}
-              className={`shrink-0 px-1 transition-colors ${membersOpen ? "text-body" : "text-muted hover:text-strong"}`}
-            >
-              <Users size={15} weight="bold" />
-            </button>
+              label={membersOpen ? "Hide members" : "Show members"}
+              active={membersOpen}
+              icon={<Users size={15} weight="bold" />}
+            />
           )}
         </>
       } />

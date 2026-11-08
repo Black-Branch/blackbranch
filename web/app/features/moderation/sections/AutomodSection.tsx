@@ -7,7 +7,7 @@ import { useState } from "react";
 import { LoadingState } from "@/app/components/Spinner";
 import { siteName } from "@/app/lib/siteName";
 import { card, h2, btn, timeAgo } from "../shared";
-import { useAutomodQueue, isDismissOnly, degradedLine } from "@/app/lib/useAutomodQueue";
+import { useAutomodQueue, isDismissOnly, degradedLine, resolveNote } from "@/app/lib/useAutomodQueue";
 import { isNativePlatform } from "@/app/lib/nativePlatform";
 
 // Fetching + resolving live in useAutomodQueue, shared with the inline chat
@@ -27,8 +27,8 @@ export default function AutomodSection({ note }: { note: (m: string) => void }) 
   async function resolve(id: number, action: "allow" | "deny") {
     setBusy(id);
     const r = await resolveHold(id, action);
-    if (r === "expired") note("That hold already expired on Twitch.");
-    else if (r === "failed") note("Couldn't resolve that — try again.");
+    const said = resolveNote(r);
+    if (said) note(said);
     setBusy(null);
   }
 

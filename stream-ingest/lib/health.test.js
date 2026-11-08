@@ -76,3 +76,57 @@ test('the health server binds to localhost unless INGEST_HEALTH_BIND says otherw
     assert.equal(s.host, '127.0.0.1');
   } finally { await s.stop(); if (had !== undefined) process.env.INGEST_HEALTH_BIND = had; }
 });
+
+// ── Task 10: per-platform liveness for admins and the Doctor ──────────────────────────────────────
+// /health carries every platform's state from the poller (getPlatformStates): ISO times, the evidence
+// code, the miss count, and `stale` — the vocabulary's one stale rule (staleAnswer), computed HERE so
+// the Doctor (which imports nothing) only reads a boolean.
+const S = 15 * 60_000;
+const st = (state, o = {}) => ({ state, since: NOW - 60_000, lastAnswerAt: NOW - 30_000, misses: 0, key: 'k-1', evidence: 'helix-live', scheduledStart: null, ...o });
+
+test('healthBody carries liveness: every platform, ISO times, the code, the count; not configured is null; no key', () => {
+  const body = healthBody({ readers: {}, wanted: () => false, bot: false, now: NOW,
+    liveness: { twitch: st('live'), youtube: st('upcoming', { evidence: 'upcoming', scheduledStart: NOW + 3_600_000, lastAnswerAt: null }), kick: null } });
+  assert.deepEqual(Object.keys(body.liveness), ['twitch', 'kick', 'youtube', 'streamplace']);
+  assert.deepEqual(body.liveness.twitch, { state: 'live', since: at(60_000), lastAnswerAt: at(30_000), scheduledStart: null, evidence: 'helix-live', misses: 0, stale: false });
+  assert.equal(body.liveness.youtube.scheduledStart, new Date(NOW + 3_600_000).toISOString());
+  assert.equal(body.liveness.youtube.lastAnswerAt, null);
+  assert.equal(body.liveness.kick, null);
+  assert.equal(body.liveness.streamplace, null, 'a platform the poller never named is not configured');
+  assert.ok(!JSON.stringify(body).includes('k-1'), 'the broadcast key never leaves the poller');
+  assert.equal(body.ok, true, 'liveness never changes ok (that is the readers\' verdict)');
+});
+
+test('/health carries stale: fresh, stale, never answered with an old since, never answered with a recent since', () => {
+  const stale = (s) => healthBody({ readers: {}, wanted: () => false, bot: false, now: NOW, liveness: { twitch: s } }).liveness.twitch.stale;
+  assert.equal(stale(st('live', { lastAnswerAt: NOW - 1000 })), false, 'fresh');
+  assert.equal(stale(st('unknown', { evidence: 'helix-error', lastAnswerAt: NOW - S - 1 })), true, 'stale');
+  assert.equal(stale(st('unknown', { evidence: 'helix-error', lastAnswerAt: null, since: NOW - S - 1 })), true, 'never answered, old since');
+  assert.equal(stale(st('unknown', { evidence: 'helix-error', lastAnswerAt: null, since: NOW - 1000 })), false, 'never answered, recent since');
+});
+
+test('restart + retry: no states yet (a poller that has not ticked, or POLLER_ENABLED=0) is every platform null; the same input twice is the same body', () => {
+  const empty = healthBody({ readers: {}, wanted: () => false, bot: false, now: NOW });
+  assert.deepEqual(empty.liveness, { twitch: null, kick: null, youtube: null, streamplace: null });
+  const input = { readers: {}, wanted: () => false, bot: false, now: NOW, liveness: { twitch: st('live') } };
+  assert.deepEqual(healthBody(input), healthBody(input));
+});
+
+test('the real server serves liveness as JSON', async () => {
+  const s = startHealthServer({ snapshot: () => healthBody({ readers: {}, wanted: () => false, bot: false, now: NOW, liveness: { kick: st('offline', { evidence: 'kick-not-live' }) } }), port: 0, host: '127.0.0.1', log: quiet });
+  const port = await s.ready;
+  try {
+    const j = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.equal(j.liveness.kick.state, 'offline');
+    assert.equal(j.liveness.kick.evidence, 'kick-not-live');
+    assert.equal(j.liveness.kick.stale, false);
+  } finally { await s.stop(); }
+});
+
+test('index.js hands /health the poller\'s states (scan, anchored at the end of index.js)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  assert.match(src, /import \{ startPoller, getPlatformStates \} from '\.\/lib\/poller\.js';/);
+  assert.match(src, /healthBody\(\{[^}]*liveness: getPlatformStates\(\)/);
+  assert.match(src, /\nmain\(\)\.catch\(\(err\) => \{\n[^\n]*\n[^\n]*\n\}\);\n$/, 'the scan read to the end of index.js');
+});

@@ -50,10 +50,11 @@ test("toggle appends, removes, ignores a duplicate, and refuses past the limit",
 });
 
 test("the ⋯ menu offers Pin/Unpin from the row, gated in the timeline by canPin and the limit", () => {
-  const menu = read("app/components/MsgContextMenu.tsx", /<\/ContextMenu>\s*\);\s*}\s*$/);
-  assert.match(menu, /\{onPin && \(\s*<MenuItem onClick=\{\(\) => \{ onPin\(\); onClose\(\); \}\}>\s*<span>📌<\/span> \{pinned \? "Unpin message" : "Pin message"\}/);
+  // The ⋯ menu and the long-press sheet render one item list (msgMenuItems.tsx).
+  const items = read("app/components/msgMenuItems.tsx", /return out;\s*}\s*$/);
+  assert.match(items, /add\(ctx\.onPin, \{\s*id: "pin", label: ctx\.pinned \? "Unpin message" : "Pin message"/);
   const row = read("app/components/MatrixMessageRow.tsx", /export const MatrixMessageRow = memo\(MatrixMessageRowImpl, rowPropsEqual\);\s*$/);
-  assert.match(row, /onPin=\{onTogglePin \? \(\) => onTogglePin\(ev, !!pinned\) : undefined\}\s*pinned=\{pinned\}/);
+  assert.match(row, /onPin: onTogglePin \? \(\) => onTogglePin\(ev, !!pinned\) : undefined,\s*pinned,/);
   assert.match(row, /a\.pinned !== b\.pinned \|\|\s*a\.onTogglePin !== b\.onTogglePin/, "the memo comparator sees the new props");
   const tl = read("app/features/community/Timeline.tsx", /<\/div>\s*\);\s*}\s*$/);
   assert.match(tl, /const mayPin = canPin\(room, myUserId\);/);

@@ -1,12 +1,12 @@
 -- Fresh-install BASELINE — the schema a full replay of migrations/schema.sql + every
--- migration up to v164 leaves, with NO data.
+-- migration up to v176 leaves, with NO data.
 --
 -- 🔴 GENERATED. Never edit by hand: run `node tools/check-baseline.mjs --generate`.
 -- CI fails until this file matches the chain,
 -- so every new migration lands together with a regenerated baseline.
 --
 -- Applied ONCE, to an EMPTY database, followed by baseline/seed.sql and then every migration
--- newer than v164. It is not re-runnable on purpose: a database that already holds a
+-- newer than v176. It is not re-runnable on purpose: a database that already holds a
 -- schema must take migrations, never a second baseline. See migrations/baseline/README.md.
 
 --
@@ -323,8 +323,15 @@ CREATE TABLE site.chat_messages (
     event_json jsonb,
     dest_platforms text,
     encrypted_text text,
-    emotes jsonb
+    emotes jsonb,
+    client_msg_id uuid
 );
+
+--
+-- Name: COLUMN chat_messages.client_msg_id; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.chat_messages.client_msg_id IS 'the sender''s own id for this line, minted by the browser per composed line; a send carrying a key already stored for the same sender is answered with that row, never posted again';
 
 --
 -- Name: chat_messages_id_seq; Type: SEQUENCE; Schema: site; Owner: -
@@ -452,6 +459,46 @@ CREATE TABLE site.coin_wallets (
 );
 
 --
+-- Name: community_discord_import; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.community_discord_import (
+    guild_id text NOT NULL,
+    guild_name text NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    imported_by text,
+    CONSTRAINT community_discord_import_guild_id_check CHECK ((guild_id ~ '^[0-9]{17,20}$'::text))
+);
+
+--
+-- Name: TABLE community_discord_import; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.community_discord_import IS 'The Discord server the community was imported from (v176), one row per server, and the last import.';
+
+--
+-- Name: community_discord_roles; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.community_discord_roles (
+    role_id text NOT NULL,
+    guild_id text NOT NULL,
+    name text NOT NULL,
+    rung text NOT NULL,
+    source text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT community_discord_roles_guild_id_check CHECK ((guild_id ~ '^[0-9]{17,20}$'::text)),
+    CONSTRAINT community_discord_roles_role_id_check CHECK ((role_id ~ '^[0-9]{17,20}$'::text)),
+    CONSTRAINT community_discord_roles_rung_check CHECK ((rung = ANY (ARRAY['admin'::text, 'staff'::text, 'mod'::text, 'bot'::text, 'supporter'::text, 'member'::text])))
+);
+
+--
+-- Name: TABLE community_discord_roles; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.community_discord_roles IS 'Each Discord role''s rung on the ladder as the last import confirmed it (v176); source names a Supporter role''s origin (booster, a linked platform, a bot by name).';
+
+--
 -- Name: community_embeds; Type: TABLE; Schema: site; Owner: -
 --
 
@@ -522,6 +569,203 @@ CREATE SEQUENCE site.community_loop_videos_id_seq
 ALTER SEQUENCE site.community_loop_videos_id_seq OWNED BY site.community_loop_videos.id;
 
 --
+-- Name: community_roles; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.community_roles (
+    key text NOT NULL,
+    label text NOT NULL,
+    level integer NOT NULL,
+    colour text,
+    hoist boolean DEFAULT false NOT NULL,
+    order_key text NOT NULL,
+    builtin boolean DEFAULT false NOT NULL
+);
+
+--
+-- Name: TABLE community_roles; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.community_roles IS 'The role ladder (v165): a label per power level. Matrix''s rule holds: a higher level can do everything a lower one can.';
+
+--
+-- Name: community_rooms; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.community_rooms (
+    id integer NOT NULL,
+    space_id integer NOT NULL,
+    kind text NOT NULL,
+    name text NOT NULL,
+    topic text,
+    avatar_mxc text,
+    order_key text NOT NULL,
+    see_rule text DEFAULT 'everyone'::text NOT NULL,
+    post_rule text DEFAULT 'everyone'::text NOT NULL,
+    retention_days integer,
+    encrypted boolean DEFAULT false NOT NULL,
+    published boolean DEFAULT true NOT NULL,
+    archived boolean DEFAULT false NOT NULL,
+    matrix_room_id text,
+    discord_channel_id text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    discord_import_id text,
+    CONSTRAINT community_rooms_kind_check CHECK ((kind = ANY (ARRAY['text'::text, 'announcement'::text, 'forum'::text]))),
+    CONSTRAINT community_rooms_post_rule_check CHECK ((post_rule = ANY (ARRAY['everyone'::text, 'supporters'::text, 'staff'::text, 'mods'::text]))),
+    CONSTRAINT community_rooms_retention_days_check CHECK (((retention_days >= 1) AND (retention_days <= 3650))),
+    CONSTRAINT community_rooms_see_rule_check CHECK ((see_rule = ANY (ARRAY['everyone'::text, 'supporters'::text, 'mods'::text, 'staff'::text, 'invited'::text])))
+);
+
+--
+-- Name: TABLE community_rooms; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.community_rooms IS 'The community''s channels as the streamer wants them (v165). see_rule/post_rule are the panel''s sentences; the reconciler turns them into join rules and power levels.';
+
+--
+-- Name: COLUMN community_rooms.retention_days; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.community_rooms.retention_days IS 'Days messages are kept; NULL = no per-channel limit. The install''s cap bounds it in the web model; 3650 is the hard ceiling.';
+
+--
+-- Name: COLUMN community_rooms.discord_import_id; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.community_rooms.discord_import_id IS 'the Discord channel this room was imported from (v176); NULL = not imported. Not a link: discord_channel_id is.';
+
+--
+-- Name: community_rooms_id_seq; Type: SEQUENCE; Schema: site; Owner: -
+--
+
+CREATE SEQUENCE site.community_rooms_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+--
+-- Name: community_rooms_id_seq; Type: SEQUENCE OWNED BY; Schema: site; Owner: -
+--
+
+ALTER SEQUENCE site.community_rooms_id_seq OWNED BY site.community_rooms.id;
+
+--
+-- Name: community_runs; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.community_runs (
+    id integer NOT NULL,
+    mode text NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    ok boolean,
+    drift jsonb,
+    applied jsonb,
+    error text
+);
+
+--
+-- Name: TABLE community_runs; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.community_runs IS 'One row per reconciler pass (v165): what drifted from the desired state and what was applied.';
+
+--
+-- Name: community_runs_id_seq; Type: SEQUENCE; Schema: site; Owner: -
+--
+
+CREATE SEQUENCE site.community_runs_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+--
+-- Name: community_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: site; Owner: -
+--
+
+ALTER SEQUENCE site.community_runs_id_seq OWNED BY site.community_runs.id;
+
+--
+-- Name: community_spaces; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.community_spaces (
+    id integer NOT NULL,
+    parent_id integer,
+    kind text NOT NULL,
+    name text NOT NULL,
+    topic text,
+    avatar_mxc text,
+    order_key text NOT NULL,
+    matrix_room_id text,
+    gate_tier text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    banner_mxc text,
+    discord_import_id text,
+    CONSTRAINT community_spaces_kind_check CHECK ((kind = ANY (ARRAY['hub'::text, 'category'::text, 'gate'::text])))
+);
+
+--
+-- Name: TABLE community_spaces; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.community_spaces IS 'The community''s spaces as the streamer wants them (v165): the hub, its categories, and hidden tier gate spaces. matrix_room_id NULL = not created in Matrix yet.';
+
+--
+-- Name: COLUMN community_spaces.banner_mxc; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.community_spaces.banner_mxc IS 'the space''s banner (an mxc:// address), written on the space as app.blackbranch.banner by the reconciler; NULL = none';
+
+--
+-- Name: COLUMN community_spaces.discord_import_id; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.community_spaces.discord_import_id IS 'the Discord category this space was imported from (v176); NULL = not imported. A second import matches on it.';
+
+--
+-- Name: community_spaces_id_seq; Type: SEQUENCE; Schema: site; Owner: -
+--
+
+CREATE SEQUENCE site.community_spaces_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+--
+-- Name: community_spaces_id_seq; Type: SEQUENCE OWNED BY; Schema: site; Owner: -
+--
+
+ALTER SEQUENCE site.community_spaces_id_seq OWNED BY site.community_spaces.id;
+
+--
+-- Name: community_unbans; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.community_unbans (
+    matrix_id text NOT NULL,
+    lifted_at timestamp with time zone DEFAULT now() NOT NULL,
+    lifted_by text
+);
+
+--
+-- Name: TABLE community_unbans; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.community_unbans IS 'Permanent site bans a moderator lifted (v166; a timeout is never recorded): the community reconciler lifts the room bans of the people listed since its last successful apply run. Rows older than 30 days are pruned.';
+
+--
 -- Name: device_health; Type: TABLE; Schema: site; Owner: -
 --
 
@@ -558,8 +802,15 @@ CREATE TABLE site.device_health (
     anim jsonb,
     settings jsonb,
     heap_start_mb real,
-    heap_peak_mb real
+    heap_peak_mb real,
+    socket_opens integer
 );
+
+--
+-- Name: COLUMN device_health.socket_opens; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.device_health.socket_opens IS 'chat socket connections that really opened this page session; NULL = the page did not report it (older build)';
 
 --
 -- Name: donations; Type: TABLE; Schema: site; Owner: -
@@ -645,8 +896,15 @@ CREATE TABLE site.gift_pending (
     claimed_at timestamp with time zone,
     claim_expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    anonymous boolean DEFAULT false NOT NULL
+    anonymous boolean DEFAULT false NOT NULL,
+    reversed_by text
 );
+
+--
+-- Name: COLUMN gift_pending.reversed_by; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.gift_pending.reversed_by IS 'the gift_reversals.ref that withdrew this unclaimed slot; a withdrawn slot cannot be claimed';
 
 --
 -- Name: gift_pending_id_seq; Type: SEQUENCE; Schema: site; Owner: -
@@ -659,6 +917,24 @@ ALTER TABLE site.gift_pending ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
     NO MINVALUE
     NO MAXVALUE
     CACHE 1
+);
+
+--
+-- Name: gift_reversals; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.gift_reversals (
+    ref text NOT NULL,
+    stripe_session_id text NOT NULL,
+    reason text NOT NULL,
+    amount_cents integer,
+    purchase_cents integer,
+    purchase_slots integer,
+    slot_cents integer,
+    remainder_cents integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    restored_at timestamp with time zone,
+    CONSTRAINT gift_reversals_reason_check CHECK ((reason = ANY (ARRAY['refund'::text, 'dispute'::text])))
 );
 
 --
@@ -675,8 +951,32 @@ CREATE TABLE site.gift_subscriptions (
     kind text DEFAULT 'direct'::text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    anonymous boolean DEFAULT false NOT NULL
+    anonymous boolean DEFAULT false NOT NULL,
+    follows_subscription boolean DEFAULT false NOT NULL,
+    reversed_by text,
+    expires_before_reversal timestamp with time zone,
+    reversed_at timestamp with time zone,
+    follows_before_reversal boolean,
+    starts_at timestamp with time zone NOT NULL
 );
+
+--
+-- Name: COLUMN gift_subscriptions.follows_subscription; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.gift_subscriptions.follows_subscription IS 'true = granted behind a paid subscription: re-dated to begin when the paid term ends (giftQueue.ts)';
+
+--
+-- Name: COLUMN gift_subscriptions.reversed_by; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.gift_subscriptions.reversed_by IS 'the gift_reversals.ref that ended this gift; NULL = not ended by a refund or dispute';
+
+--
+-- Name: COLUMN gift_subscriptions.starts_at; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.gift_subscriptions.starts_at IS 'when the gift begins; written by the grant, the renewal mover and a restored reversal, never derived from expires_at (month arithmetic clamps). Rows from before v172 were backfilled and may be a day early at month ends';
 
 --
 -- Name: gift_subscriptions_id_seq; Type: SEQUENCE; Schema: site; Owner: -
@@ -904,6 +1204,23 @@ CREATE SEQUENCE site.mod_log_id_seq
 ALTER SEQUENCE site.mod_log_id_seq OWNED BY site.mod_log.id;
 
 --
+-- Name: oauth_clients; Type: TABLE; Schema: site; Owner: -
+--
+
+CREATE TABLE site.oauth_clients (
+    registration_endpoint text NOT NULL,
+    redirect_uri text NOT NULL,
+    client_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: TABLE oauth_clients; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON TABLE site.oauth_clients IS 'The public OAuth client this site registered (RFC 7591) at an outside account server, keyed by the registration endpoint it was registered at and the redirect URI (v168). Reused by every sign-in to that server.';
+
+--
 -- Name: payment_events; Type: TABLE; Schema: site; Owner: -
 --
 
@@ -1092,7 +1409,8 @@ CREATE TABLE site.player_source_snapshots (
     community integer DEFAULT 0 NOT NULL,
     radio integer DEFAULT 0 NOT NULL,
     folded integer DEFAULT 0 NOT NULL,
-    native integer DEFAULT 0 NOT NULL
+    native integer DEFAULT 0 NOT NULL,
+    kick integer DEFAULT 0 NOT NULL
 );
 
 --
@@ -1683,8 +2001,17 @@ CREATE TABLE site.user_sessions (
     mx_token_expires bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_seen timestamp with time zone DEFAULT now() NOT NULL,
-    signed_in_at timestamp with time zone DEFAULT now()
+    signed_in_at timestamp with time zone DEFAULT now(),
+    oidc_token_endpoint text,
+    oidc_client_id text,
+    oidc_revocation_endpoint text
 );
+
+--
+-- Name: COLUMN user_sessions.oidc_client_id; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.user_sessions.oidc_client_id IS 'The outside server''s client this session''s tokens were issued to (v168); NULL = an own-server session, or one from before v168 (site.users.oidc_* then).';
 
 --
 -- Name: user_settings; Type: TABLE; Schema: site; Owner: -
@@ -1748,8 +2075,39 @@ CREATE TABLE site.users (
     is_bot boolean DEFAULT false NOT NULL,
     bio text,
     deleted_at timestamp with time zone,
-    show_links boolean DEFAULT false NOT NULL
+    show_links boolean DEFAULT false NOT NULL,
+    is_staff boolean DEFAULT false NOT NULL
 );
+
+--
+-- Name: COLUMN users.mx_refresh_token; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.users.mx_refresh_token IS 'Superseded by site.user_sessions (v24); emptied by v169; to be dropped.';
+
+--
+-- Name: COLUMN users.mx_access_token; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.users.mx_access_token IS 'Superseded by site.user_sessions (v24); emptied by v169; to be dropped.';
+
+--
+-- Name: COLUMN users.mx_token_expires; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.users.mx_token_expires IS 'Superseded by site.user_sessions (v24); emptied by v169; to be dropped.';
+
+--
+-- Name: COLUMN users.mx_device_id; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.users.mx_device_id IS 'Superseded by site.user_sessions (v24); emptied by v169; to be dropped.';
+
+--
+-- Name: COLUMN users.is_staff; Type: COMMENT; Schema: site; Owner: -
+--
+
+COMMENT ON COLUMN site.users.is_staff IS 'The Staff role (v165, spec §4.2): moderate and edit channels, not roles, access, retention or encryption.';
 
 --
 -- Name: bot_impressions; Type: TABLE; Schema: stream; Owner: -
@@ -2368,6 +2726,24 @@ ALTER TABLE ONLY site.community_embeds ALTER COLUMN id SET DEFAULT nextval('site
 ALTER TABLE ONLY site.community_loop_videos ALTER COLUMN id SET DEFAULT nextval('site.community_loop_videos_id_seq'::regclass);
 
 --
+-- Name: community_rooms id; Type: DEFAULT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_rooms ALTER COLUMN id SET DEFAULT nextval('site.community_rooms_id_seq'::regclass);
+
+--
+-- Name: community_runs id; Type: DEFAULT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_runs ALTER COLUMN id SET DEFAULT nextval('site.community_runs_id_seq'::regclass);
+
+--
+-- Name: community_spaces id; Type: DEFAULT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_spaces ALTER COLUMN id SET DEFAULT nextval('site.community_spaces_id_seq'::regclass);
+
+--
 -- Name: instance_history id; Type: DEFAULT; Schema: site; Owner: -
 --
 
@@ -2649,6 +3025,20 @@ ALTER TABLE ONLY site.coin_wallets
     ADD CONSTRAINT coin_wallets_pkey PRIMARY KEY (matrix_id);
 
 --
+-- Name: community_discord_import community_discord_import_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_discord_import
+    ADD CONSTRAINT community_discord_import_pkey PRIMARY KEY (guild_id);
+
+--
+-- Name: community_discord_roles community_discord_roles_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_discord_roles
+    ADD CONSTRAINT community_discord_roles_pkey PRIMARY KEY (role_id);
+
+--
 -- Name: community_embeds community_embeds_pkey; Type: CONSTRAINT; Schema: site; Owner: -
 --
 
@@ -2661,6 +3051,69 @@ ALTER TABLE ONLY site.community_embeds
 
 ALTER TABLE ONLY site.community_loop_videos
     ADD CONSTRAINT community_loop_videos_pkey PRIMARY KEY (id);
+
+--
+-- Name: community_roles community_roles_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_roles
+    ADD CONSTRAINT community_roles_pkey PRIMARY KEY (key);
+
+--
+-- Name: community_rooms community_rooms_discord_channel_id_key; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_rooms
+    ADD CONSTRAINT community_rooms_discord_channel_id_key UNIQUE (discord_channel_id);
+
+--
+-- Name: community_rooms community_rooms_discord_import_id_key; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_rooms
+    ADD CONSTRAINT community_rooms_discord_import_id_key UNIQUE (discord_import_id);
+
+--
+-- Name: community_rooms community_rooms_matrix_room_id_key; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_rooms
+    ADD CONSTRAINT community_rooms_matrix_room_id_key UNIQUE (matrix_room_id);
+
+--
+-- Name: community_rooms community_rooms_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_rooms
+    ADD CONSTRAINT community_rooms_pkey PRIMARY KEY (id);
+
+--
+-- Name: community_runs community_runs_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_runs
+    ADD CONSTRAINT community_runs_pkey PRIMARY KEY (id);
+
+--
+-- Name: community_spaces community_spaces_discord_import_id_key; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_spaces
+    ADD CONSTRAINT community_spaces_discord_import_id_key UNIQUE (discord_import_id);
+
+--
+-- Name: community_spaces community_spaces_matrix_room_id_key; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_spaces
+    ADD CONSTRAINT community_spaces_matrix_room_id_key UNIQUE (matrix_room_id);
+
+--
+-- Name: community_spaces community_spaces_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_spaces
+    ADD CONSTRAINT community_spaces_pkey PRIMARY KEY (id);
 
 --
 -- Name: device_health device_health_pkey; Type: CONSTRAINT; Schema: site; Owner: -
@@ -2717,6 +3170,13 @@ ALTER TABLE ONLY site.forum_votes
 
 ALTER TABLE ONLY site.gift_pending
     ADD CONSTRAINT gift_pending_pkey PRIMARY KEY (id);
+
+--
+-- Name: gift_reversals gift_reversals_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.gift_reversals
+    ADD CONSTRAINT gift_reversals_pkey PRIMARY KEY (ref);
 
 --
 -- Name: gift_subscriptions gift_subscriptions_pkey; Type: CONSTRAINT; Schema: site; Owner: -
@@ -2801,6 +3261,13 @@ ALTER TABLE ONLY site.message_votes
 
 ALTER TABLE ONLY site.mod_log
     ADD CONSTRAINT mod_log_pkey PRIMARY KEY (id);
+
+--
+-- Name: oauth_clients oauth_clients_pkey; Type: CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.oauth_clients
+    ADD CONSTRAINT oauth_clients_pkey PRIMARY KEY (registration_endpoint, redirect_uri);
 
 --
 -- Name: payment_events payment_events_event_id_key; Type: CONSTRAINT; Schema: site; Owner: -
@@ -3322,6 +3789,12 @@ CREATE UNIQUE INDEX badges_one_mod ON site.badges USING btree (is_mod) WHERE is_
 CREATE UNIQUE INDEX badges_one_subscriber ON site.badges USING btree (is_subscriber) WHERE is_subscriber;
 
 --
+-- Name: chat_messages_client_msg_id; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE UNIQUE INDEX chat_messages_client_msg_id ON site.chat_messages USING btree (matrix_id, client_msg_id) WHERE (client_msg_id IS NOT NULL);
+
+--
 -- Name: client_errors_last_seen_idx; Type: INDEX; Schema: site; Owner: -
 --
 
@@ -3356,6 +3829,24 @@ CREATE INDEX community_loop_videos_priority_idx ON site.community_loop_videos US
 --
 
 CREATE UNIQUE INDEX community_loop_videos_video_id_key ON site.community_loop_videos USING btree (video_id);
+
+--
+-- Name: community_rooms_space_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX community_rooms_space_idx ON site.community_rooms USING btree (space_id);
+
+--
+-- Name: community_spaces_parent_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX community_spaces_parent_idx ON site.community_spaces USING btree (parent_id) WHERE (parent_id IS NOT NULL);
+
+--
+-- Name: community_unbans_lifted_at_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX community_unbans_lifted_at_idx ON site.community_unbans USING btree (lifted_at);
 
 --
 -- Name: device_health_last_at_idx; Type: INDEX; Schema: site; Owner: -
@@ -3410,6 +3901,12 @@ CREATE INDEX forum_votes_event_idx ON site.forum_votes USING btree (room_id, eve
 --
 
 CREATE INDEX gift_pending_unclaimed_idx ON site.gift_pending USING btree (created_at) WHERE (claimed_by IS NULL);
+
+--
+-- Name: gift_reversals_session_idx; Type: INDEX; Schema: site; Owner: -
+--
+
+CREATE INDEX gift_reversals_session_idx ON site.gift_reversals USING btree (stripe_session_id);
 
 --
 -- Name: gift_subs_expires_idx; Type: INDEX; Schema: site; Owner: -
@@ -3871,6 +4368,20 @@ ALTER TABLE ONLY site.coin_earn_upvotes
 
 ALTER TABLE ONLY site.community_embeds
     ADD CONSTRAINT community_embeds_added_by_fkey FOREIGN KEY (added_by) REFERENCES site.users(matrix_id) ON DELETE SET NULL;
+
+--
+-- Name: community_rooms community_rooms_space_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_rooms
+    ADD CONSTRAINT community_rooms_space_id_fkey FOREIGN KEY (space_id) REFERENCES site.community_spaces(id);
+
+--
+-- Name: community_spaces community_spaces_parent_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
+--
+
+ALTER TABLE ONLY site.community_spaces
+    ADD CONSTRAINT community_spaces_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES site.community_spaces(id);
 
 --
 -- Name: donations donations_matrix_id_fkey; Type: FK CONSTRAINT; Schema: site; Owner: -
@@ -4345,6 +4856,18 @@ INSERT INTO public.schema_migrations (version, note) VALUES
   (161, 'baseline'),
   (162, 'baseline'),
   (163, 'baseline'),
-  (164, 'baseline')
+  (164, 'baseline'),
+  (165, 'baseline'),
+  (166, 'baseline'),
+  (167, 'baseline'),
+  (168, 'baseline'),
+  (169, 'baseline'),
+  (170, 'baseline'),
+  (171, 'baseline'),
+  (172, 'baseline'),
+  (173, 'baseline'),
+  (174, 'baseline'),
+  (175, 'baseline'),
+  (176, 'baseline')
 ON CONFLICT (version) DO NOTHING;
 -- baseline:end

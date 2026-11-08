@@ -112,6 +112,11 @@ export default function DoctorPanel() {
             <p className="mt-0.5 text-xs text-muted">
               Every check only reads. The same list is printed on the server by <span className="font-mono">sudo blackbranch doctor</span>.
             </p>
+            <p data-help className="mt-0.5 text-xs text-muted">
+              Need help? <a className="underline" href={DOCTOR.HELP.docs} target="_blank" rel="noreferrer">The guides</a>
+              {" · "}<a className="underline" href={DOCTOR.HELP.discord} target="_blank" rel="noreferrer">ask in the Discord</a>
+              {" · "}attach the report from <span className="font-mono">{DOCTOR.HELP.report}</span>.
+            </p>
           </div>
           <button type="button" className={btn} disabled={busy} onClick={recheck}>{busy ? "Checking…" : "Check again"}</button>
         </div>

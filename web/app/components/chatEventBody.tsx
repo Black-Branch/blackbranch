@@ -4,7 +4,8 @@ import { renderText } from "@/app/lib/renderText";
 import { Star, MoneyWavy } from "@phosphor-icons/react/dist/ssr";
 import PointsIcon from "./PointsIcon";
 import { normalizeUsername, type ChatMsg } from "@/app/lib/chatMsg";
-import { formatMoney, formatNameList } from "@/app/lib/chatFormat";
+import { formatNameList } from "@/app/lib/chatFormat";
+import { formatPrice, SITE_CURRENCY } from "@/app/lib/moneyFormat";
 import { currencyLabel } from "@/app/lib/currency";
 import type { EmoteMap } from "@/app/lib/useEmotes";
 
@@ -76,13 +77,15 @@ export function eventBody(msg: ChatMsg, emotes: EmoteMap, accentColor: string, m
           {icon}{label(<>gifted {count === 1 ? "1 sub" : `${count} subs`}</>)}
           {" "}to <span className="text-strong">{formatNameList(names)}</span>
           {" "}<span className="text-muted">· {monthLabel}</span>
+          {msg.waiting && <span className="text-muted"> · waiting for the next sign-ups</span>}
+          {msg.queued && <span className="text-muted"> · queued after their current subscription</span>}
         </>
       );
     }
     case "donation":
       return (
         <>
-          {icon}{label(<>tipped {formatMoney(msg.amount ?? 0, msg.currency ?? "usd")}</>)}
+          {icon}{label(<>tipped {formatPrice(msg.amount ?? 0, msg.currency ?? SITE_CURRENCY, "minor")}</>)}
           {quoted(msg.message)}
         </>
       );

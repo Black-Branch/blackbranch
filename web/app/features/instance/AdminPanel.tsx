@@ -17,14 +17,14 @@ import { createElement, useCallback, useEffect, useMemo, useState, type ReactNod
 import {
   Cpu, Robot, ChartBar, ShieldCheck, Lifebuoy, Database, VideoCamera, SpeakerHigh,
   ClockCounterClockwise, CreditCard, YoutubeLogo, TwitchLogo, Broadcast, Butterfly, DiscordLogo,
-  GlobeSimple, Coins, Users, Trophy, Smiley, Timer, Gauge, Sparkle, Medal, Ticket, Brain, Stethoscope, ArrowsClockwise, Browsers,
+  GlobeSimple, Coins, Users, UsersThree, Trophy, Smiley, Timer, Gauge, Sparkle, Medal, Ticket, Brain, Stethoscope, ArrowsClockwise, Browsers,
 } from "@phosphor-icons/react/dist/ssr";
 import { Rail, RailLayout } from "@/app/components/chrome";
 import { getJson } from "@/app/lib/http";
 import type { InstanceView } from "@/app/lib/instanceAdminView";
 import { ADMIN_PLUGIN_PANELS } from "@/app/lib/plugins/admin";
 import {
-  PaymentHistory, TimerControls, SupportBarControls, EffectsControls, BadgesAdmin, SupportTickets, ModeratorList,
+  PaymentHistory, TimerControls, SupportBarControls, EffectsControls, BadgesAdmin, SupportTickets, ModeratorList, StaffList, AdminList,
   OtherPanelHits, searchModPlaces,
 } from "@/app/features/moderation";
 import {
@@ -41,6 +41,8 @@ import RigPanel from "./RigPanel";
 import OverlaysPanel, { OverlayAddresses } from "./OverlaysPanel";
 import DiscordNote from "./DiscordNote";
 import EmotesPanel from "./EmotesPanel";
+import CommunityPanel from "./CommunityPanel";
+import DiscordLinksPage from "./DiscordLinksPage";
 
 const ic = (C: typeof Cpu) => createElement(C, { size: 18, weight: "bold" });
 const ICON: Record<string, ReactNode> = {
@@ -48,7 +50,7 @@ const ICON: Record<string, ReactNode> = {
   "utility/obs": ic(VideoCamera), "utility/timer": ic(Timer), "utility/bar": ic(Gauge), "utility/effects": ic(Sparkle), "utility/tts": ic(SpeakerHigh),
   "payments/history": ic(ClockCounterClockwise), "payments/connections": ic(CreditCard),
   "platforms/youtube": ic(YoutubeLogo), "platforms/twitch": ic(TwitchLogo), "platforms/kick": ic(Broadcast), "platforms/streamplace": ic(Butterfly), "platforms/discord": ic(DiscordLogo),
-  "site/general": ic(GlobeSimple), "site/points": ic(Coins), "site/badges": ic(Medal), "site/tickets": ic(Ticket), "site/moderators": ic(Users), "platforms/player": ic(Browsers), "site/leaderboard": ic(Trophy), "platforms/emotes": ic(Smiley),
+  "site/general": ic(GlobeSimple), "site/community": ic(UsersThree), "site/discord": ic(DiscordLogo), "site/points": ic(Coins), "site/badges": ic(Medal), "site/tickets": ic(Ticket), "site/moderators": ic(Users), "platforms/player": ic(Browsers), "site/leaderboard": ic(Trophy), "platforms/emotes": ic(Smiley),
   doctor: ic(Stethoscope), updates: ic(ArrowsClockwise),
 };
 const PLUGIN_ICON = ic(Brain);
@@ -158,10 +160,11 @@ function AdminPlace({ item, inst, error, loadInst, note, go }: {
   go: (id: string) => void;
 }) {
   const { section, sub } = item;
-  // A plugin's place renders its own panel.
+  // A plugin's place renders its own panel; an AI place without one lists its tasks (below).
   if (item.plugin) {
     const P = ADMIN_PLUGIN_PANELS.find((p) => p.section === section && p.key === sub);
-    return P ? <P.Panel note={note} /> : null;
+    if (P?.Panel) return <P.Panel note={note} />;
+    if (!P || section !== "ai") return null;
   }
   // These read their own data; they do not wait for the settings view.
   if (section === "doctor") return <DoctorPanel />;
@@ -173,13 +176,20 @@ function AdminPlace({ item, inst, error, loadInst, note, go }: {
   if (section === "utility" && sub === "effects") return <><EffectsControls note={note} /><OverlayAddresses ids={["alert"]} /></>;
   if (section === "site" && sub === "badges") return <BadgesAdmin />;
   if (section === "site" && sub === "tickets") return <SupportTickets note={note} />;
-  // The moderators, then the Staff card (its key rows wait for the settings view).
+  // The admins, the moderators, the Staff role, then the house accounts card (its key rows wait for the settings view).
   if (section === "site" && sub === "moderators") return (
     <>
+      <AdminList note={note} />
       <ModeratorList note={note} />
+      <StaffList note={note} />
       {inst && <KeyCards view={inst} groups={keyGroupsFor(section, sub)} onChanged={loadInst} note={note} />}
     </>
   );
+  // The channels read their own data; the cards under them wait for the settings view.
+  if (section === "site" && sub === "community") return <CommunityPanel inst={inst} reloadInst={loadInst} note={note} />;
+  // The Discord links read their own data, like the channels.
+  // Its bot step shows the Discord setup list (the guide), once the settings view has it.
+  if (section === "site" && sub === "discord") return <DiscordLinksPage note={note} guide={inst?.guides?.find((g) => g.list === "core:discord")?.page ?? null} />;
   if (error) return <p className="text-sm text-red-300">Could not load the settings: {error}</p>;
   if (!inst) return <p role="status" className="text-sm text-muted">Loading settings…</p>;
   if (section === "ai") return <AiPanel sub={sub as AiSub} inst={inst} reloadInst={loadInst} note={note} />;

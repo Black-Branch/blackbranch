@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { dom, React, act, mountHook, resetStorage } from "../lib/testDom.ts";
 import "../lib/testTsx.ts";
 const { MatrixMessageRow } = await import("./MatrixMessageRow.tsx");
-const { useTypingSender } = await import("../features/community/useTyping.ts");
+const { useTypingSender } = await import("../lib/useTyping.ts");
 const { UnreadDot } = await import("../features/community/parts.tsx");
 const { createRoot } = await import("react-dom/client");
 
@@ -60,20 +60,20 @@ test("an ordinary row: Community's own marks, today's default look", async () =>
 });
 
 test("the stripe, the group end and the compact avatar arrive as props", async () => {
-  const a = await mount({ ev: ev(), alt: true, groupEnd: true, grouped: true, avatarSize: 12 });
+  const a = await mount({ ev: ev(), alt: true, groupEnd: true, grouped: true, avatarStep: "xs" });
   const row = a.el.querySelector(".mx-row")!;
   assert.equal(row.classList.contains("chat-msg-alt"), true);
   assert.equal(row.hasAttribute("data-gend"), true);
   assert.equal(row.hasAttribute("data-head"), false, "a grouped row has no header");
   await a.unmount();
-  const b = await mount({ ev: ev(), avatarSize: 12 });
+  const b = await mount({ ev: ev(), avatarStep: "xs" });
   const img = b.el.querySelector(".mx-avatar > *") as HTMLElement;
-  assert.match(img.getAttribute("style") ?? "", /0\.857 \* var\(--chat-pfp-scale, 1\)/, "12px at the default size, still × Avatar size");
+  assert.equal(img.style.getPropertyValue("--avatar-size"), "var(--mx-avatar-box, calc(var(--avatar-xs) * var(--chat-pfp-scale, 1)))", "the scale's xs step, still × Avatar size");
   await b.unmount();
 });
 
 test("a deleted message renders as the note alone — no toolbar, reactions or thread chip", async () => {
-  const { el, unmount } = await mount({ ev: ev({ redacted: true }), reactions: [{ key: "👍", count: 2, mine: null }], threadCount: 3 });
+  const { el, unmount } = await mount({ ev: ev({ redacted: true }), reactions: [{ key: "👍", count: 2, mine: null, mxc: null, senders: ["@ann:site.test", "@bob:site.test"] }], threadCount: 3 });
   assert.match(el.textContent ?? "", /Message deleted/);
   assert.equal(el.querySelector(".row-actions"), null, "no toolbar on a deleted message");
   assert.doesNotMatch(el.textContent ?? "", /👍|3 replies/);
@@ -105,7 +105,7 @@ test("the chat's name style and pronoun mark reach the Community name", async ()
 });
 
 test("Community › Reaction size: the pill reads × --mx-react-scale", async () => {
-  const { el, unmount } = await mount({ ev: ev(), reactions: [{ key: "👍", count: 2, mine: null }] });
+  const { el, unmount } = await mount({ ev: ev(), reactions: [{ key: "👍", count: 2, mine: null, mxc: null, senders: ["@ann:site.test", "@bob:site.test"] }] });
   const pill = [...el.querySelectorAll("button")].find((b) => b.textContent?.includes("2") && b.classList.contains("rounded-full"));
   assert.ok(pill, "the reaction pill rendered");
   assert.match(pill?.getAttribute("style") ?? "", /calc\(var\(--text-chat-sm\) \* var\(--mx-react-scale, 1\)\)/);
@@ -131,13 +131,13 @@ test("Send typing OFF: no announcement leaves; ON: one does", async () => {
 test("Community › Unread channels › Counts: a number, rose for mentions; dots stay dots", async () => {
   const el = dom.window.document.createElement("div");
   const root = createRoot(el);
-  await act(async () => { root.render(React.createElement(UnreadDot, { total: 7, highlight: 0, counts: true })); });
+  await act(async () => { root.render(React.createElement(UnreadDot, { total: 7, highlight: 0, mode: "counts" })); });
   assert.equal(el.textContent, "7");
   assert.equal(el.firstElementChild?.hasAttribute("data-unread-dot"), true, "blue counts still obey Behavior › Unread dots");
-  await act(async () => { root.render(React.createElement(UnreadDot, { total: 7, highlight: 2, counts: true })); });
+  await act(async () => { root.render(React.createElement(UnreadDot, { total: 7, highlight: 2, mode: "counts" })); });
   assert.equal(el.textContent, "2");
   assert.match(el.firstElementChild?.className ?? "", /bg-rose-500/);
-  await act(async () => { root.render(React.createElement(UnreadDot, { total: 150, highlight: 0, counts: true })); });
+  await act(async () => { root.render(React.createElement(UnreadDot, { total: 150, highlight: 0, mode: "counts" })); });
   assert.equal(el.textContent, "99+");
   await act(async () => { root.render(React.createElement(UnreadDot, { total: 7, highlight: 0 })); });
   assert.equal(el.textContent, "", "dots mode draws no number");

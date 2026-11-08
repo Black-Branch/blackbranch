@@ -1,9 +1,9 @@
 import type Stripe from "stripe";
-import { siteName } from "@/app/lib/siteName";
-import pool from "@/lib/db";
-import { staffMatrixIds, isStaff } from "./staff";
-import { invalidateBadgeSnapshot } from "./badgeCache";
-import { entitledRecordsSql, subscriptionSources } from "./subscriptions/entitlement";
+import { siteName } from "./siteName.ts";
+import pool from "../../lib/db.ts";
+import { staffMatrixIds, isStaff } from "./staff.ts";
+import { invalidateBadgeSnapshot } from "./badgeCache.ts";
+import { entitledRecordsSql, subscriptionSources } from "./subscriptions/entitlement.ts";
 
 // Server-only billing helpers shared by the checkout + donate routes. The
 // viewer's Stripe customer (ensureStripeCustomer) lives in stripeCustomer.ts.
@@ -101,18 +101,19 @@ export async function reassignSubscriberBadge(newBadgeId: number, oldBadgeId: nu
 // the subscriber badge into slot 0 if that slot is empty. Named grantSubscriberBadge
 // for call-site compatibility (gift flow). A lapse needs NO revoke: the slot count is
 // derived from live entitlement, so the +1 (and thus the badge) simply disappears.
-export async function grantSubscriberBadge(matrixId: string): Promise<void> {
+// `db`: a transaction's client when the unlock must land with the grant that earns it (a gift).
+export async function grantSubscriberBadge(matrixId: string, db: Pick<typeof pool, "query"> = pool): Promise<void> {
   if (isStaff(matrixId)) return; // staff slots/badges are seeded by migration
   const badgeId = await getSubscriberBadgeId();
   if (badgeId == null) {
     console.error("[billing] Supporter badge not found — run migrate-v49");
     return;
   }
-  await pool.query(
+  await db.query(
     `INSERT INTO site.badge_unlocks (matrix_id, badge_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
     [matrixId, badgeId]
   );
-  await pool.query(
+  await db.query(
     `INSERT INTO site.badge_slots (matrix_id, equipped)
      VALUES ($1, ARRAY[$2]::bigint[])
      ON CONFLICT (matrix_id) DO UPDATE

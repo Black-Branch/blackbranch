@@ -60,8 +60,11 @@ export function createInstanceConfig({
   let content = {};      // key → body (prompts, the bot's behavior file, the help desk's facts)
   let contentReadAt = null; // when a content read last succeeded; null = never (content is then NOT known)
   let unreadable = new Set();
+  // What stream-api RUNS (GET /config `self`) and the other processes' reports — a module it
+  // serves is on by what it runs, not by the saved switch (config/modules.mjs, ONE RULE).
+  // null until the first load.
+  let servingSnap = null;
   let loadedAt = null;
-  let applied = null; // restart-applied keys, as the first load resolved them
   let failingSince = null;
   let retryTimer = null;
   let backstopTimer = null;
@@ -125,6 +128,8 @@ export function createInstanceConfig({
         call('GET', '/content').catch((e) => { log.warn(`[instance-config] content read failed: ${e.message} — keeping the last content`); scheduleRetry(); return null; }),
       ]);
       plain = cfg && typeof cfg.values === 'object' && cfg.values ? cfg.values : {};
+      const objOf = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+      servingSnap = { self: objOf(cfg?.self), reports: objOf(cfg?.reports) };
       secrets = sec && typeof sec.values === 'object' && sec.values ? sec.values : {};
       unreadable = new Set(Array.isArray(sec?.unreadable) ? sec.unreadable : []);
       if (con) {
@@ -137,11 +142,6 @@ export function createInstanceConfig({
       }
       loadedAt = Date.now();
       failingSince = null;
-      if (applied === null) {
-        // What a restart-applied key is run with: taken once, at the first load (statusReport).
-        applied = {};
-        for (const e of INSTANCE_KEYS) if (e.reload === 'restart' && e.packages.includes(SELF)) applied[e.key] = resolveEntry(e).value;
-      }
       for (const fn of loadListeners) { try { fn(); } catch (e) { log.warn(`[instance-config] load listener: ${e.message}`); } }
       return true;
     } catch (e) {
@@ -152,28 +152,16 @@ export function createInstanceConfig({
     }
   }
 
-  /** A restart-applied key that this process has now applied WITHOUT a restart (a platform reader
-   *  restarted with its new channel — lib/platformStarter.js): from here on the Credentials page
-   *  shows the value it runs, not the boot one as pending. */
-  function markApplied(keys) {
-    if (applied === null) return;
-    for (const k of keys) {
-      const e = instanceEntry(k);
-      if (e && e.reload === 'restart' && e.packages.includes(SELF)) applied[k] = resolveEntry(e).value;
-    }
-  }
-
   /** This process's view of every key it consumes — sources and page-safe displays, never a
-   *  secret value — sent to stream-api for the Credentials page. A `reload: 'restart'` key shows
-   *  the value this process took at its first load (what it runs), so a saved change reads as
-   *  pending until the restart. */
+   *  secret value — sent to stream-api for the Credentials page. Every value is the current one:
+   *  no Admin Panel setting this process reads waits for its restart (the channels and the YouTube
+   *  switch apply on the settings load), and an install value comes from env, fixed for its life. */
   function statusReport() {
     const keys = {};
     for (const e of INSTANCE_KEYS) {
       if (!e.packages.includes(SELF)) continue;
       const r = resolveEntry(e);
-      const value = applied && e.reload === 'restart' && Object.prototype.hasOwnProperty.call(applied, e.key) ? applied[e.key] : r.value;
-      keys[e.key] = { source: r.source, envName: r.envName, display: display(e, value), error: r.error };
+      keys[e.key] = { source: r.source, envName: r.envName, display: display(e, r.value), error: r.error };
     }
     return keys;
   }
@@ -217,7 +205,9 @@ export function createInstanceConfig({
   async function handleFrame(frame) {
     if (!frame || typeof frame !== 'object') return;
     if (frame.type === 'config_changed') {
-      const mine = Array.isArray(frame.keys) && frame.keys.some((k) => instanceEntry(k)?.packages.includes(SELF));
+      // Every module switch is ours too: !dono and the help desk read modules.stripe / paypal per
+      // turn, though their manifests name only web (that list decides the serving package).
+      const mine = Array.isArray(frame.keys) && frame.keys.some((k) => String(k).startsWith('modules.') || instanceEntry(k)?.packages.includes(SELF));
       if (!mine) return;
       if (await load()) await report();
     } else if (frame.type === 'config_content_changed') {
@@ -291,7 +281,7 @@ export function createInstanceConfig({
   const messageListeners = new Set();
   function onMessage(fn) { messageListeners.add(fn); return () => messageListeners.delete(fn); }
 
-  return { get, content: contentOf, contentLoaded, onLoad, resolve, load, start, stop, bootProblems, handleFrame, statusReport, state, setReportExtra, setProbeHandler, reportNow: () => report(), onMessage, markApplied };
+  return { get, serving: () => servingSnap, content: contentOf, contentLoaded, onLoad, resolve, load, start, stop, bootProblems, handleFrame, statusReport, state, setReportExtra, setProbeHandler, reportNow: () => report(), onMessage };
 }
 
 /** The process singleton every stream-ingest module reads through. */

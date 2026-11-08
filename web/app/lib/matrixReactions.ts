@@ -3,8 +3,9 @@ import type { MatrixEvent } from "matrix-js-sdk";
 // One aggregated reaction key on a message: the emoji/key, how many people used
 // it, — if I'm one of them — the id of *my* reaction event (so a second tap can
 // redact it to toggle off), and the image to draw when the key is a Discord
-// custom emoji (null for unicode and for our own emote shortcodes).
-export type ReactionAgg = { key: string; count: number; mine: string | null; mxc: string | null };
+// custom emoji (null for unicode and for our own emote shortcodes), and who
+// reacted (user ids, first reaction first, each once).
+export type ReactionAgg = { key: string; count: number; mine: string | null; mxc: string | null; senders: string[] };
 
 /** What a tap on a custom-emoji pile sends so the bridge can relay it. */
 export type ReactionExtra = { mxc: string; shortcode: string };
@@ -36,7 +37,7 @@ function groupKeyAndImage(content: Record<string, unknown>, key: string): { grou
 // scan them rather than lean on the SDK relations container so a single pass also
 // survives redactions (toggle-off) and late-decrypted reactions in E2EE rooms.
 export function aggregateReactions(events: MatrixEvent[], myUserId: string): ReactionsMap {
-  const byTarget = new Map<string, Map<string, { count: number; mine: string | null; mxc: string | null }>>();
+  const byTarget = new Map<string, Map<string, { count: number; mine: string | null; mxc: string | null; senders: string[] }>>();
 
   for (const ev of events) {
     if (ev.getType() !== "m.reaction" || ev.isRedacted()) continue;
@@ -48,10 +49,12 @@ export function aggregateReactions(events: MatrixEvent[], myUserId: string): Rea
     let keys = byTarget.get(rel.event_id);
     if (!keys) { keys = new Map(); byTarget.set(rel.event_id, keys); }
     let agg = keys.get(group);
-    if (!agg) { agg = { count: 0, mine: null, mxc: null }; keys.set(group, agg); }
+    if (!agg) { agg = { count: 0, mine: null, mxc: null, senders: [] }; keys.set(group, agg); }
     agg.count++;
     if (!agg.mxc && mxc) agg.mxc = mxc;
-    if (ev.getSender() === myUserId) agg.mine = ev.getId() ?? null;
+    const sender = ev.getSender();
+    if (sender && !agg.senders.includes(sender)) agg.senders.push(sender);
+    if (sender === myUserId) agg.mine = ev.getId() ?? null;
   }
 
   const out: ReactionsMap = new Map();
@@ -59,7 +62,7 @@ export function aggregateReactions(events: MatrixEvent[], myUserId: string): Rea
     out.set(
       targetId,
       [...keys.entries()]
-        .map(([key, v]) => ({ key, count: v.count, mine: v.mine, mxc: v.mxc }))
+        .map(([key, v]) => ({ key, count: v.count, mine: v.mine, mxc: v.mxc, senders: v.senders }))
         .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
     );
   }

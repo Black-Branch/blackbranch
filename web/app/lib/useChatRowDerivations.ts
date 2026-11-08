@@ -69,13 +69,23 @@ export function useChatRowDerivations({ messages, rendered, userId, ownIds, ownC
   // it is derived in the reader's own client from the reader's own identity,
   // so the highlight cannot leak to anyone else and the sender is not told
   // whose client lit up. Nothing about it rides the message.
+  //
+  // A row says WHICH: a name of yours is a mention (`highlight`), one of your
+  // Behavior › Words alone is a highlight (`wordHighlight`) — two marks, two
+  // colours (Colours › Mentions & highlights). A row with both is a mention.
   const wordHit = useMemo(() => wordsMatcher(words ?? []), [words]);
+  const isMine = useCallback((msg: ChatMsg) =>
+    !!(userId && msg.matrixId === userId) || (!!msg.publicId && !!ownIds && ownIds.has(msg.publicId)),
+  [userId, ownIds]);
+  const namesMe = useCallback((msg: ChatMsg) =>
+    (!!msg.reply_to_username && ownNames.has(normalizeUsername(msg.reply_to_username).toLowerCase()))
+      || mentionsAnyOf(msg.message, ownNames),
+  [ownNames]);
   const mentionsMe = useCallback((msg: ChatMsg) => {
-    if ((userId && msg.matrixId === userId) || (!!msg.publicId && !!ownIds && ownIds.has(msg.publicId))) return false;
-    return (!!msg.reply_to_username && ownNames.has(normalizeUsername(msg.reply_to_username).toLowerCase()))
-      || mentionsAnyOf(msg.message, ownNames)
+    if (isMine(msg)) return false;
+    return namesMe(msg)
       || wordHit(msg.message);
-  }, [userId, ownIds, ownNames, wordHit]);
+  }, [isMine, namesMe, wordHit]);
 
   const rows = useMemo(() =>
     rendered.map((msg, i) => {
@@ -86,10 +96,12 @@ export function useChatRowDerivations({ messages, rendered, userId, ownIds, ownC
         && rendered[i - 1]?.username === msg.username
         && rendered[i - 1]?.platform === msg.platform
         && !msg.reply_to_username;
-      const highlight = mentionsMe(msg);
-      return { msg: resolved, isOwn, isOwnStream, compact, highlight };
+      const mine = isOwn || isOwnStream;
+      const highlight = !mine && namesMe(msg);
+      const wordHighlight = !mine && !highlight && wordHit(msg.message);
+      return { msg: resolved, isOwn, isOwnStream, compact, highlight, wordHighlight };
     }),
-  [rendered, userId, ownIds, ownColor, mentionsMe]);
+  [rendered, userId, ownIds, ownColor, namesMe, wordHit]);
   /* eslint-enable react-hooks/refs */
 
   // Everyone visible in the buffer, by every name they answer to — the source

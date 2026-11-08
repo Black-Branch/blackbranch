@@ -30,6 +30,9 @@
 //               noted 'baseline') an ABSENT switch reads ON, loudly — so a deploy that runs before
 //               the migration writing the switch rows cannot silently switch off a payment provider. A baseline-built database reads the
 //               default (off). An explicit row or MODULE_<ID> always wins.
+//   appliesLive (optional) its server process applies the switch on the settings load, not at its
+//               start (youtube: stream-ingest's platform starter reconciles on every load), so the
+//               switch is `reload: 'live'` and nothing waits for a restart.
 //   helpdesk    (optional) what the help desk tells a viewer: `on` while the module is switched on;
 //               `off` (optional) while it is off, so it never says the part exists. A module with
 //               no `off` is not mentioned at all while off. stream-ingest/lib/helpdesk builds its
@@ -84,7 +87,7 @@ export const MODULES = [
   },
   // ── Platform and payment modules ─────────────────────────────────────────────────────────
   {
-    id: 'youtube', label: 'YouTube', kind: 'module', defaultOn: false, packages: ['web', 'stream-ingest'], legacyOn: true,
+    id: 'youtube', label: 'YouTube', kind: 'module', defaultOn: false, packages: ['web', 'stream-ingest'], legacyOn: true, appliesLive: true,
     description: 'Reads the chat of your YouTube live streams into site chat. Off: nothing is read from YouTube and no YouTube setup page is shown.',
     api: { files: [] }, settings: ['platform.youtube.channelId', 'youtube.apiKey'], doneTest: [],
     helpdesk: {
@@ -143,6 +146,12 @@ export const MODULES = [
         explain: 'Subscriptions need a monthly Price in Stripe. Product catalogue → Add product: a name (Supporter), Recurring, Monthly, your amount and currency → Save. Open the price and copy its id (price_…). Leave it empty and the site offers no card subscriptions or gift subs; tips and points still work. Check asks Stripe that the price is active, recurring and monthly; the key needs Read on Prices for that.',
         links: [{ label: 'Stripe: product catalogue', url: 'https://dashboard.stripe.com/products' }],
         paste: [], fields: ['stripe.supporterPriceId'], test: null,
+      },
+      {
+        id: 'portal', title: 'The customer portal', need: 'optional',
+        explain: 'Subscribers manage and cancel their card subscription in Stripe\'s customer portal, which Stripe opens only once its settings were saved. Settings → Billing → Customer portal: choose what subscribers may do (at least cancel), then press Save. Do it in the same mode as the key (live, or test for test keys). Until then "Manage subscription" answers that the site has not finished setting it up. Check on the key above says when the portal was never saved.',
+        links: [{ label: 'Stripe: customer portal', url: 'https://dashboard.stripe.com/settings/billing/portal' }],
+        paste: [], fields: [], test: null,
       },
       {
         id: 'cloudflare', title: 'Behind Cloudflare: let Stripe through', need: 'optional',

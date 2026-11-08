@@ -39,11 +39,17 @@ import { forfeitCoinsForDeletion } from "./coinsServer.ts";
 import { eraseMatrixAccount, localpartOf, matrixEraseAvailable } from "./matrixAccountErase.ts";
 import { markAccountDeleted } from "./deletedAccounts.ts";
 import { decToken } from "./tokenCrypto.ts";
-import { oauthRevoke } from "./matrixOAuthClient.ts";
+import { endUpstream, loadSessionRowsFor, type SessionRow } from "./matrixSessionCore.ts";
+import { upstreamDeps } from "./matrixSessionUpstream.ts";
 import { revokePlatformGrant } from "./platformRevoke.ts";
 import { NATIVE_SQL } from "./nativePlatform.ts";
 import { BILLED_PROVIDERS, stillBills } from "./subscriptions/entitlement.ts";
 import { cancelPaypalForDeletion, PaypalCancelError } from "./subscriptions/paypal.ts";
+import { isLastAdmin, releaseAdminInTx } from "./adminRole.ts";
+import { AUTOMOD_HELD_RETENTION_DAYS } from "../legal/automodRetention.ts";
+
+/** The refusal for the site's only admin (the screen shows the same words before they try). */
+const LAST_ADMIN_DELETE = "You're this site's only admin. Make someone else an admin first (Admin Panel → Site → Moderators), then delete your account.";
 
 export const FRESH_MS = 15 * 60_000;
 
@@ -74,6 +80,8 @@ export type DeletionCheck = {
   openCases: { mark: boolean; held: boolean; report: boolean };
   /** Can this site deactivate the Matrix account itself? If not, the operator does it. */
   matrixErase: "automatic" | "operator" | "elsewhere";
+  /** The site's only admin: deleting would leave the site with no admin (adminRole.ts). */
+  lastAdmin: boolean;
 };
 
 export async function deletionCheck(matrixId: string, sessionId: string | null, now = Date.now()): Promise<DeletionCheck> {
@@ -92,7 +100,7 @@ export async function deletionCheck(matrixId: string, sessionId: string | null, 
     `SELECT EXISTS (SELECT 1 FROM site.user_marks WHERE matrix_id = $1 AND cleared_at IS NULL)
               OR EXISTS (SELECT 1 FROM site.user_marks m JOIN site.platform_links p ON p.canonical_id = m.canonical_id
                           WHERE p.matrix_id = $1 AND m.cleared_at IS NULL) AS mark,
-            EXISTS (SELECT 1 FROM site.automod_held WHERE matrix_id = $1 AND status IN ('pending', 'blocked', 'flagged')) AS held,
+            EXISTS (SELECT 1 FROM site.automod_held WHERE matrix_id = $1 AND status IN ('pending', 'blocked')) AS held,
             EXISTS (SELECT 1 FROM site.reports WHERE reported_id = $1 AND status <> 'resolved') AS report`, [matrixId])).rows[0];
   const signedIn = sess.rows[0]?.signed_in_at ? new Date(sess.rows[0].signed_in_at) : null;
   const local = localpartOf(matrixId);
@@ -105,15 +113,22 @@ export async function deletionCheck(matrixId: string, sessionId: string | null, 
     banEndsAt: ban.rows[0]?.active && !ban.rows[0].permanent && ban.rows[0].ends ? new Date(ban.rows[0].ends).toISOString() : null,
     openCases: { mark: !!cases?.mark, held: !!cases?.held, report: !!cases?.report },
     matrixErase: !local ? "elsewhere" : (await matrixEraseAvailable().catch(() => false)) ? "automatic" : "operator",
+    lastAdmin: await isLastAdmin((sql, params) => pool.query(sql, params), matrixId),
   };
 }
 
 /** When the restriction a deletion leaves on the account's platform ids ends (stream.erased_restrictions,
- *  v156): a TIMEOUT's end, when nothing else holds it. A permanent ban or any open case → null (never).
+ *  v156), like a live account's: a permanent ban → null (until a mod lifts it — LIFT_BAN_SQL ends it
+ *  then); a timeout → its end; an open case → the held-message retention (ADR 0104), when the case's
+ *  evidence goes; a timeout with an open case → the later of the two.
  *  @test-only exported for accountDeletion.test.ts; deleteAccount (this file) is its caller. */
-export function restrictionExpiry(check: Pick<DeletionCheck, "banned" | "banEndsAt" | "openCases">): string | null {
+export function restrictionExpiry(check: Pick<DeletionCheck, "banned" | "banEndsAt" | "openCases">, now = Date.now()): string | null {
   const open = check.openCases.mark || check.openCases.held || check.openCases.report;
-  return check.banned && !open ? check.banEndsAt : null;
+  if (check.banned && !check.banEndsAt) return null;
+  const caseEnd = open ? new Date(now + AUTOMOD_HELD_RETENTION_DAYS * 86_400_000).toISOString() : null;
+  if (!check.banned || !check.banEndsAt) return caseEnd;
+  if (!caseEnd) return check.banEndsAt;
+  return Date.parse(caseEnd) > Date.parse(check.banEndsAt) ? caseEnd : check.banEndsAt;
 }
 
 /** The site erase, in the caller's transaction.
@@ -202,7 +217,7 @@ export async function eraseSiteData(client: { query: typeof pool.query }, matrix
   await run("profile", `UPDATE site.users SET display_name = 'Deleted account', email = NULL, avatar_url = NULL, username_color = NULL,
     username_style = NULL, banner_mxc = NULL, bio = NULL, mx_refresh_token = NULL, mx_access_token = NULL, mx_token_expires = NULL,
     oidc_token_endpoint = NULL, oidc_client_id = NULL, mx_device_id = NULL, display_name_changed_at = NULL, profile_synced_at = NULL,
-    is_admin = false, is_mod = false, show_links = false, deleted_at = now() WHERE matrix_id = $1`);
+    is_admin = false, is_mod = false, is_staff = false, show_links = false, deleted_at = now() WHERE matrix_id = $1`);
   return n;
 }
 
@@ -251,6 +266,7 @@ export const DELETION_DECLARATION = {
     "coin_wallets.matrix_id": "the balance is forfeited to zero; the row is the ledger's account",
     "forum_votes.author_matrix_id": "votes other people cast on their posts: the voters' records, now naming the tombstone",
     "bans.matrix_id": "moderation record: a ban outlives the account it was placed on",
+    "community_unbans.matrix_id": "moderation record: a lifted ban (an audit log), pruned after 30 days",
     "user_marks.matrix_id": "moderation record (suspicious marks)",
     "user_slow_mode.matrix_id": "moderation record (slow mode)",
     "automod_held.matrix_id": "moderation record: messages held for review, with their text",
@@ -261,7 +277,7 @@ export const DELETION_DECLARATION = {
   resetColumns: [
     "display_name", "email", "avatar_url", "username_color", "username_style", "banner_mxc", "bio",
     "mx_refresh_token", "mx_access_token", "mx_token_expires", "oidc_token_endpoint", "oidc_client_id", "mx_device_id",
-    "display_name_changed_at", "profile_synced_at", "is_admin", "is_mod",
+    "display_name_changed_at", "profile_synced_at", "is_admin", "is_mod", "is_staff",
     // Off, so the one consent predicate (linkConsent.ts) reads "not consenting" for a canonical the
     // tombstone still holds through a ban's kept platform links.
     "show_links",
@@ -276,7 +292,9 @@ export const DELETION_DECLARATION = {
 } as const;
 
 type Credentials = {
-  sessions: { mx_access_token: string | null; mx_refresh_token: string | null }[];
+  /** Each browser session whole — tokens AND the issuer they belong to (an outside account's
+   *  tokens go back to their own server, never to ours). */
+  sessions: SessionRow[];
   grants: { provider: string; access_token: string | null; refresh_token: string | null }[];
 };
 
@@ -287,31 +305,27 @@ type Credentials = {
  * other account's link too (a shared identity) — only this account's rows go, in the erase.
  */
 async function readCredentials(client: { query: typeof pool.query }, matrixId: string): Promise<Credentials> {
-  const sess = await client.query<Credentials["sessions"][number]>(
-    `SELECT mx_access_token, mx_refresh_token FROM site.user_sessions WHERE matrix_id = $1`, [matrixId]);
+  // site.user_sessions WHERE matrix_id = $1, read the way sign-out reads one session.
+  const sessions = await loadSessionRowsFor((sql, params) => client.query(sql, params), matrixId);
   const acc = await client.query<Credentials["grants"][number]>(
     `SELECT a.provider, a.access_token, a.refresh_token FROM site.accounts a
       WHERE a.matrix_id = $1 AND a.type = 'oauth'
         AND NOT EXISTS (SELECT 1 FROM site.accounts o WHERE o.provider = a.provider AND o.provider_account_id = a.provider_account_id AND o.matrix_id <> $1)`, [matrixId]);
-  return { sessions: sess.rows, grants: acc.rows };
+  return { sessions, grants: acc.rows };
 }
 
 /**
- * Revoke them at their issuers: each browser session's Matrix tokens (MAS ends that session and
- * its device) and each linked platform's OAuth grant. Runs only AFTER the erase committed — a
+ * Revoke them at their issuers: each browser session ended the way sign-out ends one
+ * (matrixSessionCore.ts endUpstream: the refresh token revoked at THAT session's issuer — ours, or
+ * an outside server's — /logout as the fallback; MAS then ends the session and its device), and
+ * each linked platform's OAuth grant. Runs only AFTER the erase committed — a
  * deletion that stops earlier leaves the person signed in, not locked out of an account that
  * still exists. Best-effort per token (an issuer that is down must not undo a finished
  * deletion); the session callback refuses the account from then on (deletedAccounts.ts).
  */
 async function revokeAtIssuers(c: Credentials): Promise<{ matrixSessions: number; platformGrants: number }> {
-  await Promise.allSettled(c.sessions.flatMap((r) => {
-    const out: Promise<unknown>[] = [];
-    const refresh = decToken(r.mx_refresh_token);
-    const access = decToken(r.mx_access_token);
-    if (refresh) out.push(oauthRevoke(refresh, "refresh_token"));
-    if (access) out.push(oauthRevoke(access, "access_token"));
-    return out;
-  }));
+  const upstream = upstreamDeps(decToken);
+  await Promise.allSettled(c.sessions.map((r) => endUpstream(upstream, r)));
   await Promise.allSettled(c.grants.map((r) => revokePlatformGrant(r.provider, { access: decToken(r.access_token), refresh: decToken(r.refresh_token) })));
   return { matrixSessions: c.sessions.length, platformGrants: c.grants.length };
 }
@@ -330,6 +344,7 @@ export async function deleteAccount(matrixId: string, sessionId: string | null, 
   const check = await deletionCheck(matrixId, sessionId);
   if (!check.fresh) return { ok: false, status: 403, error: "Sign in again first — deleting needs a sign-in from the last 15 minutes." };
   if (check.activeSubscription) return { ok: false, status: 409, error: "Cancel your subscription first, then delete your account." };
+  if (check.lastAdmin) return { ok: false, status: 409, error: LAST_ADMIN_DELETE };
   // What an open case depends on is kept (see the header) — decided here, from server-side facts.
   const keep = { evidence: check.banned || check.openCases.mark || check.openCases.held || check.openCases.report, links: check.banned };
 
@@ -349,6 +364,12 @@ export async function deleteAccount(matrixId: string, sessionId: string | null, 
   let credentials: Credentials;
   try {
     await client.query("BEGIN");
+    // The last-admin rule again, under the admin rows' lock and inside this transaction: two admins
+    // deleting themselves at the same moment serialise here, and the second is refused (adminRole.ts).
+    if (await releaseAdminInTx((sql, params) => client.query(sql, params), matrixId) === "last") {
+      await client.query("ROLLBACK");
+      return { ok: false, status: 409, error: LAST_ADMIN_DELETE };
+    }
     credentials = await readCredentials(client, matrixId);
     // A moderator's role ends with the account (the erase clears is_mod): recorded like every
     // other removal of it, appended to the mod log the erase itself never touches.

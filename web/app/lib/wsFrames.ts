@@ -1,4 +1,5 @@
 import type { ChatMsg } from "./chatMsg";
+import type { PublicSnapshot } from "./platformLiveness.generated.mjs";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The WS frame registry: every frame the stream-api socket (site.apiWsOrigin)
@@ -43,6 +44,7 @@ import type { ChatMsg } from "./chatMsg";
 //  config_test        instance-config.js test()          brain        answers on /config/report
 //  config_ai_probe    ai.js check() via ask()            brain        answers on /config/report
 //  config_content_changed content.js after()             brain        stream-ingest re-reads /content
+//  platformStates     platform-states.js                 web          per-platform live state; replays on connect
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** A message id on the wire is a platform string id or a numeric native id. */
@@ -66,7 +68,9 @@ export type StickerMoveFrame = ChatMsg & { type: "stickerMove" };
 export type StreamFrame =
   // ── chat / content (consumer: web) ─────────────────────────────────────────
   | { type: "hello"; internal: boolean }
-  | { type: "history"; messages: ChatMsg[] }
+  // `delta: true` = only the lines changed since the position the socket resumed from (a deleted
+  // one as its emptied envelope) — merge it, never replace with it. `epoch` + `seq` = that position.
+  | { type: "history"; messages: ChatMsg[]; delta?: boolean; epoch?: string; seq?: number }
   | MessageFrame
   | { type: "delete"; messageId: WireId; platform: string | null }
   | { type: "purge"; ids: { platform: string; id: WireId }[]; batchId: string | null }
@@ -244,7 +248,15 @@ export type StreamFrame =
   | { type: "config_ai_probe"; op: "detect" | "test"; id: string; nonce: string }
   /** Instance content was written (stream-api content.js): content key NAMES only, sent to
    *  internal sockets; stream-ingest re-reads GET /content. */
-  | { type: "config_content_changed"; keys: string[] };
+  | { type: "config_content_changed"; keys: string[] }
+  // ── per-platform liveness (consumer: web) ────────────────────────────────────
+  /**
+   * Each platform's public live state (stream-api platform-states.js, from stream-ingest's poller):
+   * sent on connect and whenever the picture changes. Same shape as /stream/current's `liveness`
+   * (PLATFORM_LIVENESS.publicSnapshot). A platform absent from `platforms` is not configured or not
+   * yet reported — keep what is shown; a silent poller reads `unknown`.
+   */
+  | ({ type: "platformStates" } & PublicSnapshot);
 
 /** The `type` discriminant of any frame — the set of legal frame names. */
 export type StreamFrameType = StreamFrame["type"];
@@ -285,6 +297,7 @@ const REGISTERED: Record<StreamFrameType, true> = {
   config_test: true,
   config_ai_probe: true,
   config_content_changed: true,
+  platformStates: true,
 };
 
 /** Runtime list of every legal frame name (derived from the exhaustiveness lock). */

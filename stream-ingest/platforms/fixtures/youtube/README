@@ -1,0 +1,25 @@
+YouTube pages for lib/youtubeLive.test.js, fetched 2026-10-24 with platforms/youtube.js PAGE_HEADERS
+(the consent and bot-check pages without its cookie). Each page is trimmed to its canonical link plus its
+ytInitialPlayerResponse script, and the player response to playabilityStatus, videoDetails and microformat
+(the rest carries per-request URLs with the fetching address). The test reads the owner ids from this file.
+
+live.html — https://www.youtube.com/watch?v=0sfDth4lMLc&hl=en — 2026-10-24 — owner UCSJ4gkVC6NrvII8umztf0Ow
+live-no-microformat.html — https://www.youtube.com/channel/UCSJ4gkVC6NrvII8umztf0Ow/live?hl=en — 2026-10-24 — owner UCSJ4gkVC6NrvII8umztf0Ow (no microformat; 3 of 3 /live fetches that day)
+upcoming-watch.html — https://www.youtube.com/watch?v=hv867HnY4j4&hl=en — 2026-10-24 — owner UCLA_DiR1FfKNvjuUpBHmylQ (scheduled; plus the "N waiting" videoViewCountRenderer from ytInitialData)
+none.html — https://www.youtube.com/channel/UCBJycsmduvYEL83R_U4JriQ/live?hl=en — 2026-10-24 — owner UCBJycsmduvYEL83R_U4JriQ (channel canonical; plus the first recommended videoId)
+foreign.html — https://www.youtube.com/channel/UCNye-wNBqNL5ZzHSJj3l8Bg/live?hl=en — 2026-10-24 — owner UCNye-wNBqNL5ZzHSJj3l8Bg — asked as UCBJycsmduvYEL83R_U4JriQ
+consent.html — https://consent.youtube.com/d?continue=…%2Flive&gl=DE&hl=en&pc=yt (no cookie) — 2026-10-24 — owner none (scripts and styles removed; this address was not served the wall itself, so this is the consent page it links to)
+botcheck.html — https://www.google.com/sorry/index?continue=https://www.youtube.com/channel/UCBJycsmduvYEL83R_U4JriQ/live (no cookie, HTTP 429) — 2026-10-24 — owner none (the fetching address removed)
+
+videos-list-*.json (platforms/ytConfirm.test.js) are NOT captured: they are videos.list
+(part=snippet,liveStreamingDetails) responses written 2026-10-24 from the Data API's documented
+resource shape (developers.google.com/youtube/v3/docs/videos: snippet.liveBroadcastContent
+live / upcoming / none; liveStreamingDetails.actualStartTime, actualEndTime, scheduledStartTime,
+concurrentViewers, activeLiveChatId), trimmed to the fields the classifier reads. Capturing them needs
+an API key and a call against the quota; the first real confirm on a live night should be compared
+with them (Task 12). Video id is the tests' placeholder.
+videos-list-live.json — a broadcast live now
+videos-list-upcoming.json — a scheduled broadcast (scheduledStartTime only)
+videos-list-none.json — an ordinary upload, never live (no liveStreamingDetails)
+videos-list-ended.json — a finished broadcast (liveBroadcastContent none, actualEndTime set)
+videos-list-empty.json — an id that names nothing (deleted or private): no items

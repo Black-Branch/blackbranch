@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { createWhepProxy } from "@/app/lib/whepProxy";
 import { createSlidingWindowLimiter, ipKey } from "@/app/lib/rateLimit";
 import { instanceString } from "@/app/lib/instanceConfigServer";
+import { BUSY_RETRY_S } from "@/app/lib/whepEscalation";
 
 // WHEP signaling proxy for the in-house stream.place player (StreamplaceThinPlayer).
 // The browser POSTs its SDP offer here; the policy — discovery, forwarding,
@@ -41,7 +42,8 @@ const MAX_OFFER_BYTES = 64 * 1024;
 export async function POST(req: NextRequest) {
   const proxy = currentProxy();
   if (!proxy) return new Response("stream.place streamer DID not configured", { status: 501 });
-  if (isRateLimited(ipKey(req))) return new Response("too many requests", { status: 429 });
+  // Busy, not broken: the player waits Retry-After and tries again by itself.
+  if (isRateLimited(ipKey(req))) return new Response("too many requests", { status: 429, headers: { "retry-after": String(BUSY_RETRY_S) } });
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (declared > MAX_OFFER_BYTES) return new Response("offer too large", { status: 413 });
   const offer = await req.text();
@@ -59,6 +61,9 @@ export async function POST(req: NextRequest) {
   }
   return new Response(r.body, {
     status: r.status,
-    headers: { "content-type": "application/sdp", "cache-control": "no-store", "x-playback-server": r.server },
+    headers: {
+      "content-type": "application/sdp", "cache-control": "no-store", "x-playback-server": r.server,
+      ...(r.retryAfter ? { "retry-after": r.retryAfter } : {}),
+    },
   });
 }

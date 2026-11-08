@@ -74,6 +74,8 @@ export type WindowProps<K extends string = string> = {
   mark?: ReactNode;
   /** The band's one text slot. Not rendered while `tabs` is present. */
   title?: string;
+  /** The title is a control (a DM's name opens that person's card). */
+  onTitle?: () => void;
   tabs?: readonly TabItem<K>[];
   activeTab?: K;
   onTab?: (k: K) => void;
@@ -256,11 +258,12 @@ type DragHandle = {
 };
 
 function WindowBand<K extends string>({
-  name, mark, title, tabs, activeTab, onTab, actions, onBack, onPopout, dock, onClose, dragHandle,
+  name, mark, title, onTitle, tabs, activeTab, onTab, actions, onBack, onPopout, dock, onClose, dragHandle,
 }: {
   name: string;
   mark?: ReactNode;
   title?: string;
+  onTitle?: () => void;
   tabs?: readonly TabItem<K>[];
   activeTab?: K;
   onTab?: (k: K) => void;
@@ -303,6 +306,8 @@ function WindowBand<K extends string>({
         // `tabs` for the items prop — the boolean const cannot.
         tabs && tabs.length > 0 ? (
           <Sections items={tabs} value={activeTab ?? null} onChange={(k) => onTab?.(k)} label={name} />
+        ) : title && onTitle ? (
+          <button type="button" className="chrome-window-title chrome-window-title-btn" onClick={onTitle}>{title}</button>
         ) : title ? (
           <span className="chrome-window-title">{title}</span>
         ) : undefined
@@ -342,7 +347,7 @@ function WindowBand<K extends string>({
 }
 
 function FloatingWindow<K extends string>({
-  name, mark, title, tabs, activeTab, onTab, actions, onClose,
+  name, mark, title, onTitle, tabs, activeTab, onTab, actions, onClose,
   storageKey, defaultSize, initialBox, fitHeight, minWidth, stack, onBack, popoutUrl, dock, loading, autoDismissMs, closeRef, children,
 }: WindowProps<K>) {
   const [initial] = useState<Box>(() => {
@@ -512,6 +517,7 @@ function FloatingWindow<K extends string>({
         name={name}
         mark={mark}
         title={title}
+        onTitle={onTitle}
         tabs={tabs}
         activeTab={activeTab}
         onTab={onTab}
@@ -545,7 +551,7 @@ function FloatingWindow<K extends string>({
 }
 
 function PageWindow<K extends string>({
-  name, mark, title, tabs, activeTab, onTab, actions, onClose, stack, onBack, children,
+  name, mark, title, onTitle, tabs, activeTab, onTab, actions, onClose, stack, onBack, children,
 }: WindowProps<K>) {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const canGoBack = !!stack && stack.length > 1 && !!onBack;
@@ -588,6 +594,7 @@ function PageWindow<K extends string>({
         name={name}
         mark={mark}
         title={title}
+        onTitle={onTitle}
         tabs={tabs}
         activeTab={activeTab}
         onTab={onTab}
@@ -602,7 +609,7 @@ function PageWindow<K extends string>({
 }
 
 function PanelWindow<K extends string>(props: WindowProps<K>) {
-  const { name, mark, title, tabs, activeTab, onTab, actions, onClose, stack, onBack, popoutUrl, dock, loading, fill, children } = props;
+  const { name, mark, title, onTitle, tabs, activeTab, onTab, actions, onClose, stack, onBack, popoutUrl, dock, loading, fill, children } = props;
   const kind = props.kind ?? "peek";
   // Settings › Behavior › Windows "slide in from": a TOP
   // panel comes down from the top of the pane and leaves the bottom — the
@@ -791,7 +798,7 @@ function PanelWindow<K extends string>(props: WindowProps<K>) {
   // A top panel's gesture: the handle SIZES it (usePanelPull.ts). Both hooks
   // always run — hook order — and the handle takes the one that fits.
   const pull = usePanelPull({
-    panel, layer: target, onDismiss: requestClose,
+    panel, layer: target, kind, onDismiss: requestClose,
     onStart: () => { releaseEntryFreezeRef.current?.(); cancelShrinkRef.current?.(); },
   });
 
@@ -982,7 +989,7 @@ function PanelWindow<K extends string>(props: WindowProps<K>) {
 
   const band = (
     <WindowBand
-      name={name} mark={mark} title={title} tabs={tabs} activeTab={activeTab}
+      name={name} mark={mark} title={title} onTitle={onTitle} tabs={tabs} activeTab={activeTab}
       onTab={onTab} actions={actions}
       onBack={canGoBack ? onBack : undefined}
       dock={dock}
@@ -1069,7 +1076,7 @@ function PanelWindow<K extends string>(props: WindowProps<K>) {
 }
 
 function DialogWindow<K extends string>({
-  name, mark, title, tabs, activeTab, onTab, actions, onClose, width, children,
+  name, mark, title, onTitle, tabs, activeTab, onTab, actions, onClose, width, children,
 }: WindowProps<K>) {
   const dialogRef = useRef<HTMLDivElement>(null);
   // Read through a ref so the focus effect below can be mount-only. Callers
@@ -1146,6 +1153,7 @@ function DialogWindow<K extends string>({
           name={name}
           mark={mark}
           title={title}
+          onTitle={onTitle}
           tabs={tabs}
           activeTab={activeTab}
           onTab={onTab}

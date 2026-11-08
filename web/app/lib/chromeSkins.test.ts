@@ -91,9 +91,9 @@ test("Sections renders through useTabList, adopts an enclosing Band, and owns no
   assert.match(src, /<X size=\{11\}/);
   const chromeCss = stripCssComments(readFileSync(path.join(here, "..", "components/chrome/chrome.css"), "utf8"));
   assert.match(chromeCss, /@media \(pointer: coarse\)\s*\{[^}]*\.chrome-tab-close::after\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px;/, "the ✕ has a 24×24 coarse-pointer hit area");
-  // Overflow: the tab loop closes the tablist, then the two pointer-only chevrons and
+  // Overflow: the tab loop closes the tablist, the trailing slot closes the scroller, then the two pointer-only chevrons and
   // the wrapper that carries data-more close the file.
-  assert.match(src, /<\/button>\s*\)\)\}\s*<\/div>\s*<button[^>]*chrome-more-start[\s\S]*?<\/button>\s*<button[^>]*chrome-more-end[\s\S]*?<\/button>\s*<\/div>\s*\);\s*\}\s*$/, "vacuity anchor: the strip's real tail at the END of the file");
+  assert.match(src, /<\/button>\s*\)\)\}\s*<\/div>\s*\{trail && <div className="chrome-sections-trail">\{trail\}<\/div>\}\s*<\/div>\s*<button[^>]*chrome-more-start[\s\S]*?<\/button>\s*<button[^>]*chrome-more-end[\s\S]*?<\/button>\s*<\/div>\s*\);\s*\}\s*$/, "vacuity anchor: the strip's real tail at the END of the file");
 });
 
 test("Band owns exactly one shade and both caps, paints them itself, and provides the context", () => {

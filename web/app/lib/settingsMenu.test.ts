@@ -107,7 +107,7 @@ test("each key sits in its assigned section", () => {
   const expect: Record<string, string> = {
     usernameSat: "text", shellFont: "text", tabSize: "text", tsFormat: "text",
     nameStylesOn: "rows", showMatrixName: "rows", badgesOn: "rows", pronounColor: "rows", platformPalette: "rows", piSat: "rows", pfpRingWidth: "rows", emoteOverlap: "rows",
-    textColor: "colours", tsColor: "colours", fallbackNameMode: "colours", panelTint: "colours", voteColor: "colours",
+    textColor: "colours", tsColor: "colours", fallbackNameMode: "colours", panelTint: "colours", voteColor: "colours", mentionColor: "colours", highlightColor: "colours",
     sendToBtnOn: "site", toolsBtnOn: "site", frameWidth: "site", panelGap: "site", hideTabBar: "site", streamAutoMute: "site",
     lowPower: "effects", animEmotesOn: "effects", unAnim: "effects", shadowOn: "effects", seamOn: "effects", chatFade: "effects", transparencyOn: "effects", glassColor: "effects", glassOn: "effects",
     histLength: "behavior", spotlightOn: "behavior", mentionSound: "behavior",

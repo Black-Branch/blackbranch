@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import type React from "react";
 import { getEmoteMatches } from "./emoteMatches";
 import { saveRecentEmote } from "./recentEmotes";
@@ -61,10 +61,14 @@ export function useEmoteAutocomplete({
     if (v) setSuggestReady(false);
   }
 
-  // Keep the caret anchor in step with the DOM as the value changes (typing). A
-  // one-frame lag is harmless: the overlay only appears after the 250ms debounce
-  // (by which point this has corrected) and display always reads the live caret.
-  useEffect(() => {
+  // Keep the caret anchor in step with the DOM as the value changes (typing).
+  //
+  // The three per-keystroke state writes in this hook are LAYOUT effects, not passive ones: a
+  // layout effect's update renders in the keystroke's own sync pass, while a passive effect's waits
+  // for React's scheduler task. React counts consecutive commits that leave work waiting and throws
+  // #185 at 51 — a browser delivering key input ahead of that task did exactly that, once per
+  // keystroke (task 185; composerTypingLoop.render.test.ts).
+  useLayoutEffect(() => {
     const el = inputRef.current;
     const c = el?.selectionStart ?? value.length;
     setCaret((p) => (p === c ? p : c));
@@ -149,14 +153,14 @@ export function useEmoteAutocomplete({
   const liveMentionQuery = savedState?.mode === "mention"
     ? savedState.query
     : mentionMatch?.[1] ?? null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- input-machine reset: the selection must clear exactly when the query deps change; a render-time derive would need a ref write during render (also disallowed)
     if (savedState === null) { setOverlaySel(0); tabbedSinceOpenRef.current = false; }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- savedState is READ as a guard, never as a trigger: Tab sets savedState, and re-running this on that change would reset the very selection Tab just established
   }, [rawEmoteQuery, liveMentionQuery, isZWFilter, isMentionMode]);
 
   // --- clear cycle mode / dismissed when user types ---
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (value === lastAppliedRef.current) { // we caused this change
       prevValueRef.current = value;
       return;

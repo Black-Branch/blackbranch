@@ -72,7 +72,12 @@ test("the community members bar's ✕ is a BarButton too — the FIFTH spelling"
   // classes and no aria-label or title — announced to a screen reader as the
   // character "✕". So this file is scanned too.
   const src = stripComments(readFileSync(matrixViewPath, "utf8"));
-  const close = barButtons(src).filter((t) => /setMembersOpen\(false\)/.test(t));
+  // Two BarButtons write setMembersOpen(false): the side panel's ✕ and the
+  // phone members pane's ← (label "Back"). Every such control is a BarButton.
+  const closers = barButtons(src).filter((t) => /setMembersOpen\(false\)/.test(t));
+  assert.equal(closers.length, 2, "the members ✕ and the members ← are both BarButtons");
+  assert.equal(closers.filter((t) => /label="Back"/.test(t)).length, 1, "the members pane's ←");
+  const close = closers.filter((t) => /label="Close members"/.test(t));
   assert.equal(close.length, 1, "the members close control must be a BarButton");
   assert.match(close[0]!, /label="[^"]+"/,
     "BarButton's label is what pairs aria-label and title — an unlabelled close is the defect");

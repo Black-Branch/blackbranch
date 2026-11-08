@@ -16,7 +16,7 @@ const read = (...p: string[]) => {
 test("the registry declares the generic choice control and drops the one-off platformIndicator kind", () => {
   const reg = read("app", "lib", "settingsRegistry.ts");
   assert.match(reg, /\{ kind: "choice"; label: string; options: readonly \{ value: string; label: string \}\[\];\s*preview\?: \(v: string\) => void \}/);
-  assert.match(reg, /\{ kind: "color"; label: string; fallbackKey\?: SettingKey \}/);
+  assert.match(reg, /\{ kind: "color"; label: string; fallbackKey\?: SettingKey;\s*defaultHex\?: string \}/);
   assert.doesNotMatch(reg, /kind: "platformIndicator"/);
   assert.match(reg, /platformIndicator: E\(\{[\s\S]*?kind: "choice", label: "Platform style"/);
 });

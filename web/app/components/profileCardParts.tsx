@@ -204,7 +204,7 @@ export function StyledName({
           // — this preview answers "what will my name look like".
           fontSize: CHAT_FONT,
           filter: "saturate(var(--chat-username-sat, 1))",
-          ...usernameStyleCSS(style, color),
+          ...usernameStyleCSS(style, color, name),
         }}
       >
         {name}

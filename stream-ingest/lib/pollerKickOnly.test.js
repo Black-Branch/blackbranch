@@ -51,6 +51,7 @@ test('Kick-only: the poller runs, opens a session, snapshots Kick, and ends it d
       const body = init.body ? JSON.parse(init.body) : null;
       if (method === 'GET' && path === '/stream/current') return json({ live: api.live, streamId: api.streamId });
       if (method === 'POST' && path === '/stream/start') { api.live = true; api.streamId = body.streamId; api.starts.push(body.streamId); return json({ ok: true }); }
+      if (method === 'POST' && path === '/stream/platforms') return json({ ok: true }); // the per-tick publish (pollerPublish.test.js)
       if (method === 'POST' && path === '/viewer-snapshot') { api.snapshots.push(body); return json({ ok: true }); }
       if (method === 'POST' && path === '/stream/end') { api.live = false; api.ends.push(body.streamId); endedAfterOfflineAnswers = kickOfflineAnswers; return json({ ok: true }); }
     }

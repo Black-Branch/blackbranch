@@ -8,13 +8,14 @@
 //
 // MODULE CONFIG. Everything here is DERIVED from the
 // bridge's own two templates, copied from its config into the install keys
-// `discordBridge.usernameTemplate` (`username_template`, e.g. `discord_{{.}}`) and
+// `discordBridge.usernameTemplate` (`username_template`, e.g. `discord_{{.}}`; for Out Of Your
+// Element, `_ooye_{{.Username}}` — see PLACEHOLDER_FILLS) and
 // `discordBridge.displaynameTemplate` (`displayname_template`). Unset = the module is off: no
 // sender is a ghost, no name is altered, and the SQL exclusions exclude nobody.
 //
 // Keyed on the sender ID, never on the display name. A display name is
 // user-controlled and changes; the ghost's localpart is assigned by the bridge
-// from `username_template` (`{{.}}` = the Discord user's numeric id).
+// (mautrix: `{{.}}` = the Discord user's numeric id; OOYE: the cleaned username).
 // (A guessed `@_discord_` — an underscore the bridge never emits — matches
 // zero real senders while every test stays green, which is why the fixture in
 // discordSender.test.ts is a real row.)
@@ -37,9 +38,21 @@ type BridgeMatchers = {
   bot: RegExp | null;
 };
 
+/** What a username template's ONE placeholder stands for, as the characters it can be. The
+ *  placeholder says which bridge wrote the template, so the kind is never a separate setting:
+ *  · `{{.}}` — mautrix-discord's `username_template`: the Discord user's numeric id.
+ *  · `{{.Username}}` — Out Of Your Element, which has no template setting: a ghost is its
+ *    `namespace_prefix` plus the Discord username lower-cased and cut to a-z 0-9 . _ = -
+ *    (OOYE 3.7 user-to-mxid.js; a webhook's "webhook_<name>" and PluralKit's "_pk_<id>" too).
+ *  Any other placeholder is no template this file knows, so it yields no matcher. The settings
+ *  layer (config/instance-schema.mjs, kind localpartTemplate) accepts exactly these two. */
+const PLACEHOLDER_FILLS: Record<string, string> = { "{{.}}": "[0-9]+", "{{.Username}}": "[a-z0-9._=-]+" };
+
 /**
  * The matchers a bridge's two templates imply.
  *  · `discord_{{.}}` → `^@discord_[0-9]+:` (any server: a ghost id names its own).
+ *  · `_ooye_{{.Username}}` → `^@_ooye_[a-z0-9._=-]+:`; OOYE's display name
+ *    `{{or .Nick .GlobalName .Username}}` has no tail and no bot marker, so neither matcher exists.
  *  · `{{or .GlobalName .Username}}{{if .Bot}} (bot){{end}} (Discord)` → the tail "(Discord)"
  *    (the text after the last action) and the bot marker "(bot)" (the `{{if .Bot}}` text).
  * A template that does not have that shape yields no matcher for that part, never a guess.
@@ -48,9 +61,11 @@ type BridgeMatchers = {
  */
 export function bridgeMatchers(usernameTemplate: string, displaynameTemplate: string): BridgeMatchers {
   let ghostPattern: string | null = null;
-  const parts = usernameTemplate.split("{{.}}");
-  if (parts.length === 2 && parts[0]! + parts[1]! !== "") {
-    ghostPattern = `^@${escapeRe(parts[0]!)}[0-9]+${escapeRe(parts[1]!)}:`;
+  const actions = usernameTemplate.match(/\{\{.*?\}\}/g) ?? [];
+  const fills = actions.length === 1 ? PLACEHOLDER_FILLS[actions[0]!] : undefined;
+  if (fills) {
+    const [before, after] = usernameTemplate.split(actions[0]!) as [string, string];
+    if (before + after !== "") ghostPattern = `^@${escapeRe(before)}${fills}${escapeRe(after)}:`;
   }
   const lastAction = displaynameTemplate.lastIndexOf("}}");
   const tail = lastAction >= 0 ? displaynameTemplate.slice(lastAction + 2).trim() : "";

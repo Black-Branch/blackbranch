@@ -7,9 +7,12 @@
 import { useState } from "react";
 import { getJson, postJson } from "@/app/lib/http";
 import { signOutEverything } from "@/app/lib/signOutEverything";
-import { siteName } from "@/app/lib/siteName";
 
-type Check = { accountName: string; signedInAt: string | null; fresh: boolean; activeSubscription: boolean; banned: boolean; banEndsAt?: string | null; openCases: { mark: boolean; held: boolean; report: boolean }; matrixErase: "automatic" | "operator" | "elsewhere" };
+type Check = { accountName: string; signedInAt: string | null; fresh: boolean; activeSubscription: boolean; banned: boolean; banEndsAt?: string | null; openCases: { mark: boolean; held: boolean; report: boolean }; matrixErase: "automatic" | "operator" | "elsewhere"; lastAdmin?: boolean };
+
+// What happens when the account server cannot deactivate the Matrix account at once: the site
+// retries it every hour and the operator's Doctor shows it until then (matrixEraseRetry.ts).
+const MATRIX_RETRY_LINE = "the site keeps trying every hour until it is, and its operator is shown it until then.";
 
 const REMOVED = [
   "your profile: name, picture, banner, bio, colours and settings",
@@ -48,7 +51,7 @@ export default function DeleteAccount() {
     if (!res?.ok) { setError(d?.error ?? "Couldn't delete — try again."); return; }
     setDone(d?.matrix === "erased" ? "Your account is deleted, and your Matrix chat account with it."
       : d?.matrix === "elsewhere" ? "Your account here is deleted. Your Matrix account belongs to another server — delete it there."
-      : "Your account is deleted. Your Matrix chat account is removed by the site's operator.");
+      : `Your account is deleted. Your Matrix chat account couldn't be removed just now: ${MATRIX_RETRY_LINE}`);
     setTimeout(() => signOutEverything(), 4000);
   }
 
@@ -72,13 +75,15 @@ export default function DeleteAccount() {
         <p className="text-muted">
           {check.matrixErase === "automatic" ? "Your Matrix chat account (DMs, community rooms) is deactivated and erased too."
             : check.matrixErase === "elsewhere" ? "You signed in with a Matrix account from another server — this site cannot delete it; do that there."
-            : `Your Matrix chat account is removed by ${siteName()}'s operator after this.`}
+            : `Your Matrix chat account is removed after this: ${MATRIX_RETRY_LINE}`}
         </p>
       )}
       {!check ? (
         <p role="status" className="text-muted">{error ?? "Checking…"}</p>
       ) : check.activeSubscription ? (
         <p className="text-amber-300">You have an active subscription. Cancel it first (it stops future charges), then come back here.</p>
+      ) : check.lastAdmin ? (
+        <p className="text-amber-300">You&apos;re this site&apos;s only admin. Make someone else an admin first (Admin Panel → Site → Moderators), then come back here.</p>
       ) : !check.fresh ? (
         <div className="space-y-1">
           <p className="text-amber-300">For your safety, sign in again first — deleting needs a sign-in from the last 15 minutes.</p>

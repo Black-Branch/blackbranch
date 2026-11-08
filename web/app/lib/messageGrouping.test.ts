@@ -72,14 +72,21 @@ test("the first row and every day change get a divider", () => {
 test("both panels use the shared rule and render the divider", () => {
   const tl = read("app/features/community/Timeline.tsx", /<\/div>\s*\);\s*}\s*$/);
   const tp = read("app/features/community/ThreadPanel.tsx", /<\/div>\s*\);\s*}\s*$/);
-  for (const [name, src] of [["Timeline", tl], ["ThreadPanel", tp]] as const) {
-    assert.match(src, /import \{[^}]*isContinuation[^}]*\} from "@\/app\/lib\/messageGrouping"/, `${name} imports the shared rule`);
+  // The timeline's flags come from the shared room engine (useRoomTimeline.ts, client polish
+  // Task 11), which the DM window runs on too.
+  const eng = read("app/lib/useRoomTimeline.ts", /phase,\s*};\s*}\s*$/);
+  assert.match(tl, /useRoomTimeline\(client, room, \{ showDeleted, myUserId, baseLimit \}\)/, "the timeline runs on the shared room engine (useRoomTimeline.ts, Task 11)");
+  for (const [name, src] of [["the room engine", eng], ["ThreadPanel", tp]] as const) {
+    assert.match(src, /import \{[^}]*isContinuation[^}]*\} from "(@\/app\/lib\/|\.\/)messageGrouping"/, `${name} imports the shared rule`);
     assert.doesNotMatch(src, /function isContinuation|5 \* 60 \* 1000/, `${name} carries no private copy`);
   }
-  assert.match(tl, /\{startsNewDay\(prev, ev\) && <DayDivider ts=\{ev\.getTs\(\)\} \/>\}/, "Timeline renders the divider");
+  assert.doesNotMatch(tl, /function isContinuation|5 \* 60 \* 1000/, "Timeline carries no private copy");
+  assert.match(eng, /const grouped = useMemo\(\(\) => rendered\.map\(\(ev, i\) => isContinuation\(rendered\[i - 1\], ev\)\), \[rendered\]\);/);
+  assert.match(eng, /const newDay = useMemo\(\(\) => rendered\.map\(\(ev, i\) => startsNewDay\(rendered\[i - 1\], ev\)\), \[rendered\]\);/);
+  assert.match(tl, /\{newDay\[i\] && <DayDivider ts=\{ev\.getTs\(\)\} \/>\}/, "Timeline renders the divider");
   // ⑥: grouping is computed once per render (the bubbles layout also needs each group's END).
-  assert.match(tl, /const grouped = rendered\.map\(\(ev, i\) => isContinuation\(rendered\[i - 1\], ev\) && i !== newIdx\);/, "a row under the New line shows its header");
-  assert.match(tl, /grouped=\{grouped\[i\]\}/);
+  assert.match(tl, /const headless = grouped\.map\(\(g, i\) => g && i !== newIdx\);/, "a row under the New line shows its header");
+  assert.match(tl, /grouped=\{headless\[i\]\}/);
   assert.match(tl, /\{i === newIdx && <NewMessagesLine \/>\}/);
   assert.match(tp, /\{startsNewDay\(i === 0 \? rootEvent : prev, ev\) && <DayDivider ts=\{ev\.getTs\(\)\} \/>\}/, "ThreadPanel's first reply compares to the root, not to a non-existent prev");
   assert.doesNotMatch(tp, /NewMessagesLine/, "the New line is the main timeline's");

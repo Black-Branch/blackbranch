@@ -30,6 +30,9 @@ test("label table", () => {
   assert.equal(mediaKindLabel("m.room.message", "m.text"), null);
   assert.equal(mediaKindLabel("m.room.message", undefined), null);
   assert.equal(mediaKindLabel("m.room.message", 42), null);
+  // A poll from another Matrix app: the reply quote, thread chip, pinned list and DM list say so.
+  assert.equal(mediaKindLabel("org.matrix.msc3381.poll.start", undefined), "📊 Poll");
+  assert.equal(mediaKindLabel("m.poll.start", undefined), "📊 Poll");
 });
 
 test("every preview site uses the helper and carries no literal media label", () => {

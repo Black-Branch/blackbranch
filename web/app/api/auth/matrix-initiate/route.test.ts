@@ -19,6 +19,21 @@ test("the endpoints are checked before the registration request and before the a
   assert.ok(register > check && build > check, "a request or the authorize URL comes before the check");
 });
 
+test("the client comes from the one-per-server registry: registration runs only inside it (A2-04)", () => {
+  assert.match(src, /clientId = await federatedClientId\(\{ query: \(sql, params\) => pool\.query\(sql, params\), register \}, registrationEndpoint, REDIRECT_URI\);/);
+  const reg = src.indexOf("safeFetch(registrationEndpoint");
+  const fn = src.indexOf("const register = async (): Promise<string> => {");
+  assert.ok(fn > 0 && reg > fn && reg < src.indexOf("let clientId: string;"), "the registration request lives only in the callback the registry calls");
+});
+
+test("the endpoints are discovered from the server's name, never read from the request body", () => {
+  assert.match(src, /const \{ deviceId \} = body;/);
+  assert.doesNotMatch(src, /body\.(homeserver|authorizationEndpoint|tokenEndpoint|registrationEndpoint)|\{[^}]*(tokenEndpoint|registrationEndpoint)[^}]*\} = body/);
+  assert.match(src, /const found = await discoverServer\(serverName, /);
+  assert.match(src, /const \{ authorizationEndpoint, tokenEndpoint, registrationEndpoint \} = found\.metadata;/);
+  assert.ok(src.indexOf("discoverServer(serverName") < src.indexOf("initiateEndpointsProblem("), "discovered, then still checked");
+});
+
 test("the state cookie is signed, never plain JSON", () => {
   assert.match(src, /cookieStore\.set\(FED_STATE_COOKIE, signFedState\(/);
   assert.doesNotMatch(src, /JSON\.stringify\(\{ state,/);

@@ -1,14 +1,3 @@
-export function formatMoney(cents: number, currency: string): string {
-  const v = cents / 100;
-  const cur = (currency || "usd").toLowerCase();
-  if (cur === "usd") return `$${v.toFixed(2)}`;
-  try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur.toUpperCase() }).format(v);
-  } catch {
-    return `${v.toFixed(2)} ${cur.toUpperCase()}`;
-  }
-}
-
 // "alice" / "alice and bob" / "a, b, and c" / "a, b, … and N more" (cap the list
 // so a big community gift doesn't flood the row).
 export function formatNameList(names: string[], cap = 8): string {

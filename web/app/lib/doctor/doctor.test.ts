@@ -59,7 +59,7 @@ test("the routes: the page's is admin-only, the command's needs the secret, and 
 
 test("the site's facts only read: SELECTs, GETs, and module Tests that record nothing", () => {
   const src = stripComments(read("app/lib/doctor/doctorFacts.ts"));
-  assert.match(src, /skipped: Array\.isArray\(state\?\.skipped\)[^\n]*\n {2}\};\n\}\s*$/, "vacuity: the file was read to its end");
+  assert.match(src, /skipped: openSkips\([\s\S]*?\n {4}\),\n {2}\};\n\}\s*$/, "vacuity: the file was read to its end");
   const sql = [...src.matchAll(/"(SELECT[^"]*)"|`(\s*SELECT[\s\S]*?)`/g)].map((m) => m[1] ?? m[2] ?? "");
   assert.ok(sql.length >= 4, `vacuity: ${sql.length} statements found`);
   assert.doesNotMatch(src, /\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE)\b/);

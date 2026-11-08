@@ -10,7 +10,7 @@ function fixture(): Omit<HealthReport, "v"> {
     sid: "6f9d1c2e-1111-4222-8333-944455556666", seq: 3, route: "/", dc: "mobile", narrow: true,
     dm: 4, hc: 8, et: "4g", sd: false, dpr: 3, openMs: 60_000, visMs: 50_000,
     loaf: { n: 0, blockMs: 0, worst: [] }, inp: null, cls: 0.01, req: 10, bytes: {},
-    sock: { reconnects: 0 }, player: { ...playerSnapshot(0), video: null }, decode: null, frames: { fps: 60, costMs: 0.4 },
+    sock: { reconnects: 0, opens: 0 }, player: { ...playerSnapshot(0), video: null }, decode: null, frames: { fps: 60, costMs: 0.4 },
     anim: { running: 6, idle: 38 },
     settings: { animEmotes: true, lowPower: false, reducedMotion: false, startMuted: true },
     heap: { startMb: 20, peakMb: 40 },

@@ -35,6 +35,7 @@ import pool from "../../../lib/db.ts";
 import type { createConcurrencyGate } from "../concurrencyGate.ts";
 import { entitlementOf, subscriptionSources } from "./entitlement.ts";
 import type { Entitlement, NormalStatus, Observation, Provider } from "./types.ts";
+import { realignQueuedGifts } from "./giftQueue.ts";
 
 export type TransitionInput = {
   via: "webhook" | "recheck" | "link" | "owner";
@@ -183,6 +184,10 @@ export async function writeTransition(client: PoolClient, input: TransitionInput
       [input.event.provider, input.event.id, input.event.type, input.event.occurredAt,
         observations.length === 1 ? observations[0]!.externalId : null, outcome]);
   }
+
+  // A gift queued behind this viewer's paid term moves with it, in this transaction: a gift to a
+  // paying subscriber begins when the paying stops (giftQueue.ts, A1-03).
+  if (viewer && wrote.length) await realignQueuedGifts(client, viewer, sources);
 
   // 6 (after).
   const after = viewer ? await entitlementOf(client, viewer, sources) : NONE;

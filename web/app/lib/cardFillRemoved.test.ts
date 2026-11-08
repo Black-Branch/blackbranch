@@ -1,5 +1,5 @@
 // web/app/lib/cardFillRemoved.test.ts
-// There is no card fill: the cards take the pop-ups' look. The three nudges
+// There is no card fill: the cards take the pop-ups' look. The two nudges
 // are .glass; the popout is a PAGE and takes the page background. No trace of
 // the setting may remain.
 // Run: systemd-run --user --scope -p MemoryMax=8G node --test app/lib/cardFillRemoved.test.ts
@@ -12,10 +12,10 @@ import { stripComments, stripCssComments } from "./testSource.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (rel: string) => readFileSync(path.join(here, "..", rel), "utf8");
-const NUDGES = ["components/SecureAccountPromptInner.tsx", "components/PwaInstallNudge.tsx", "components/MatrixAppsHint.tsx"];
+const NUDGES = ["components/SecureAccountPromptInner.tsx", "components/PwaInstallNudge.tsx"];
 const GONE = /--bg-surface\b|--bg-surface-2\b|bgSurface2?\b|theme_surface2?\b/;
 
-test("the three nudges are glass, with no inline fill or shadow of their own", () => {
+test("the two nudges are glass, with no inline fill or shadow of their own", () => {
   for (const f of NUDGES) {
     const src = stripComments(read(f));
     assert.match(src, /className="pointer-events-auto[^"]*\bglass\b/, `${f}: .glass`);

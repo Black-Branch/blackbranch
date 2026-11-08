@@ -16,14 +16,18 @@ import { signOut } from "next-auth/react";
 // the first-load bundle, because this provider wraps every page.
 import type { MatrixClient, SyncState, SyncStateData, MatrixError, SetPresence } from "matrix-js-sdk";
 import { clearDeviceId } from "@/app/lib/deviceId";
-import { fetchServerDeviceKeys, ownDeviceKeyState, type ServerDeviceKeys } from "@/app/lib/matrixDeviceKeys";
+import { fetchServerDeviceKeys, ownDeviceKeyState, bootKeyVerdict, readKeysOnServer, markKeysOnServer, forgetKeysOnServer, type ServerDeviceKeys } from "@/app/lib/matrixDeviceKeys";
 import { syncIgnoredBots } from "@/app/lib/ignoredBots";
-import { PHASE_CANCELLED, PHASE_DONE } from "@/app/lib/matrixVerification";
-import { installSyncCryptoDoor, refusedKeyUploadFetch } from "@/app/lib/matrixSyncCrypto";
-import { registerReadiness, readReadiness } from "./readiness";
+import { verificationSlot } from "@/app/lib/verificationKind";
+import { installSyncCryptoDoor, markTrackedDevicesStale, refusedKeyUploadFetch } from "@/app/lib/matrixSyncCrypto";
+import { registerReadiness } from "./readiness";
+import { bootWatchStart, bootWatchStep, bootWatchSay, type BootStageId } from "./matrixBootWatch";
+import { SERVER_HELD_REFRESH_TOKEN, serverTokenRefresher } from "./matrixTokenRefresh";
 import { statusToMatrix, isSelfStatus } from "./presenceState";
 import { MATRIX_READINESS_KEY, setMatrixHandle } from "./matrixHandle";
 import { runSignOutHooks } from "./plugins/session";
+import { setSyncState } from "./syncHealth";
+import { sessionEndFrom, cryptoStorePrefix, userStorePrefix } from "./matrixSessionEnd";
 
 // Module-level key store: holds the decoded recovery key briefly while 4S operations run.
 // Set via setPendingSecretStorageKey before any crypto.loadSessionBackupPrivateKeyFromSecretStorage()
@@ -119,8 +123,14 @@ type MxCtx = {
   /** Stop whatever is running, reset the start latch and start again — the
    *  control behind a failed readiness stage. */
   retry: () => void;
+  /** The pending request from your own other device (Settings › Encryption answers it). */
   pendingVerification: unknown | null;
   clearPendingVerification: () => void;
+  /** The pending request from another person (the person-to-person prompt answers it). */
+  pendingUserVerification: unknown | null;
+  clearPendingUserVerification: () => void;
+  /** Hand a request this client made (the member card's Verify) to the surface that runs it. */
+  offerVerification: (request: unknown) => void;
   // ── Identity tier (see useMatrixIdentity) ──
   matrixId: string | null;
   identityKnown: boolean;
@@ -129,6 +139,7 @@ type MxCtx = {
 const Ctx = createContext<MxCtx>({
   client: null, status: "idle", startClient: async () => {}, retry: () => {},
   pendingVerification: null, clearPendingVerification: () => {},
+  pendingUserVerification: null, clearPendingUserVerification: () => {}, offerVerification: () => {},
   matrixId: null, identityKnown: false,
 });
 
@@ -181,17 +192,6 @@ export function useStartMatrixClient(): void {
   useEffect(() => { void startClient(); }, [startClient]);
 }
 
-function sanitize(s: string): string {
-  return s.replace(/[^a-zA-Z0-9]/g, "_");
-}
-
-function cryptoStorePrefix(userId: string, deviceId: string): string {
-  // Per-(user, device): a store can never be opened under a different device
-  // identity, which corrupts the OlmMachine (browsers sharing one
-  // site.users token row once did exactly that).
-  return `mx-rust-${sanitize(userId)}-${sanitize(deviceId)}`;
-}
-
 async function deleteMatrixDatabases(filter: (name: string) => boolean): Promise<void> {
   if (typeof indexedDB === "undefined" || !indexedDB.databases) return;
   const dbs = await indexedDB.databases().catch(() => [] as IDBDatabaseInfo[]);
@@ -212,15 +212,30 @@ export async function clearAllMatrixDatabases(): Promise<void> {
   );
 }
 
-// Session revoked upstream (MAS account page, expiry, admin): local crypto
-// state is unusable — the server-side device is gone. Wipe everything and
-// sign out fully so the user gets a clean sign-in, not a half-dead session.
-let revokedHandled = false;
-async function handleRevokedSession(): Promise<void> {
-  if (revokedHandled) return;
-  revokedHandled = true;
-  console.warn("[Matrix] session revoked — clearing local state and signing out");
-  await clearAllMatrixDatabases().catch(() => {});
+let sessionEndHandled = false;
+
+// Signed out of the site, device not known to be gone (matrixSessionEnd.ts): the crypto store and
+// the device id stay, so the next sign-in resumes this device and its message keys.
+async function handleSignedOut(): Promise<void> {
+  if (sessionEndHandled) return;
+  sessionEndHandled = true;
+  console.warn("[Matrix] signed out — keeping this device's encryption store for the next sign-in");
+  runSignOutHooks();
+  await signOut({ callbackUrl: "/" }).catch(() => {});
+}
+
+// A CONFIRMED revoke: the account server says this device is gone, so its store is unusable. Wipe
+// that device's store (or, when no device is named, the account's / every Matrix store), forget the
+// device id, and sign out.
+async function handleRevokedSession(prefix: string | null): Promise<void> {
+  if (sessionEndHandled) return;
+  sessionEndHandled = true;
+  console.warn("[Matrix] session revoked — clearing this device's local state and signing out");
+  if (prefix) {
+    forgetKeysOnServer(localStorage, prefix);
+    await deleteMatrixDatabases((n) => n.startsWith(prefix)).catch(() => {});
+  }
+  else await clearAllMatrixDatabases().catch(() => {});
   clearDeviceId();
   runSignOutHooks();
   await signOut({ callbackUrl: "/" }).catch(() => {});
@@ -240,8 +255,10 @@ async function fetchFreshToken(): Promise<TokenData | null> {
       const res = await fetch("/api/matrix/token");
       if (!res.ok) {
         if (res.status === 401) {
-          const body = await res.json().catch(() => null);
-          if (body?.reason === "revoked") await handleRevokedSession();
+          const body: unknown = await res.json().catch(() => null);
+          const end = sessionEndFrom(res.status, body);
+          if (end?.kind === "wipe") await handleRevokedSession(end.prefix);
+          else if (end?.kind === "sign-out") await handleSignedOut();
         }
         return null;
       }
@@ -303,13 +320,34 @@ class CryptoStoreResetError extends Error {
   constructor() { super("CRYPTO_STORE_RESET"); }
 }
 
+/** After the first sync: are this device's keys on the server now? Then mark it, so a later boot
+ *  that finds them gone knows the device was removed (matrixDeviceKeys.ts bootKeyVerdict). The
+ *  upload follows the sync, so it is asked twice, a little apart. Best effort: the next boot's
+ *  check writes the mark as well. */
+async function markWhenKeysOnServer(mxClient: MatrixClient, userId: string, deviceId: string): Promise<void> {
+  const crypto = mxClient.getCrypto();
+  if (!crypto) return;
+  for (const wait of [2_000, 15_000]) {
+    await new Promise((r) => setTimeout(r, wait));
+    const server = await fetchServerDeviceKeys(mxClient, userId, deviceId).catch(() => undefined);
+    if (server === undefined) continue;
+    const local = await crypto.getOwnDeviceKeys().catch(() => null);
+    if (local && ownDeviceKeyState(local, server, deviceId) === "match") markKeysOnServer(localStorage, cryptoStorePrefix(userId, deviceId));
+    if (readKeysOnServer(localStorage, cryptoStorePrefix(userId, deviceId))) return;
+  }
+}
+
 async function setupCrypto(mxClient: MatrixClient, userId: string, deviceId: string): Promise<void> {
   const prefix = cryptoStorePrefix(userId, deviceId);
 
   // Janitor: remove this user's stores for OTHER device IDs — they belong to
   // sessions that no longer exist and can only cause confusion.
-  const userPrefix = `mx-rust-${sanitize(userId)}-`;
+  const userPrefix = userStorePrefix(userId);
   await deleteMatrixDatabases(n => n.startsWith(userPrefix) && !n.startsWith(prefix)).catch(() => {});
+  // Did this device's store exist before this boot? (A kept store resumes a device — see the boot
+  // key check below.)
+  const hadStore = typeof indexedDB !== "undefined" && !!indexedDB.databases
+    && (await indexedDB.databases().catch(() => [] as IDBDatabaseInfo[])).some((db) => (db.name ?? "").startsWith(prefix));
 
   try {
     await mxClient.initRustCrypto({ cryptoDatabasePrefix: prefix });
@@ -343,18 +381,25 @@ async function setupCrypto(mxClient: MatrixClient, userId: string, deviceId: str
   // moment the two copies can be compared before the first sync overwrites the
   // server's (the SDK's first /keys/upload is sync-driven;
   // matrixDeviceKeys.test.ts pins that). A mismatch is the same broken
-  // invariant as a corrupt store and takes the same exit. A failed fetch is an
-  // unanswered question, not a mismatch — log it and boot.
+  // invariant as a corrupt store and takes the same exit. So does a store that
+  // existed before this boot whose device the server holds no keys for: the
+  // device was removed while the store was kept (a sign-out the account server
+  // never confirmed), and this store would never upload its keys again
+  // (bootKeyVerdict). A failed fetch is an unanswered question, not a
+  // mismatch — log it and boot.
   let server: ServerDeviceKeys | null | undefined;
   await fetchServerDeviceKeys(mxClient, userId, deviceId)
     .then((s) => { server = s; })
     .catch((e: unknown) => { console.warn("[Matrix] own-device key check skipped:", e); });
   if (server !== undefined) {
     const local = await crypto.getOwnDeviceKeys();
-    if (ownDeviceKeyState(local, server, deviceId) === "mismatch") {
-      console.warn("[Matrix] this device's keys differ from the server's copy — the crypto store was replaced under a live device id; discarding the device, sign-in required", {
-        local: local.ed25519, server: server?.keys?.[`ed25519:${deviceId}`],
+    const state = ownDeviceKeyState(local, server, deviceId);
+    if (state === "match") markKeysOnServer(localStorage, prefix);
+    if (bootKeyVerdict({ hadStore, keysOnServer: readKeysOnServer(localStorage, prefix) }, state) === "discard") {
+      console.warn("[Matrix] this device's keys are not the server's copy (replaced, or the device is gone under a kept store); discarding the device, sign-in required", {
+        local: local.ed25519, server: server?.keys?.[`ed25519:${deviceId}`] ?? null,
       });
+      forgetKeysOnServer(localStorage, prefix);
       await deleteMatrixDatabases(n => n.startsWith(userPrefix)).catch(() => {});
       clearDeviceId();
       await fetch("/api/matrix/logout", { method: "POST" }).catch(() => {});
@@ -369,11 +414,21 @@ async function setupCrypto(mxClient: MatrixClient, userId: string, deviceId: str
 export function MatrixClientProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<MxStatus>("idle");
   const [client, setClient] = useState<MatrixClient | null>(null);
-  const [pendingVerification, setPendingVerification] = useState<unknown | null>(null);
-  const clearPendingVerification = useCallback(() => setPendingVerification(null), []);
+  // One pending verification request per kind: your own device's (Settings) and another
+  // person's (the prompt). A request of one kind never replaces a waiting one of the other.
+  const [pending, setPending] = useState<{ self: unknown | null; user: unknown | null }>({ self: null, user: null });
+  const pendingVerification = pending.self;
+  const pendingUserVerification = pending.user;
+  const clearPendingVerification = useCallback(() => setPending((p) => (p.self === null ? p : { ...p, self: null })), []);
+  const clearPendingUserVerification = useCallback(() => setPending((p) => (p.user === null ? p : { ...p, user: null })), []);
+  const routeVerification = useCallback((request: unknown, me: string) => {
+    const slot = verificationSlot(request as Parameters<typeof verificationSlot>[0], me);
+    if (slot) setPending((p) => ({ ...p, [slot]: request }));
+  }, []);
   const [matrixId, setMatrixId] = useState<string | null>(null);
   const [identityKnown, setIdentityKnown] = useState(false);
   const clientRef = useRef<MatrixClient | null>(null);
+  const offerVerification = useCallback((request: unknown) => routeVerification(request, clientRef.current?.getUserId() ?? ""), [routeVerification]);
   // The client BETWEEN `createClient()` and the moment it becomes the client.
   // In that window (crypto setup, the sync start) it already exists, already
   // owns timers and network work, and `clientRef` is still null — so `retry()`
@@ -412,33 +467,42 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
     // provider that is gone.
     const run = ++runRef.current;
     const stale = () => run !== runRef.current;
-    // ONE boot-level ceiling, armed HERE — before the first await — so it
-    // covers the WHOLE sequence: a token endpoint that never answers, an SDK
-    // chunk that never arrives or a crypto setup that hangs would otherwise
-    // leave the pane on a silently active stage forever. It marks whichever
-    // stage is still ACTIVE at 30s as failed, so the Try again control lands on
-    // the step that is actually stuck.
-    // Cleared on the first PREPARED/SYNCING (the `prepared` flip below).
-    // Deliberately NOT cleared on the early `return` paths: a returned run has
-    // no active stage — each of those paths advances its stage to "error"
-    // first, and an error stage is not an active one — so the timer finds
-    // nothing to mark and is a no-op. A run abandoned by a retry is covered by
-    // the `stale()` guard instead.
-    const bootTimer = setTimeout(() => {
-      if (stale()) return;
-      const active = readReadiness([MATRIX_READINESS_KEY]).find((s) => s.status === "active");
-      if (!active) return;
-      console.warn(`[Matrix] boot timer: "${active.id}" still running after 30s`);
-      matrixReadiness.advance(active.id, "error", "Still connecting after 30 seconds");
-    }, 30_000);
+    // The boot clock (matrixBootWatch.ts), one per stage: a slow stage gets a
+    // note with its seconds, the session check with no answer for a minute is
+    // failed (its Try again lands on the step that is stuck), and no download
+    // or sync is ever failed by time. Ticks from HERE — before the first
+    // await — so every stage is covered; it stops itself when the run goes
+    // stale and is stopped (`settle`) by the first sync or a failure that ends
+    // the run.
+    let watch = bootWatchStart();
+    let settled = false;
+    let stallLogged: BootStageId | null = null;
+    const ticker = setInterval(() => {
+      if (stale() || settled) { clearInterval(ticker); return; }
+      const stage = watch.stage;
+      if (!stage) return;
+      const say = bootWatchSay(watch, Date.now());
+      if (say.kind === "stall") {
+        if (stallLogged !== stage) { stallLogged = stage; console.warn(`[Matrix] boot: "${stage}" has no answer after a minute`); }
+        matrixReadiness.advance(stage, "error", say.text);
+      } else {
+        matrixReadiness.note(stage, say.kind === "note" ? say.text : null);
+      }
+    }, 1000);
+    const settle = () => { settled = true; clearInterval(ticker); };
+    const enter = (stage: BootStageId) => {
+      matrixReadiness.advance(stage, "active");
+      watch = bootWatchStep(watch, { type: "enter", stage, at: Date.now() });
+    };
     setStatus("loading");
     matrixReadiness.reset();
-    matrixReadiness.advance("token", "active");
+    enter("token");
 
     const tokenData = await fetchFreshToken();
     if (stale()) return;
     if (!tokenData) {
       console.warn("[Matrix] token endpoint returned no token — session likely expired");
+      settle();
       matrixReadiness.advance("token", "error", "Sign in to join the community");
       setStatus("notoken");
       startedRef.current = false;
@@ -449,6 +513,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
     const userId = await fetchMatrixId();
     if (stale()) return;
     if (!userId) {
+      settle();
       matrixReadiness.advance("token", "error", "Sign in to join the community");
       setStatus("notoken");
       startedRef.current = false;
@@ -461,6 +526,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
     const deviceId = tokenData.deviceId;
     if (!deviceId) {
       console.warn("[Matrix] session has no device ID — sign-in required");
+      settle();
       matrixReadiness.advance("token", "error", "Sign in again to continue");
       setStatus("notoken");
       startedRef.current = false;
@@ -471,7 +537,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
     // The ~46%-of-homepage-JS chunk the lazy-load verdict kept (see the file
     // header). Guarded: an import failure would otherwise throw out of startClient
     // as an unhandled rejection that no surface ever saw.
-    matrixReadiness.advance("sdk", "active");
+    enter("sdk");
     let sdk: [typeof import("matrix-js-sdk"), typeof import("matrix-js-sdk/lib/crypto-api")];
     try {
       sdk = await Promise.all([
@@ -481,13 +547,14 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       if (stale()) return;
       console.error("[Matrix] SDK failed to load", e);
+      settle();
       matrixReadiness.advance("sdk", "error", "The chat engine didn't load");
       setStatus("error");
       startedRef.current = false;
       return;
     }
     if (stale()) return;
-    const [{ createClient, ClientEvent }, { CryptoEvent }] = sdk;
+    const [{ createClient, ClientEvent, TokenRefreshLogoutError }, { CryptoEvent }] = sdk;
     matrixReadiness.advance("sdk", "done");
 
     const mxClient = createClient({
@@ -497,6 +564,16 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
       deviceId,
       timelineSupport: true,
       fetchFn: refusedKeyUploadFetch(),
+      // A refused token is renewed by the site and the request retried
+      // (matrixTokenRefresh.ts); without this the SDK stops its sync loop on
+      // the first expired or rotated token, for good.
+      refreshToken: SERVER_HELD_REFRESH_TOKEN,
+      tokenRefreshFunction: serverTokenRefresher({
+        fetchFresh: fetchFreshToken,
+        current: () => mxClient.getAccessToken(),
+        onFresh: (fresh) => { if (!stale()) scheduleRefresh(fresh.expiresAt); },
+        LogoutError: TokenRefreshLogoutError,
+      }),
       cryptoCallbacks: {
         // Called whenever the SDK needs to decrypt something from 4S (secret storage).
         // Returns the pending recovery key when one has been set by setPendingSecretStorageKey.
@@ -513,7 +590,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
     // unmount during `Preparing encryption` able to stop it.
     bootingRef.current = mxClient;
 
-    matrixReadiness.advance("crypto", "active");
+    enter("crypto");
     let cryptoOk = true;
     await setupCrypto(mxClient, userId, deviceId).catch(e => {
       // The .catch callback settles BEFORE the `await` above resumes this
@@ -523,6 +600,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
       if (stale()) return;
       if (e instanceof CryptoStoreResetError) {
         cryptoOk = false;
+        settle();
         matrixReadiness.advance("crypto", "error", "Encryption needs a fresh start — open Devices & Security");
         setStatus("notoken");
         startedRef.current = false;
@@ -541,56 +619,54 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
 
     mxClient.on(CryptoEvent.VerificationRequestReceived, (request: unknown) => {
       if (stale()) return;
-      // Filter out terminal requests replayed by sync catch-up.
-      // Only Cancelled/Done are dead. (The previous filter dropped Ready/Started,
-      // i.e. live requests, and let finished ones through — the "ghost SAS
-      // request" bug.)
-      const req = request as { phase?: number } | null;
-      if (req?.phase !== PHASE_CANCELLED && req?.phase !== PHASE_DONE) {
-        setPendingVerification(request);
-      }
+      // Terminal requests replayed by sync catch-up go nowhere (only Cancelled/Done
+      // are dead — the "ghost SAS request" bug); a live one goes to its kind's slot.
+      routeVerification(request, userId);
     });
 
     // The boot is over the moment the first PREPARED/SYNCING arrives — that,
     // and not the first Sync event of ANY state (which can be an ERROR), is
-    // what disarms the boot timer armed at the top of this run.
+    // what settles the boot clock started at the top of this run.
     let prepared = false;
 
     mxClient.on(ClientEvent.Sync, (state: SyncState, _prev: SyncState | null, data?: SyncStateData) => {
       if (stale()) return;
+      // The quiet "Reconnecting…" pill's own store, so no context consumer re-renders on a blip.
+      setSyncState(state, prepared);
+      watch = bootWatchStep(watch, { type: "sync", state });
       if (state === "PREPARED" || state === "SYNCING") {
         if (!prepared) {
           prepared = true;
-          clearTimeout(bootTimer);
+          settle();
           // Once per client start: bridged bots onto the account's ignore list
           // (see ignoredBots.ts). Best-effort — a failure is a warning, not a
           // broken boot.
           syncIgnoredBots(mxClient, () => !stale()).catch((e) => console.warn("[Matrix] ignore-list sync failed", e));
+          // The first sync uploads a new device's keys: record that they are on the server.
+          if (!readKeysOnServer(localStorage, cryptoStorePrefix(userId, deviceId))) void markWhenKeysOnServer(mxClient, userId, deviceId);
+          // Once per client start: ask again for everyone's devices, so a device someone added
+          // while this page was closed gets our room keys (matrixSyncCrypto.ts).
+          markTrackedDevicesStale(mxClient.getCrypto()).catch((e) => console.warn("[Matrix] device-list refresh failed", e));
         }
         matrixReadiness.advance("sync", "done");
         setStatus("ready");
       } else if (state === "ERROR") {
-        const isAuthError = (data?.error as MatrixError | undefined)?.errcode === "M_UNKNOWN_TOKEN";
-        console.warn("[Matrix] sync ERROR", isAuthError ? "(auth)" : "", data?.error);
-        // Before the first PREPARED this is the boot failing, and the stage
-        // says so; the SDK keeps retrying on its own, and a later SYNCING
-        // marks the stage done again. After PREPARED it is a blip the SDK
-        // rides out, and the readiness view is no longer on screen.
-        if (!prepared) matrixReadiness.advance("sync", "error", "Couldn't reach the community");
-        if (isAuthError) {
-          // fetchFreshToken handles the revoked case (full sign-out) itself.
-          fetchFreshToken().then((fresh) => {
-            if (fresh && clientRef.current) {
-              clientRef.current.setAccessToken(fresh.accessToken);
-              scheduleRefresh(fresh.expiresAt);
-              try { clientRef.current.retryImmediately(); } catch {}
-            }
-          });
+        // A network ERROR is one the SDK retries by itself: before the first
+        // sync the boot clock shows it as "still trying" on the running stage,
+        // after it the reconnect pill does. M_UNKNOWN_TOKEN is different: with
+        // the site refresher wired it reaches here only when the renewal itself
+        // ended the session, and the SDK has STOPPED this sync loop — nothing
+        // will retry it, so before the first sync the stage fails with Try again.
+        const sessionEnded = (data?.error as MatrixError | undefined)?.errcode === "M_UNKNOWN_TOKEN";
+        console.warn("[Matrix] sync ERROR", sessionEnded ? "(session not renewed)" : "", data?.error);
+        if (sessionEnded && !prepared) {
+          settle();
+          matrixReadiness.advance("sync", "error", "Couldn't renew your session");
         }
       }
     });
 
-    matrixReadiness.advance("sync", "active");
+    enter("sync");
     try {
       await mxClient.startClient({ initialSyncLimit: 30, lazyLoadMembers: true, pollTimeout: 15000 });
     } catch (e) {
@@ -603,6 +679,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
       // be alive under this thrown startClient() call — an implicit remount
       // restart here would risk a second client racing the first.
       console.error("[Matrix] startClient failed", e);
+      settle();
       matrixReadiness.advance("sync", "error", "Couldn't reach the community");
       setStatus("error");
       return;
@@ -623,9 +700,9 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
     // matrixSyncPresence.test.ts pins both SDK facts.
     const stored = tokenData.presenceStatus;
     await mxClient.setSyncPresence(statusToMatrix(isSelfStatus(stored) ? stored : "online", "").presence as SetPresence);
-    // Nothing follows: the sync stage is left ACTIVE on purpose, and the boot
-    // timer armed at the top of this run is what bounds it.
-  }, [scheduleRefresh]);
+    // Nothing follows: the sync stage is left ACTIVE on purpose until the
+    // first sync arrives; the boot clock says how long it has been running.
+  }, [scheduleRefresh, routeVerification]);
 
   // The control behind a failed stage. Stops whatever client the abandoned run
   // left running — BOTH the settled one and a client still mid-boot, which are
@@ -635,7 +712,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
   // whole sequence again; `startClient` resets the stages itself.
   // Stopping the CLIENT and making the abandoned RUN inert are two separate
   // jobs: the old run's closure keeps going (its awaits may still resolve, its
-  // boot timer is still armed), and startClient's generation bump is what makes
+  // boot clock still ticks until it sees it is stale), and startClient's generation bump is what makes
   // it harmless — every `stale()` check downstream of an await sees the new
   // run's id and quietly stops touching clientRef/status/the registry.
   const retry = useCallback(() => {
@@ -689,7 +766,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
   // they are stopped here: the token-refresh timer, the settled client, and a
   // run still between createClient() and clientRef. The generation bump is the
   // fourth — it makes an IN-FLIGHT run stale, so its continuations cannot set
-  // clientRef/setClient or leave a boot timer armed against a provider that is
+  // clientRef/setClient or keep a boot clock ticking against a provider that is
   // gone (the same mechanism retry() leans on, for the same reason).
   // Reopening `startedRef` is not optional once the generation is bumped: a
   // teardown that invalidates the running boot but leaves the latch shut means
@@ -729,6 +806,7 @@ export function MatrixClientProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={{
       client, status, startClient, retry, pendingVerification, clearPendingVerification,
+      pendingUserVerification, clearPendingUserVerification, offerVerification,
       matrixId, identityKnown,
     }}>
       {children}

@@ -3,8 +3,9 @@
 // quoted from f9740396) and the one the webhook uses now over the SAME recorded sequence of Stripe
 // events, on a real database, and requiring deep-equal:
 //   - the legacy row (site.subscriptions) after every event — what every unmoved reader reads;
-//   - what the reconciler returns — the webhook route builds its badge call and its "subscribed"
-//     card from that and from nothing else (route.ts syncSubscription, unchanged by S1);
+//   - what the reconciler returns — the webhook route builds its badge call from that and from
+//     nothing else (route.ts syncSubscription, unchanged by S1); the "subscribed" card comes from
+//     the paid invoice (route.ts recordPaidInvoice), whatever the reconciler wrote;
 //   - so the badge decision and each card's spendId, derived below by the route's own rule. The
 //     refund path finds a subscription's ledger credit by recomputing exactly these spendIds
 //     (paymentReversalsLedger.ts: `sub:<subscription id>`, `renewal:<invoice id>`), so a moved
@@ -126,7 +127,7 @@ test("the reconciler before S1 and after it: same legacy rows, same returns, sam
     for (const step of steps) {
       for (const s of step.set ?? []) current.set(s.id, toStripe(s, who));
       if (step.deliver === "renewal") {
-        // recordRenewal: resolve the viewer, then the card — spendId from the invoice id.
+        // recordPaidInvoice (a renewal): resolve the viewer, then the card — spendId from the invoice id.
         const sub = current.get(step.subId)!;
         const viewer = await sync.resolveMatrixId(sub, sub.customer as string);
         out.push({ step: step.label, viewer, card: viewer ? `renewal:${step.invoiceId}` : null });
@@ -136,7 +137,10 @@ test("the reconciler before S1 and after it: same legacy rows, same returns, sam
       const wrote = await sync.syncSubscription({ id: step.subId }, step.eventAt);
       // The webhook route's effects, by its own rule (route.ts syncSubscription, unchanged in S1).
       const badge = wrote ? isActiveStatus(wrote.sub.status) && Boolean(wrote.effectiveTier && TIERS[wrote.effectiveTier as "supporter"].perks.badge) : null;
-      const card = wrote && announceFrom && isActiveStatus(announceFrom.status) ? `sub:${announceFrom.id}` : null;
+      // Month one's card comes from the subscription's first paid invoice (route.ts recordPaidInvoice,
+      // spendId `sub:<subscription id>`), not from what the reconciler wrote: modelled at the step
+      // where the subscription is created, independent of `wrote`.
+      const card = announceFrom && isActiveStatus(announceFrom.status) ? `sub:${announceFrom.id}` : null;
       const legacy = (await pool.query(
         `SELECT stripe_customer_id, stripe_sub_id, tier, status, current_period_end, cancel_at_period_end, stripe_event_at
            FROM site.subscriptions WHERE matrix_id = $1`, [who])).rows[0];

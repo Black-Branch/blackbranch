@@ -97,9 +97,14 @@ export function getCurrentStream() {
 }
 
 // ── Viewer poller + stream lifecycle ─────────────────────────────────────────
-/** Open a session. body: { streamId } */
-export function postStreamStart(streamId) {
-  return req('POST', '/stream/start', { streamId });
+/**
+ * Open a session. body: { streamId }, plus `resume: true` to reopen a session the poller ended
+ * within RESUME_GRACE_MS (409 when stream-api will not).
+ * @param {string} streamId
+ * @param {{ resume?: boolean }} [o]
+ */
+export function postStreamStart(streamId, { resume = false } = {}) {
+  return req('POST', '/stream/start', resume ? { streamId, resume: true } : { streamId });
 }
 /** Close a session. body: { streamId } */
 export function postStreamEnd(streamId) {
@@ -108,6 +113,13 @@ export function postStreamEnd(streamId) {
 /** Record a viewer heartbeat. body: { streamId, twitch, youtube, kick, streamplace } */
 export function postViewerSnapshot(payload) {
   return req('POST', '/viewer-snapshot', payload);
+}
+/**
+ * Every platform's state as of this tick, for the site (stream-api platform-states.js keeps the
+ * public cut of it). body: { at, nextInMs, platforms }. A full snapshot each time: the last wins.
+ */
+export function postPlatformStates(body) {
+  return req('POST', '/stream/platforms', body, { timeoutMs: 4000 });
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

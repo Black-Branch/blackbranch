@@ -1,0 +1,1110 @@
+{
+ "_about": "A neutral copy of the Discord server community plan spike 0.3 read (vault briefs/community-1023/spikes.md §0.3): its 14 channels, 36 roles and 91 emoji in Discord's own REST shapes, names and ids made neutral. install/ooye/discord-read.js reads it from a stand-in Discord in the tests.",
+ "me": {
+  "id": "100000000000000900",
+  "username": "Example Bridge",
+  "bot": true
+ },
+ "application": {
+  "id": "100000000000000900",
+  "name": "Example Bridge",
+  "flags": 565248
+ },
+ "guilds": [
+  {
+   "id": "100000000000000101",
+   "name": "Example Stream"
+  },
+  {
+   "id": "100000000000000102",
+   "name": "Test Server"
+  }
+ ],
+ "guild": {
+  "id": "100000000000000101",
+  "name": "Example Stream",
+  "premium_tier": 2,
+  "approximate_member_count": 661
+ },
+ "channels": [
+  {
+   "id": "100000000000000348",
+   "type": 0,
+   "guild_id": "100000000000000101",
+   "name": "rules",
+   "position": 0,
+   "parent_id": null,
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "2048"
+    }
+   ],
+   "topic": "Read first."
+  },
+  {
+   "id": "100000000000000345",
+   "type": 4,
+   "guild_id": "100000000000000101",
+   "name": "Stream",
+   "position": 1,
+   "parent_id": null,
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "1048576"
+    }
+   ]
+  },
+  {
+   "id": "100000000000000349",
+   "type": 5,
+   "guild_id": "100000000000000101",
+   "name": "alerts",
+   "position": 0,
+   "parent_id": "100000000000000345",
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "1048576"
+    }
+   ]
+  },
+  {
+   "id": "100000000000000350",
+   "type": 15,
+   "guild_id": "100000000000000101",
+   "name": "content-suggestions",
+   "position": 1,
+   "parent_id": "100000000000000345",
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "1048576"
+    }
+   ]
+  },
+  {
+   "id": "100000000000000351",
+   "type": 2,
+   "guild_id": "100000000000000101",
+   "name": "waiting-room",
+   "position": 2,
+   "parent_id": "100000000000000345",
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "1048576"
+    }
+   ]
+  },
+  {
+   "id": "100000000000000352",
+   "type": 2,
+   "guild_id": "100000000000000101",
+   "name": "VC",
+   "position": 3,
+   "parent_id": "100000000000000345",
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "1048576"
+    }
+   ]
+  },
+  {
+   "id": "100000000000000346",
+   "type": 4,
+   "guild_id": "100000000000000101",
+   "name": "Social",
+   "position": 2,
+   "parent_id": null,
+   "permission_overwrites": []
+  },
+  {
+   "id": "100000000000000353",
+   "type": 0,
+   "guild_id": "100000000000000101",
+   "name": "general",
+   "position": 0,
+   "parent_id": "100000000000000346",
+   "permission_overwrites": [],
+   "topic": "Anything goes."
+  },
+  {
+   "id": "100000000000000354",
+   "type": 0,
+   "guild_id": "100000000000000101",
+   "name": "politics",
+   "position": 1,
+   "parent_id": "100000000000000346",
+   "permission_overwrites": []
+  },
+  {
+   "id": "100000000000000355",
+   "type": 0,
+   "guild_id": "100000000000000101",
+   "name": "tech",
+   "position": 2,
+   "parent_id": "100000000000000346",
+   "permission_overwrites": []
+  },
+  {
+   "id": "100000000000000356",
+   "type": 2,
+   "guild_id": "100000000000000101",
+   "name": "general",
+   "position": 3,
+   "parent_id": "100000000000000346",
+   "permission_overwrites": []
+  },
+  {
+   "id": "100000000000000347",
+   "type": 4,
+   "guild_id": "100000000000000101",
+   "name": "🔒 - 𝓜𝓸𝓭 𝓛𝓸𝓭𝓰𝓮",
+   "position": 3,
+   "parent_id": null,
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "1024"
+    },
+    {
+     "id": "100000000000000303",
+     "type": 0,
+     "allow": "1049600",
+     "deny": "0"
+    }
+   ]
+  },
+  {
+   "id": "100000000000000357",
+   "type": 0,
+   "guild_id": "100000000000000101",
+   "name": "𝓶𝓸𝓭-𝓰𝓮𝓷𝓮𝓻𝓪𝓵",
+   "position": 0,
+   "parent_id": "100000000000000347",
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "1024"
+    },
+    {
+     "id": "100000000000000303",
+     "type": 0,
+     "allow": "1024",
+     "deny": "0"
+    }
+   ]
+  },
+  {
+   "id": "100000000000000358",
+   "type": 0,
+   "guild_id": "100000000000000101",
+   "name": "mods",
+   "position": 1,
+   "parent_id": "100000000000000347",
+   "permission_overwrites": [
+    {
+     "id": "100000000000000101",
+     "type": 0,
+     "allow": "0",
+     "deny": "1024"
+    },
+    {
+     "id": "100000000000000303",
+     "type": 0,
+     "allow": "1049600",
+     "deny": "0"
+    }
+   ]
+  }
+ ],
+ "roles": [
+  {
+   "id": "100000000000000300",
+   "name": "Admin",
+   "color": 0,
+   "hoist": false,
+   "position": 40,
+   "permissions": "8",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000302",
+   "name": "Guard",
+   "color": 0,
+   "hoist": false,
+   "position": 39,
+   "permissions": "8",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "bot_id": "100000000000000301"
+   }
+  },
+  {
+   "id": "100000000000000303",
+   "name": "Mod",
+   "color": 0,
+   "hoist": false,
+   "position": 38,
+   "permissions": "1099780071446",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000305",
+   "name": "Helper",
+   "color": 0,
+   "hoist": false,
+   "position": 37,
+   "permissions": "3072",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "bot_id": "100000000000000304"
+   }
+  },
+  {
+   "id": "100000000000000306",
+   "name": "Bot",
+   "color": 0,
+   "hoist": false,
+   "position": 36,
+   "permissions": "11264",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000307",
+   "name": "Server Booster",
+   "color": 0,
+   "hoist": false,
+   "position": 35,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "premium_subscriber": null
+   }
+  },
+  {
+   "id": "100000000000000310",
+   "name": "Twitch Subscriber",
+   "color": 0,
+   "hoist": false,
+   "position": 34,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "integration_id": "100000000000000308"
+   }
+  },
+  {
+   "id": "100000000000000311",
+   "name": "Twitch Subscriber: Tier 1",
+   "color": 0,
+   "hoist": false,
+   "position": 33,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "integration_id": "100000000000000308"
+   }
+  },
+  {
+   "id": "100000000000000312",
+   "name": "Twitch Subscriber: Tier 2",
+   "color": 0,
+   "hoist": false,
+   "position": 32,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "integration_id": "100000000000000308"
+   }
+  },
+  {
+   "id": "100000000000000313",
+   "name": "Twitch Subscriber: Tier 3",
+   "color": 0,
+   "hoist": false,
+   "position": 31,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "integration_id": "100000000000000308"
+   }
+  },
+  {
+   "id": "100000000000000314",
+   "name": "YouTube Member",
+   "color": 0,
+   "hoist": false,
+   "position": 30,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "integration_id": "100000000000000309"
+   }
+  },
+  {
+   "id": "100000000000000315",
+   "name": "YouTube Member: Level 1",
+   "color": 0,
+   "hoist": false,
+   "position": 29,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "integration_id": "100000000000000309"
+   }
+  },
+  {
+   "id": "100000000000000316",
+   "name": "YouTube Member: Level 2",
+   "color": 0,
+   "hoist": false,
+   "position": 28,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "integration_id": "100000000000000309"
+   }
+  },
+  {
+   "id": "100000000000000317",
+   "name": "YouTube Member: Level 3",
+   "color": 0,
+   "hoist": false,
+   "position": 27,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "integration_id": "100000000000000309"
+   }
+  },
+  {
+   "id": "100000000000000318",
+   "name": "Patreon: T1",
+   "color": 0,
+   "hoist": false,
+   "position": 26,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000319",
+   "name": "Patreon: T2",
+   "color": 0,
+   "hoist": false,
+   "position": 25,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000320",
+   "name": "Patreon: T3",
+   "color": 0,
+   "hoist": false,
+   "position": 24,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000321",
+   "name": "Patreon: T4",
+   "color": 0,
+   "hoist": false,
+   "position": 23,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000322",
+   "name": "Patreon: T5",
+   "color": 0,
+   "hoist": false,
+   "position": 22,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000323",
+   "name": "Patron",
+   "color": 0,
+   "hoist": false,
+   "position": 21,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000324",
+   "name": "Ko-Fi: Member",
+   "color": 0,
+   "hoist": false,
+   "position": 20,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000325",
+   "name": "Ko-Fi: Supporter",
+   "color": 0,
+   "hoist": false,
+   "position": 19,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000326",
+   "name": "VIP",
+   "color": 0,
+   "hoist": false,
+   "position": 18,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000327",
+   "name": "VIP",
+   "color": 0,
+   "hoist": false,
+   "position": 17,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000329",
+   "name": "Ko-fi Bot",
+   "color": 0,
+   "hoist": false,
+   "position": 16,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "bot_id": "100000000000000328"
+   }
+  },
+  {
+   "id": "100000000000000331",
+   "name": "Patreon Bot",
+   "color": 0,
+   "hoist": false,
+   "position": 15,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "bot_id": "100000000000000330"
+   }
+  },
+  {
+   "id": "100000000000000333",
+   "name": "Threads",
+   "color": 0,
+   "hoist": false,
+   "position": 14,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "bot_id": "100000000000000332"
+   }
+  },
+  {
+   "id": "100000000000000335",
+   "name": "Craft",
+   "color": 0,
+   "hoist": false,
+   "position": 13,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "bot_id": "100000000000000334"
+   }
+  },
+  {
+   "id": "100000000000000337",
+   "name": "Autodelete",
+   "color": 0,
+   "hoist": false,
+   "position": 12,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "bot_id": "100000000000000336"
+   }
+  },
+  {
+   "id": "100000000000000339",
+   "name": "Embeds",
+   "color": 0,
+   "hoist": false,
+   "position": 11,
+   "permissions": "0",
+   "managed": true,
+   "mentionable": false,
+   "tags": {
+    "bot_id": "100000000000000338"
+   }
+  },
+  {
+   "id": "100000000000000340",
+   "name": "Regular",
+   "color": 0,
+   "hoist": false,
+   "position": 10,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000341",
+   "name": "Dev",
+   "color": 0,
+   "hoist": false,
+   "position": 9,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000342",
+   "name": "Miner",
+   "color": 0,
+   "hoist": false,
+   "position": 8,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000343",
+   "name": "Suggestions Curator",
+   "color": 0,
+   "hoist": false,
+   "position": 7,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000344",
+   "name": "Lurker",
+   "color": 0,
+   "hoist": false,
+   "position": 6,
+   "permissions": "0",
+   "managed": false,
+   "mentionable": false
+  },
+  {
+   "id": "100000000000000101",
+   "name": "@everyone",
+   "color": 0,
+   "hoist": false,
+   "position": 0,
+   "permissions": "2217856065",
+   "managed": false,
+   "mentionable": false
+  }
+ ],
+ "emojis": [
+  {
+   "id": "100000000000000359",
+   "name": "e0",
+   "animated": false
+  },
+  {
+   "id": "100000000000000360",
+   "name": "e1",
+   "animated": false
+  },
+  {
+   "id": "100000000000000361",
+   "name": "e2",
+   "animated": false
+  },
+  {
+   "id": "100000000000000362",
+   "name": "e3",
+   "animated": false
+  },
+  {
+   "id": "100000000000000363",
+   "name": "e4",
+   "animated": false
+  },
+  {
+   "id": "100000000000000364",
+   "name": "e5",
+   "animated": false
+  },
+  {
+   "id": "100000000000000365",
+   "name": "e6",
+   "animated": false
+  },
+  {
+   "id": "100000000000000366",
+   "name": "e7",
+   "animated": false
+  },
+  {
+   "id": "100000000000000367",
+   "name": "e8",
+   "animated": false
+  },
+  {
+   "id": "100000000000000368",
+   "name": "e9",
+   "animated": false
+  },
+  {
+   "id": "100000000000000369",
+   "name": "e10",
+   "animated": false
+  },
+  {
+   "id": "100000000000000370",
+   "name": "e11",
+   "animated": false
+  },
+  {
+   "id": "100000000000000371",
+   "name": "e12",
+   "animated": false
+  },
+  {
+   "id": "100000000000000372",
+   "name": "e13",
+   "animated": false
+  },
+  {
+   "id": "100000000000000373",
+   "name": "e14",
+   "animated": false
+  },
+  {
+   "id": "100000000000000374",
+   "name": "e15",
+   "animated": false
+  },
+  {
+   "id": "100000000000000375",
+   "name": "e16",
+   "animated": false
+  },
+  {
+   "id": "100000000000000376",
+   "name": "e17",
+   "animated": false
+  },
+  {
+   "id": "100000000000000377",
+   "name": "e18",
+   "animated": false
+  },
+  {
+   "id": "100000000000000378",
+   "name": "e19",
+   "animated": false
+  },
+  {
+   "id": "100000000000000379",
+   "name": "e20",
+   "animated": false
+  },
+  {
+   "id": "100000000000000380",
+   "name": "e21",
+   "animated": false
+  },
+  {
+   "id": "100000000000000381",
+   "name": "e22",
+   "animated": false
+  },
+  {
+   "id": "100000000000000382",
+   "name": "e23",
+   "animated": false
+  },
+  {
+   "id": "100000000000000383",
+   "name": "e24",
+   "animated": false
+  },
+  {
+   "id": "100000000000000384",
+   "name": "e25",
+   "animated": false
+  },
+  {
+   "id": "100000000000000385",
+   "name": "e26",
+   "animated": false
+  },
+  {
+   "id": "100000000000000386",
+   "name": "e27",
+   "animated": false
+  },
+  {
+   "id": "100000000000000387",
+   "name": "e28",
+   "animated": false
+  },
+  {
+   "id": "100000000000000388",
+   "name": "e29",
+   "animated": false
+  },
+  {
+   "id": "100000000000000389",
+   "name": "e30",
+   "animated": false
+  },
+  {
+   "id": "100000000000000390",
+   "name": "e31",
+   "animated": false
+  },
+  {
+   "id": "100000000000000391",
+   "name": "e32",
+   "animated": false
+  },
+  {
+   "id": "100000000000000392",
+   "name": "e33",
+   "animated": false
+  },
+  {
+   "id": "100000000000000393",
+   "name": "e34",
+   "animated": false
+  },
+  {
+   "id": "100000000000000394",
+   "name": "e35",
+   "animated": false
+  },
+  {
+   "id": "100000000000000395",
+   "name": "e36",
+   "animated": false
+  },
+  {
+   "id": "100000000000000396",
+   "name": "e37",
+   "animated": false
+  },
+  {
+   "id": "100000000000000397",
+   "name": "e38",
+   "animated": false
+  },
+  {
+   "id": "100000000000000398",
+   "name": "e39",
+   "animated": false
+  },
+  {
+   "id": "100000000000000399",
+   "name": "e40",
+   "animated": false
+  },
+  {
+   "id": "100000000000000400",
+   "name": "e41",
+   "animated": false
+  },
+  {
+   "id": "100000000000000401",
+   "name": "e42",
+   "animated": false
+  },
+  {
+   "id": "100000000000000402",
+   "name": "e43",
+   "animated": false
+  },
+  {
+   "id": "100000000000000403",
+   "name": "e44",
+   "animated": false
+  },
+  {
+   "id": "100000000000000404",
+   "name": "e45",
+   "animated": false
+  },
+  {
+   "id": "100000000000000405",
+   "name": "e46",
+   "animated": false
+  },
+  {
+   "id": "100000000000000406",
+   "name": "e47",
+   "animated": false
+  },
+  {
+   "id": "100000000000000407",
+   "name": "e48",
+   "animated": false
+  },
+  {
+   "id": "100000000000000408",
+   "name": "e49",
+   "animated": false
+  },
+  {
+   "id": "100000000000000409",
+   "name": "e50",
+   "animated": false
+  },
+  {
+   "id": "100000000000000410",
+   "name": "e51",
+   "animated": false
+  },
+  {
+   "id": "100000000000000411",
+   "name": "e52",
+   "animated": false
+  },
+  {
+   "id": "100000000000000412",
+   "name": "e53",
+   "animated": false
+  },
+  {
+   "id": "100000000000000413",
+   "name": "e54",
+   "animated": false
+  },
+  {
+   "id": "100000000000000414",
+   "name": "e55",
+   "animated": false
+  },
+  {
+   "id": "100000000000000415",
+   "name": "e56",
+   "animated": false
+  },
+  {
+   "id": "100000000000000416",
+   "name": "e57",
+   "animated": false
+  },
+  {
+   "id": "100000000000000417",
+   "name": "e58",
+   "animated": false
+  },
+  {
+   "id": "100000000000000418",
+   "name": "a0",
+   "animated": true
+  },
+  {
+   "id": "100000000000000419",
+   "name": "a1",
+   "animated": true
+  },
+  {
+   "id": "100000000000000420",
+   "name": "a2",
+   "animated": true
+  },
+  {
+   "id": "100000000000000421",
+   "name": "a3",
+   "animated": true
+  },
+  {
+   "id": "100000000000000422",
+   "name": "a4",
+   "animated": true
+  },
+  {
+   "id": "100000000000000423",
+   "name": "a5",
+   "animated": true
+  },
+  {
+   "id": "100000000000000424",
+   "name": "a6",
+   "animated": true
+  },
+  {
+   "id": "100000000000000425",
+   "name": "a7",
+   "animated": true
+  },
+  {
+   "id": "100000000000000426",
+   "name": "a8",
+   "animated": true
+  },
+  {
+   "id": "100000000000000427",
+   "name": "a9",
+   "animated": true
+  },
+  {
+   "id": "100000000000000428",
+   "name": "a10",
+   "animated": true
+  },
+  {
+   "id": "100000000000000429",
+   "name": "a11",
+   "animated": true
+  },
+  {
+   "id": "100000000000000430",
+   "name": "a12",
+   "animated": true
+  },
+  {
+   "id": "100000000000000431",
+   "name": "a13",
+   "animated": true
+  },
+  {
+   "id": "100000000000000432",
+   "name": "a14",
+   "animated": true
+  },
+  {
+   "id": "100000000000000433",
+   "name": "a15",
+   "animated": true
+  },
+  {
+   "id": "100000000000000434",
+   "name": "a16",
+   "animated": true
+  },
+  {
+   "id": "100000000000000435",
+   "name": "a17",
+   "animated": true
+  },
+  {
+   "id": "100000000000000436",
+   "name": "a18",
+   "animated": true
+  },
+  {
+   "id": "100000000000000437",
+   "name": "a19",
+   "animated": true
+  },
+  {
+   "id": "100000000000000438",
+   "name": "a20",
+   "animated": true
+  },
+  {
+   "id": "100000000000000439",
+   "name": "a21",
+   "animated": true
+  },
+  {
+   "id": "100000000000000440",
+   "name": "a22",
+   "animated": true
+  },
+  {
+   "id": "100000000000000441",
+   "name": "a23",
+   "animated": true
+  },
+  {
+   "id": "100000000000000442",
+   "name": "a24",
+   "animated": true
+  },
+  {
+   "id": "100000000000000443",
+   "name": "a25",
+   "animated": true
+  },
+  {
+   "id": "100000000000000444",
+   "name": "a26",
+   "animated": true
+  },
+  {
+   "id": "100000000000000445",
+   "name": "a27",
+   "animated": true
+  },
+  {
+   "id": "100000000000000446",
+   "name": "a28",
+   "animated": true
+  },
+  {
+   "id": "100000000000000447",
+   "name": "a29",
+   "animated": true
+  },
+  {
+   "id": "100000000000000448",
+   "name": "a30",
+   "animated": true
+  },
+  {
+   "id": "100000000000000449",
+   "name": "a31",
+   "animated": true
+  }
+ ]
+}

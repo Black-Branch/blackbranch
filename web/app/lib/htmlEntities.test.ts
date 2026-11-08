@@ -23,7 +23,7 @@ test("anything else is left as written", () => {
 test("the YouTube title and the link-preview scrape both decode through it", () => {
   // Each file's own last line anchors the read, so the negative check cannot pass over a short one.
   for (const [f, tail] of [
-    ["./streamStatus.ts", /export const getStreamStatus = [^\n]*\n\s*$/],
+    ["./communityLive.ts", /return community\.snapshot\(\);\n\}\s*$/],
     ["../api/og/route.ts", /return Response\.json\(null\);\n  \}\n\}\s*$/],
   ] as const) {
     const src = readFileSync(new URL(f, import.meta.url), "utf8");

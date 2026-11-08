@@ -121,30 +121,32 @@ export function velocity(samples: readonly Sample[]): number {
   return dt > 0 ? (last.y - first.y) / dt : 0;
 }
 
-/** A TOP panel's full size: the visible pane minus the
- *  strip kept clear for the newest messages — chrome.css's `--top-room`,
- *  clamp(96px, 30% of the visible pane, 240px), in px for the gesture.
- *  windowFromTop.render.test.ts pins the CSS spelling of the same numbers. */
-export function topCap(layerH: number, ceiling: number, full = false): number {
-  const visible = layerH - ceiling;
-  // `full`: the panel is FILLED (Window `fill`, the chat TUI) — the whole pane, no strip
-  // ("slide all the way down and replace the typing bar").
-  if (full) return visible;
-  return visible - Math.min(240, Math.max(96, visible * 0.3));
+/** A TOP panel's release and cancel (usePanelPull.ts) — THE SAME rule as a
+ *  bottom panel's, asked in the terms a top panel has. A top panel is SIZED by
+ *  its handle (its band would leave through the layer's top edge if it were
+ *  translated), so it knows how much of it shows (`v`, 0 = shut, `capH` = the
+ *  whole visible pane), its own content-fit size (`fitV`; a task passes `capH`
+ *  — its only detent is the full pane, everything under it is a position) and
+ *  the release speed TOWARD OPEN (`vOpen`, px/ms; for a top panel that is
+ *  down). The bottom panel's scalar is how far its box sits below the cap, and
+ *  its positive speed is toward closed, so the direction is turned around
+ *  ONCE, here: y = capH − v, vy = −vOpen. #234 (k): "slide down pages don't
+ *  act like slide up pages" — before this the top panel had a rule of its own
+ *  (16px snap zones, a flick up closing only from under half its start, a
+ *  travel that stopped at the clear strip).
+ *  slideBothWays.render.test.ts runs the two side by side over a grid. */
+export type SizeRest = { kind: "dismiss" } | { kind: "fit" } | { kind: "cap" } | { kind: "free"; v: number };
+
+function bySize(r: Release, capH: number): SizeRest {
+  if (r.kind === "dismiss") return r;
+  if (r.kind === "free") return { kind: "free", v: capH - r.y };
+  return r.y === 0 ? { kind: "cap" } : { kind: "fit" };
 }
 
-/** Where a released TOP panel goes (usePanelPull.ts). The drag SIZES the box —
- *  its bottom edge follows the finger — so a release stays where it was let go
- *  (it never springs back or closes on its own), except: within
- *  16px of its own content size it snaps to that, within 16px of the full size
- *  (or on a flick down) to the full size, and it closes only when pushed almost
- *  shut (under MIN_VISIBLE_PX) or flicked up hard from under half its start. */
-export type TopRest = { kind: "dismiss" } | { kind: "fit" } | { kind: "cap" } | { kind: "free"; h: number };
-export function topRelease({ h, h0, fitH, capH, vy }: { h: number; h0: number; fitH: number; capH: number; vy: number }): TopRest {
-  if (h < MIN_VISIBLE_PX) return { kind: "dismiss" };
-  if (vy < -FLICK_VY && h < h0 * 0.5) return { kind: "dismiss" };
-  if (vy > FLICK_VY) return { kind: "cap" };
-  if (capH - h <= 16) return { kind: "cap" };
-  if (Math.abs(h - fitH) <= 16) return { kind: "fit" };
-  return { kind: "free", h };
+export function releaseBySize(v: number, vOpen: number, fitV: number, capH: number): SizeRest {
+  return bySize(releaseTarget(capH - v, -vOpen, Math.max(0, capH - Math.min(fitV, capH)), capH), capH);
+}
+
+export function cancelBySize(v: number, fitV: number, capH: number): SizeRest {
+  return bySize(cancelTarget(capH - v, Math.max(0, capH - Math.min(fitV, capH)), capH), capH);
 }

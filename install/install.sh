@@ -110,6 +110,18 @@ case "$UPDATE_CHANNEL_ARG" in ""|stable|beta) ;; *) die "--update-channel must b
 # fetches, installs or changes anything.
 ENV_FILE="$BB_HOME/.env"
 env_get() { local l; l=$(grep -m1 -E "^$1=" "$ENV_FILE" 2>/dev/null || true); l="${l#*=}"; l="${l#\"}"; printf '%s' "${l%\"}"; }
+# Where to ask when stuck (the summary's last line): read from the release's doctor list, which holds
+# the project's one copy of the addresses (config/doctor.mjs, HELP_*). An older release: no line.
+help_line() {
+  local f="$BB_HOME/release/config/doctor.mjs" docs discord report
+  docs=$(sed -n "s/^  const HELP_DOCS = '\([^']*\)';\$/\1/p" "$f" 2>/dev/null || true)
+  discord=$(sed -n "s/^  const HELP_DISCORD = '\([^']*\)';\$/\1/p" "$f" 2>/dev/null || true)
+  report=$(sed -n "s/^  const HELP_REPORT = '\([^']*\)';\$/\1/p" "$f" 2>/dev/null || true)
+  if [ -n "$docs" ] && [ -n "$discord" ] && [ -n "$report" ]; then
+    printf '   Need help? Guides: %s · Ask: %s · Attach the report from %s\n' "$docs" "$discord" "$report"
+  fi
+  return 0
+}
 ver_lt() { # ver_lt A B — is release A older than release B? (core by number; a pre-release first)
   local a="${1%%-*}" b="${2%%-*}"
   if [ "$a" != "$b" ]; then [ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)" = "$a" ]; return; fi
@@ -454,6 +466,10 @@ if [ ! -f "$ENV_FILE" ]; then
   secret SYNAPSE_MACAROON_SECRET 32
   secret SYNAPSE_FORM_SECRET 32
   secret BACKUP_PASSPHRASE 24
+  secret COMMUNITY_AS_TOKEN 32
+  secret COMMUNITY_HS_TOKEN 32
+  secret OOYE_AS_TOKEN 32
+  secret OOYE_HS_TOKEN 32
   client_id=$(ulid)
   [[ "$client_id" =~ ^[0-9A-Z]{26}$ ]] || die "could not generate the sign-in client's id — nothing was written"
   tmp=$(mktemp "$BB_HOME/.env.XXXXXX"); chmod 600 "$tmp"
@@ -493,6 +509,8 @@ MATRIX_SERVER_NAME=$DOMAIN
 MATRIX_HOMESERVER_URL=https://matrix.$DOMAIN
 MATRIX_OAUTH_ISSUER=https://matrix.$DOMAIN/auth/
 MATRIX_OAUTH_CLIENT_ID=$client_id
+# The account this install uses to run the community (an app service: no sign-up, its name reserved).
+COMMUNITY_LOCALPART=blackbranch
 
 # ── Display values (read by the site when it starts; \`blackbranch set <KEY> <value>\`) ──
 SITE_NAME=$(q "$site_name")
@@ -512,6 +530,8 @@ CURRENCY_SYMBOL=
 CURRENCY_ICON=
 COMMUNITY_SCORE_NAME=
 YOUTUBE_VOD_PLAYLIST=none
+# The server keeps the community's rooms as the Admin Panel sets them.
+COMMUNITY_RECONCILER=true
 
 # ── Secrets (random; never printed) ──
 POSTGRES_PASSWORD=$SECRET_POSTGRES_PASSWORD
@@ -529,6 +549,20 @@ SYNAPSE_REGISTRATION_SECRET=$SECRET_SYNAPSE_REGISTRATION_SECRET
 SYNAPSE_MACAROON_SECRET=$SECRET_SYNAPSE_MACAROON_SECRET
 SYNAPSE_FORM_SECRET=$SECRET_SYNAPSE_FORM_SECRET
 BACKUP_PASSPHRASE=$SECRET_BACKUP_PASSPHRASE
+COMMUNITY_AS_TOKEN=$SECRET_COMMUNITY_AS_TOKEN
+COMMUNITY_HS_TOKEN=$SECRET_COMMUNITY_HS_TOKEN
+# The Discord bridge's two app service tokens (rendered into its registration while it is on).
+OOYE_AS_TOKEN=$SECRET_OOYE_AS_TOKEN
+OOYE_HS_TOKEN=$SECRET_OOYE_HS_TOKEN
+
+# ── Discord bridge (optional) ──
+# The bot token of this install's OWN Discord application (the bridge replaces its slash commands,
+# so it can be no other bot's). The bridge runs only with discord in COMPOSE_PROFILES; empty = off.
+# Never printed.
+DISCORD_BOT_TOKEN=
+# That application's OAuth2 client secret (Discord: OAuth2 → Client Secret), for "log in with
+# Discord" on the bridge's page (https://$DOMAIN/bridge/). Optional; never printed.
+DISCORD_CLIENT_SECRET=
 
 # ── First boot ──
 # sha256 of the setup link's token (\`blackbranch setup-link\`); written by \`blackbranch up\`.
@@ -538,9 +572,37 @@ MATRIX_READER_TOKEN=
 
 # ── Alerts from the server (\`sudo blackbranch alerts test\` sends a test one) ──
 # An ntfy topic address, and/or a command that sends an email it reads on its input (sendmail you@example.com).
-# Neither set: alerts are in the server's log only.
+# Neither set: they go to the site's alerts topic (Admin Panel → Site → Site, card Alerts to your phone),
+# or with none there, to the server's log only.
 BB_ALERT_NTFY_URL=
 BB_ALERT_EMAIL_COMMAND=
+
+# ── Outgoing mail (optional; or Admin Panel → Site → Site, card Mail) ──
+# With a mail server set, a forgotten password is recovered by mail and a new account verifies its
+# address. MODE: starttls (587), tls (465) or plain. Test: \`sudo blackbranch mail test you@example.com\`.
+MAIL_SMTP_HOST=
+MAIL_SMTP_PORT=
+MAIL_SMTP_MODE=
+MAIL_SMTP_USERNAME=
+MAIL_SMTP_PASSWORD=
+MAIL_FROM=
+
+# ── Sign-in providers (optional; or Admin Panel → Site → Site, card Sign-in providers) ──
+# ENABLED=true offers "Continue with …" on the sign-in page; the card shows the URL to paste at the provider.
+SIGNIN_GOOGLE_ENABLED=
+SIGNIN_GOOGLE_CLIENT_ID=
+SIGNIN_GOOGLE_CLIENT_SECRET=
+SIGNIN_DISCORD_ENABLED=
+SIGNIN_DISCORD_CLIENT_ID=
+SIGNIN_DISCORD_CLIENT_SECRET=
+SIGNIN_TWITCH_ENABLED=
+SIGNIN_TWITCH_CLIENT_ID=
+SIGNIN_TWITCH_CLIENT_SECRET=
+SIGNIN_OIDC_ENABLED=
+SIGNIN_OIDC_ISSUER=
+SIGNIN_OIDC_CLIENT_ID=
+SIGNIN_OIDC_CLIENT_SECRET=
+SIGNIN_OIDC_NAME=
 EOF
   # This install's recovery sheet is still to be shown (blackbranch: RECOVERY_DUE) — root's own
   # record, written only with a NEW .env: an install from before the sheet never gets one.
@@ -714,6 +776,7 @@ cat <<EOF
                (every command but help needs sudo: the install is root's)
 EOF
 [ "$MODE" = internal ] && echo "   ⚠ LAB MODE: certificates from caddy's own CA — not for production."
+help_line
 # The update feed, read once now (a box that cannot read it says so on the doctor page).
 BB_HOME="$BB_HOME" /usr/local/bin/blackbranch update --check >/dev/null 2>&1 || info "the update feed could not be read yet (blackbranch update --check says why)"
 [ -z "$NAME_WARNING" ] || printf '\n   ⚠ %s\n\n' "$NAME_WARNING" >&2

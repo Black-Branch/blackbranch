@@ -55,3 +55,29 @@ export async function linkedMatrixIds(id: string, query: LinkQuery): Promise<str
 export async function matrixIdForCanonical(id: string, query: LinkQuery): Promise<string | null> {
   return linkedMatrixIds(id, query).then((ids) => ids[0] ?? null, () => null);
 }
+
+/**
+ * The site accounts a mod action on `id` lands on, in a stable order: every account linkedMatrixIds
+ * finds for a canonical ([] for a platform-only chatter), or the matrix id itself. THE one expansion
+ * the ban/unban and purge routes share — a canonical two accounts are linked to is one person (a
+ * link is proof), so acting on an arbitrary one of them would leave the other chatting. Throws on a
+ * failed read (the routes answer 503): read as "unlinked", it would narrow the action.
+ */
+export async function siteAccountsOf(id: string, query: LinkQuery): Promise<string[]> {
+  return [...await linkedMatrixIds(id, query)].sort();
+}
+
+/**
+ * The canonicals linked to the site account `$1` at this moment — the reverse of linkedMatrixIds,
+ * read from the same two link tables. A FROM item (`FROM ${ACCOUNT_CANONICALS_SQL}`, alias `linked`,
+ * column `canonical`) for the statements that write an account's ban, timeout or unban onto its
+ * canonicals in the same statement (community/accountBans.ts, community/unbans.ts,
+ * community/modTimeout.ts): a canonical's standing is its own mod_log rows
+ * (config/canonical-standing.mjs), so a site action reaches the canonicals linked when it is taken,
+ * and a later link rewrites nothing.
+ */
+export const ACCOUNT_CANONICALS_SQL = `(
+    SELECT canonical_id AS canonical FROM site.platform_links WHERE matrix_id = $1
+    UNION
+    SELECT canonical FROM stream.links WHERE platform IN ${NATIVE_SQL} AND platform_id = $1
+  ) linked`;

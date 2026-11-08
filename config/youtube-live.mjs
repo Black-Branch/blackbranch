@@ -1,0 +1,163 @@
+// The YouTube classifier: what one YouTube page says about one channel's live state.
+//
+// Why ONE copy. stream-ingest (the live lookup behind the night's vote) and web (the community
+// slot) each read YouTube's pages, and each grew its own reading. stream-ingest's learned to check
+// the owner and `isLiveNow` after the watcher attached to strangers' chats (2026-07-05); web's
+// stayed `html.includes('"isLive":true')`, which a SCHEDULED broadcast's page also carries (the
+// "N waiting" counter), so the community slot advertised a schedule as live (k, 2026-10-22).
+// One classifier, generated into both packages, keeps a lesson learned once from being learned twice.
+//
+// What the pages say (fetched 2026-10-23/24; research per-platform-liveness §A2, fixtures in
+// stream-ingest/platforms/fixtures/youtube/):
+//   live       /channel/<id>/live: canonical watch?v=ID, videoDetails.isLive true. Its microformat,
+//              and with it liveBroadcastDetails, is often MISSING there (present on /watch pages).
+//   scheduled  /watch?v=ID: playabilityStatus LIVE_STREAM_OFFLINE, videoDetails.isUpcoming true (no
+//              isLive key), liveBroadcastDetails.isLiveNow false, the start at
+//              …liveStreamabilityRenderer.offlineSlate…scheduledStartTime (epoch seconds).
+//   nothing    /channel/<id>/live: the canonical is the channel's own URL and there is no player
+//              response, only recommendations (other channels' videoIds).
+//   consent / bot-check: none of the above.
+//
+// It is pure: it fetches nothing, reads no clock and logs nothing; the callers log.
+//
+// Do not import this file from a package: each package carries a GENERATED, byte-identical copy
+// (`node tools/gen-instance-schema.mjs`; the package's `check:instance-schema` fails when it drifts):
+//   stream-ingest/lib/youtubeLive.generated.js (ESM)
+//   web/app/lib/youtubeLive.generated.mjs      (ESM)
+// So this file imports NOTHING and exports ONE name. An edit here ships to BOTH packages.
+
+/** @typedef {'live'|'upcoming'|'offline'|'unknown'} YtState */
+/**
+ * @typedef {object} YtClass
+ * @property {YtState} state
+ * @property {string} videoId          the video the reading is about ('' when none)
+ * @property {string} ownerChannelId   the video's owner as the page names it ('' when none)
+ * @property {number|null} scheduledStart  ms epoch of a scheduled start, else null
+ * @property {string} evidence         a code from config/platform-liveness.mjs EVIDENCE
+ */
+
+export const YOUTUBE_LIVE = (() => {
+  const WATCH_CANONICAL = /<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})">/;
+  const CHANNEL_CANONICAL = /<link rel="canonical" href="https:\/\/www\.youtube\.com\/channel\/([\w-]+)">/;
+  const LOOSE_VIDEO_ID = /"videoId":"([\w-]{11})"/;
+
+  /**
+   * ytInitialPlayerResponse out of a page, or null.
+   *
+   * Scans for the matching close brace, tracking string state and escapes so braces inside
+   * strings never affect depth. A lazy regex to the first `};var` or `};</script>` truncates the
+   * JSON when a title or description contains that sequence, and the parse failure then reads as
+   * "no player response", i.e. as the stream having ended.
+   * @param {string} html
+   * @returns {any}
+   */
+  function parsePlayerResponse(html) {
+    const key = 'ytInitialPlayerResponse';
+    const at = html.indexOf(key);
+    if (at === -1) return null;
+    const start = html.indexOf('{', at);
+    if (start === -1) return null;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < html.length; i++) {
+      const c = html[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === '\\') esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') { inStr = true; continue; }
+      if (c === '{') depth++;
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(html.slice(start, i + 1));
+          } catch {
+            return null; // a parse failure is "no data", never "not live"
+          }
+        }
+      }
+    }
+    return null; // never closed: a truncated page
+  }
+
+  /**
+   * One player response, for one channel. First match wins:
+   *   no response                     → unknown  no-player-response
+   *   no owner named                  → unknown  no-owner
+   *   another channel's video         → offline  foreign-video
+   *   videoDetails.isLive             → live     is-live
+   *   isUpcoming, or LIVE_STREAM_OFFLINE with an offlineSlate → upcoming (never live)
+   *   liveBroadcastDetails.isLiveNow  → live     is-live-now
+   *   no liveBroadcastDetails (or no boolean isLiveNow in it) → unknown  no-player-response:
+   *                                     a missing block says nothing, and must never read as
+   *                                     "not live" (a live broadcast would end the night)
+   *   otherwise                       → offline  not-live
+   * @param {any} pr
+   * @param {string} channelId
+   * @returns {YtClass}
+   */
+  function classifyPlayerResponse(pr, channelId) {
+    const vd = pr && typeof pr === 'object' ? pr.videoDetails : undefined;
+    const mf = pr && typeof pr === 'object' ? pr.microformat?.playerMicroformatRenderer : undefined;
+    const videoId = typeof vd?.videoId === 'string' ? vd.videoId : '';
+    const ownerChannelId = (typeof vd?.channelId === 'string' && vd.channelId)
+      || (typeof mf?.externalChannelId === 'string' && mf.externalChannelId) || '';
+    /** @param {YtState} state @param {string} evidence @param {number|null} [scheduledStart] @returns {YtClass} */
+    const out = (state, evidence, scheduledStart = null) => ({ state, videoId, ownerChannelId, scheduledStart, evidence });
+    if (!pr || typeof pr !== 'object') return out('unknown', 'no-player-response');
+    if (!ownerChannelId) return out('unknown', 'no-owner');
+    if (ownerChannelId !== channelId) return out('offline', 'foreign-video');
+    if (vd?.isLive === true) return out('live', 'is-live');
+    const ps = pr.playabilityStatus;
+    const slate = ps?.liveStreamability?.liveStreamabilityRenderer?.offlineSlate;
+    if (vd?.isUpcoming === true || (ps?.status === 'LIVE_STREAM_OFFLINE' && slate)) {
+      const secs = Number(slate?.liveStreamOfflineSlateRenderer?.scheduledStartTime);
+      return out('upcoming', 'upcoming', Number.isFinite(secs) && secs > 0 ? secs * 1000 : null);
+    }
+    const lbd = mf?.liveBroadcastDetails;
+    if (lbd?.isLiveNow === true) return out('live', 'is-live-now');
+    if (!lbd || typeof lbd.isLiveNow !== 'boolean') return out('unknown', 'no-player-response');
+    return out('offline', 'not-live');
+  }
+
+  /**
+   * A channel's /live page (or a watch page), for that channel:
+   *   canonical = the channel's own URL → offline (channel-canonical), whatever else the page holds:
+   *                                       YouTube's own "nothing live" page
+   *   canonical watch?v=ID              → its player response classified, about ID; a response
+   *                                       naming another video → unknown (needs-verify)
+   *   no canonical, a player response   → that response classified
+   *   only a loose "videoId":"…"        → unknown (needs-verify): the first videoId of a page with
+   *                                       no canonical is often a recommendation, so it is a
+   *                                       candidate to check on its own watch page, never an answer
+   *   otherwise                         → unknown (unrecognized-page): a consent or bot-check page
+   * @param {string} html
+   * @param {string} channelId
+   * @returns {YtClass}
+   */
+  function classifyLivePage(html, channelId) {
+    const page = typeof html === 'string' ? html : '';
+    /** @param {YtState} state @param {string} evidence @param {string} videoId @returns {YtClass} */
+    const bare = (state, evidence, videoId) => ({ state, videoId, ownerChannelId: '', scheduledStart: null, evidence });
+    const watch = page.match(WATCH_CANONICAL);
+    const channel = page.match(CHANNEL_CANONICAL);
+    if (!watch && channel && channel[1] === channelId) return { ...bare('offline', 'channel-canonical', ''), ownerChannelId: channelId };
+    const pr = parsePlayerResponse(page);
+    if (watch) {
+      const id = watch[1] ?? '';
+      const c = classifyPlayerResponse(pr, channelId);
+      if (c.videoId && c.videoId !== id) return bare('unknown', 'needs-verify', id);
+      return { ...c, videoId: id };
+    }
+    if (pr) return classifyPlayerResponse(pr, channelId);
+    const loose = page.match(LOOSE_VIDEO_ID);
+    if (loose) return bare('unknown', 'needs-verify', loose[1] ?? '');
+    return bare('unknown', 'unrecognized-page', '');
+  }
+
+  return { parsePlayerResponse, classifyPlayerResponse, classifyLivePage };
+})();

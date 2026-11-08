@@ -27,6 +27,8 @@ const {
 const NO_PRONOUNS = { get: async () => null, set: async () => false, maybeAlejo: async () => false };
 // Likewise the ban hold: index.js passes the real one (ban-hold.js); a test without it holds nobody.
 const NO_BAN_HOLD = { isHeld: () => false };
+const RELEASE_CANONICAL_RE = /^[0-9a-f]{12}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRONOUNS, banHold = NO_BAN_HOLD, pollEngine,
                       msgBuffer, broadcast, bufferPush,
@@ -194,12 +196,35 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
     message = decodeHtmlEntities(message);
     username = username.replace(/^@/, '').trim();
 
-    const canonicalId = await resolveOrCreate(platform, userId || '', username);
+    // ── Who sent it ──────────────────────────────────────────────────────────
+    // A mod's Allow on a held line (web app/api/mod/automod/resolve) names the held row's sender by
+    // canonical: the line is theirs, never a fresh identity minted from the name (which would carry
+    // none of their history, and which a ban, a purge or the ban hold below would not reach).
+    // Trusted only on a release — ingest is always resolved from the platform id.
+    let canonicalId;
+    if (releaseHold === true && req.body.canonicalId !== undefined) {
+      const cid = typeof req.body.canonicalId === 'string' ? req.body.canonicalId.toLowerCase() : '';
+      if (!RELEASE_CANONICAL_RE.test(cid)) return res.status(400).json({ error: 'canonicalId must be a 12-hex canonical id' });
+      const sender = (await pool.query(
+        `SELECT u.id, l.platform_id FROM stream.users u
+           LEFT JOIN stream.links l ON l.canonical = u.id AND l.platform = $2
+          WHERE u.id = $1 LIMIT 1`, [cid, String(platform).toLowerCase()])).rows[0];
+      // The identity is gone: a deleted account (account-erase.js removes it), or a merge made
+      // before merges repointed held rows (identity.js mergeCanonicals now does). Never a guess.
+      if (!sender) return res.status(409).json({ error: 'sender_gone' });
+      canonicalId = cid;
+      if (!userId && sender.platform_id) userId = sender.platform_id;
+    } else {
+      canonicalId = await resolveOrCreate(platform, userId || '', username);
+    }
     // ── Banned on the site (ban-hold.js) ─────────────────────────────────────
     // A banned chatter's platform lines stop HERE, the moment the ban is written — not when the
     // platform's own ban lands seconds later (or never, when that fan-out fails). Not stored, not
     // broadcast; 200 so stream-ingest does not retry it. The site's own chat is web's to refuse.
-    if (!isNativePlatform(String(platform).toLowerCase()) && banHold.isHeld(canonicalId)) {
+    // Held by canonical OR by the platform account (a deleted or unlinked account's ban follows it).
+    // A release of a banned sender's held line answers 409 so the mod is told why it was not posted.
+    if (!isNativePlatform(String(platform).toLowerCase()) && banHold.isHeld(canonicalId, platform, userId)) {
+      if (releaseHold === true) return res.status(409).json({ error: 'sender_banned' });
       return res.json({ ok: true, filtered: true, reason: 'banned' });
     }
     rememberAvatar(canonicalId, avatarUrl);
@@ -717,6 +742,9 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
     // msgBuffer/broadcast/history the same way the note above forbids for
     // `message` itself. Computed null outright rather than filtered later.
     const nativeEmotes = encText ? null : sanitizeNativeEmotes(req.body.emotes);
+    // Anything but a UUID is no key at all: the line posts as it always did.
+    const clientMsgId = typeof req.body.clientMsgId === 'string' && UUID_RE.test(req.body.clientMsgId)
+      ? req.body.clientMsgId.toLowerCase() : null;
 
     // "Send to all": register this message's text so the per-platform echoes that
     // follow are suppressed in /chat (one row, one broadcast). Registered here,
@@ -788,6 +816,22 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
         dedupEntry.raws.add(normTextWithPath(echoTextAlt));
         if (altKey !== primaryKey) allSendDedup.set(altKey, dedupEntry);
       }
+      // A platform that got the line in parts (YouTube takes 200 characters, a staff line 500)
+      // echoes each part: arm each, for that platform only, against the same native row.
+      const rawParts = req.body.platformParts;
+      if (rawParts && typeof rawParts === 'object' && !Array.isArray(rawParts)) {
+        for (const [p, list] of Object.entries(rawParts)) {
+          const plat = String(p).toLowerCase().slice(0, 20);
+          if (!Array.isArray(list) || (dedupEntry.platforms && !dedupEntry.platforms.has(plat))) continue;
+          for (const part of list.slice(0, 5)) {
+            if (typeof part !== 'string' || !part) continue;
+            const key = normText(part.slice(0, 500));
+            if (!key || allSendDedup.has(key)) continue;
+            allSendDedup.set(key, { ...dedupEntry, platforms: new Map([[plat, 1]]),
+              raws: new Set([normTextWithPath(part.slice(0, 500))]) });
+          }
+        }
+      }
     }
     return armedEntry;
     };
@@ -825,11 +869,21 @@ function createChat({ pool, resolveOrCreate, resolveCanonical, pronouns = NO_PRO
           `INSERT INTO site.users (matrix_id, display_name, is_bot) VALUES ($1, $2, true) ON CONFLICT (matrix_id) DO NOTHING`,
           [matrixId, String(username || '').slice(0, 64) || null]);
       }
+      // The sender's own id for this line (v173): a second attempt at it — the browser's retry
+      // after a timeout, or one racing the first — inserts nothing and is answered with the first
+      // row's id, never broadcast again. The unique index is the guard, not a read before the write.
       const r = await pool.query(
-        `INSERT INTO site.chat_messages (matrix_id, message, reply_to_id, reply_to_username, reply_to_text, dest_platform, dest_platforms, encrypted_text, emotes, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) RETURNING id`,
-        [matrixId, message, reply_to_id ?? null, reply_to_username ?? null, reply_to_text ?? null, dest, destListStr, encText, nativeEmotes]
+        `INSERT INTO site.chat_messages (matrix_id, message, reply_to_id, reply_to_username, reply_to_text, dest_platform, dest_platforms, encrypted_text, emotes, client_msg_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+         ON CONFLICT (matrix_id, client_msg_id) WHERE client_msg_id IS NOT NULL DO NOTHING
+         RETURNING id`,
+        [matrixId, message, reply_to_id ?? null, reply_to_username ?? null, reply_to_text ?? null, dest, destListStr, encText, nativeEmotes, clientMsgId]
       );
+      if (r.rows.length === 0) {
+        const prior = await pool.query(
+          'SELECT id FROM site.chat_messages WHERE matrix_id = $1 AND client_msg_id = $2', [matrixId, clientMsgId]);
+        return res.json({ ok: true, id: parseInt(prior.rows[0].id, 10), replay: true });
+      }
       chatId = parseInt(r.rows[0].id, 10);
     } catch (err) {
       console.warn('[chat/native] store failed, refusing to broadcast:', err.message);

@@ -6,25 +6,60 @@
 //
 //   { "ok": bool,
 //     "readers": { "<platform>": { "state": "running"|"starting"|"failed"|"off", "since": iso, "error": one line } },
-//     "bot": "running"|"off" }
+//     "bot": "running"|"off",
+//     "liveness": { "<platform>": { "state": "live"|"offline"|"unknown"|"upcoming", "since": iso,
+//                   "lastAnswerAt": iso|null, "scheduledStart": iso|null, "evidence": code, "misses": n,
+//                   "stale": bool } | null } }
 //
 // ok = every platform the settings enable is `running`, or `starting` for under 120 s. An install
 // with no platform set up is ok (nothing is asked for). The error is the reader's own one line
 // (lib/platformStarter.js oneLine): no payloads, no viewer names.
+//
+// liveness = the poller's per-platform states (lib/poller.js getPlatformStates; null = not
+// configured), every platform of the vocabulary named. `stale` is the vocabulary's one stale rule
+// (PLATFORM_LIVENESS.staleAnswer), computed here: the Doctor's copy imports nothing, so it reads the
+// boolean instead of repeating the rule. The broadcast key stays in the poller. Liveness never
+// changes `ok` — that is the readers' verdict (the bundle's healthcheck).
 //
 // Bind: INGEST_HEALTH_PORT (default 3010) on INGEST_HEALTH_BIND (default 0.0.0.0 — inside the bundle
 // the web container and the healthcheck reach it on the compose network; a systemd install sets
 // 127.0.0.1). It answers nothing else and reads nothing from the request.
 
 import { createServer } from 'node:http';
+import { PLATFORM_LIVENESS } from './platformLiveness.generated.js';
 
 const STARTING_GRACE_MS = 120_000;
 
+const isoOf = (ms) => (typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+
 /**
- * Pure: the /health body from the starter's states.
- * @param {{ readers: Record<string, { state: string, since: string, error: string }>, wanted: (name: string) => boolean, bot: boolean, now?: number }} input
+ * Pure: the admin face of the poller's states, every platform named (null = not configured).
+ * @param {Record<string, import('./platformState.js').PlatformState|null>|undefined} states
+ * @param {number} now
  */
-export function healthBody({ readers, wanted, bot, now = Date.now() }) {
+function livenessBody(states, now) {
+  /** @type {Record<string, object|null>} */
+  const out = {};
+  for (const name of PLATFORM_LIVENESS.PLATFORMS) {
+    const s = states?.[name];
+    out[name] = s ? {
+      state: s.state,
+      since: isoOf(s.since),
+      lastAnswerAt: isoOf(s.lastAnswerAt),
+      scheduledStart: isoOf(s.scheduledStart),
+      evidence: s.evidence || '',
+      misses: s.misses,
+      stale: PLATFORM_LIVENESS.staleAnswer(s, now),
+    } : null;
+  }
+  return out;
+}
+
+/**
+ * Pure: the /health body from the starter's states and the poller's.
+ * @param {{ readers: Record<string, { state: string, since: string, error: string }>, wanted: (name: string) => boolean, bot: boolean, now?: number, liveness?: Record<string, any> }} input
+ */
+export function healthBody({ readers, wanted, bot, now = Date.now(), liveness }) {
   let ok = true;
   for (const [name, r] of Object.entries(readers)) {
     if (!wanted(name)) continue;
@@ -32,7 +67,7 @@ export function healthBody({ readers, wanted, bot, now = Date.now() }) {
     if (r.state === 'starting' && now - Date.parse(r.since) < STARTING_GRACE_MS) continue;
     ok = false;
   }
-  return { ok, readers, bot: bot ? 'running' : 'off' };
+  return { ok, readers, bot: bot ? 'running' : 'off', liveness: livenessBody(liveness, now) };
 }
 
 /**

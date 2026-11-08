@@ -62,6 +62,9 @@ const CORPUS = [
   "slurred",             // substring inside a longer word must NOT match
   "unslur",              // ditto, prefix side
   "Scunthorpe",          // the classic false positive
+  "Pumpkin Spices",      // "es" is no plural after a non-hissing stem
+  "boxes churches wishes heroes",
+  "s l u r e s",
   "slur.",
   "(slur)",
   "…slur…",

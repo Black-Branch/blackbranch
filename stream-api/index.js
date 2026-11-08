@@ -125,7 +125,7 @@ const pronouns = createPronouns({ pool, resolveCanonical, resolveOrCreate });
 const { createWsHub } = require('./ws-hub');
 // `wss` is taken so shutdown() can terminate the long-lived clients — without
 // that, server.close() never settles (see the shutdown block at the bottom).
-const { wss, msgBuffer, broadcast, sendInternal, bufferPush, bufferReplace, redactBuffered, routeUpgrade } = createWsHub({
+const { wss, msgBuffer, broadcast, sendInternal, bufferPush, bufferReplace, redactBuffered, touchBuffered, routeUpgrade } = createWsHub({
   server,
   isInternalUpgrade,
   // State frames pushed to every client on connect, after `history` — so an
@@ -139,6 +139,9 @@ const { wss, msgBuffer, broadcast, sendInternal, bufferPush, bufferReplace, reda
     // The streamer's highlighted message (chat-mod.js /chat/spotlight) — in memory, so a
     // reloaded OBS source or a late-opening tab must be told on connect.
     () => chatMod.spotlightFrame(),
+    // Each platform's public live state (platform-states.js), so a page that opens mid-stream knows
+    // which platforms are live before the poller's next tick.
+    () => platformStates.frame(),
   ],
 });
 // The rig page's socket (rig.js, part of the obs module): its own path on the same port. Its key is
@@ -182,11 +185,19 @@ const content = createContent({
 content.registerContentRoutes(app, { requireSecret, wrap });
 bootLoads.push(content.load().catch((e) => console.warn(`[content] first load failed: ${e.message} — read again on the first request`)));
 // `memory` is built further down; the stats hook is late-bound and runs only on a /ai/routes read.
-instanceConfig.ready.then(() => ai.start({ pool, memoryStats: () => memory.stats() })).catch((e) => console.warn(`[ai] start failed: ${e.message}`));
+// Held in bootLoads: it writes the plugin slots, so a stop in the first second must wait for it.
+bootLoads.push(instanceConfig.ready.then(() => ai.start({ pool, memoryStats: () => memory.stats() })).catch((e) => console.warn(`[ai] start failed: ${e.message}`)));
+
+// Per-platform liveness (platform-states.js): stream-ingest's poller posts every platform's state
+// each tick; the public cut of it rides /stream/current (`liveness`) and the platformStates frame.
+const { createPlatformStates } = require('./platform-states');
+const platformStates = createPlatformStates({ broadcast });
+platformStates.registerRoutes(app, { requireInternal, wrap });
 
 const { createLifecycle } = require('./lifecycle');
 const lifecycle = createLifecycle({
   pool, broadcast,
+  getLiveness: () => platformStates.snapshot(),
   // A stream starting re-keys the credit pool's weight split (last stream's
   // cohort → 0.25×); without this a night opened BEFORE going live keeps last
   // stream's funders at full weight all evening.
@@ -386,7 +397,7 @@ registerProfileRoutes(app, { pool, requireInternal, wrap, profileExtras: owner?.
 //    purge/settings/badges-changed/spotlight. The return carries the spotlight
 //    connect frame ws-hub replays (see connectFrames above).
 const { registerChatMod } = require('./chat-mod');
-const chatMod = registerChatMod(app, { pool, msgBuffer, broadcast, redactBuffered, requireInternal, wrap });
+const chatMod = registerChatMod(app, { pool, msgBuffer, broadcast, redactBuffered, touchBuffered, requireInternal, wrap });
 
 // Poll HTTP surface (poll.js): /poll/current|start|vote|end|creator + /overlay/poll.
 registerPollRoutes(app, { pollEngine, pool, resolveCanonical, requireInternal, wrap });
@@ -421,11 +432,13 @@ const memory = createMemory({ pool, ai, notify: (...a) => require('./notify.js')
 instanceConfig.onWrite((keys) => memory.onSettingsWritten(keys));
 memory.registerMemoryRoutes(app, { requireInternal, requireSecret, wrap });
 // The dimension check runs on a LOADED settings layer (memory.state lives there); until the
-// layer loads, it retries with it.
-instanceConfig.ready.then(function memoryBoot() {
+// layer loads, it retries with it. The first attempt is held in bootLoads (the drain waits for
+// it); a retry never starts once the drain has.
+bootLoads.push(instanceConfig.ready.then(function memoryBoot() {
+  if (shuttingDown) return;
   if (!instanceConfig.snapshot().state.loaded) { setTimeout(memoryBoot, 30_000).unref?.(); return; }
-  memory.boot().catch((e) => console.error(`[memory] boot check failed: ${e.message}`));
-});
+  return memory.boot().catch((e) => console.error(`[memory] boot check failed: ${e.message}`));
+}));
 memory.startRetention();
 
 // The stream-side half of self-serve "Delete my account" (account-erase.js): AI memory, linked
@@ -563,6 +576,7 @@ async function shutdown(signal) {
     for (const ws of wss.clients) { try { ws.terminate(); } catch { void 0; } }
     wss.close();
     rig.stop();              // the rig pages' sockets are long-lived too; they reconnect by themselves
+    platformStates.stop();   // its 30 s silence timer (unref'd, so it never held the exit — tidy, not load-bearing)
     server.closeIdleConnections();
 
     await closed;
@@ -573,6 +587,7 @@ async function shutdown(signal) {
     await stopAggregates();
     await banHold.stop();   // its minute rebuild reads the pool too
     await Promise.allSettled(bootLoads);
+    await ai.stop();        // the last minute of AI usage counts, flushed while the pool is open
 
     // No new queries can arrive now. end() waits for checked-out clients, which
     // is what lets an in-flight merge transaction reach its COMMIT.

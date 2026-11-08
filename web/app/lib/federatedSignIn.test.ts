@@ -7,8 +7,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   signFedState, verifyFedState, fedStateSecret, initiateEndpointsProblem, discoverIssuer,
-  completeFederatedCallback, FED_STATE_TTL_S, type FedState, type Fetcher,
+  completeFederatedCallback, federatedClientId, forgetFederatedClient, discoverServer, FED_STATE_TTL_S, type FedState, type Fetcher,
 } from "./federatedSignIn.ts";
+import { OWN_SERVER_SIGN_IN } from "./federatedSignInSwitch.ts";
 
 const SECRET = "test-secret-not-a-real-one";
 const T0 = 1_800_000_000_000;
@@ -23,6 +24,7 @@ const STATE: FedState = {
   clientId: "client-1",
   deviceId: "DEVICEABCDEF",
   serverName: "gadget.test",
+  registrationEndpoint: "https://auth.gadget.test/oauth2/registration",
 };
 
 const METADATA = {
@@ -61,7 +63,18 @@ function happyRoutes(overrides: Record<string, Route> = {}): Record<string, Rout
 const log = { error: () => {} };
 const deps = (fetch: Fetcher, over: Partial<Parameters<typeof completeFederatedCallback>[1]> = {}) => ({
   fetch, secret: SECRET, now: () => T0 + 1000, redirectUri: "https://site.test/api/auth/matrix-callback", log,
-  serverAllowed: () => true, ...over,
+  serverAllowed: () => true, isOwnServer: (s: string) => s === "site.test", ...over,
+});
+
+test("an account on this install's own server is refused by the federated callback with a 'use Sign in' code, before any request", async () => {
+  const own: FedState = { ...STATE, serverName: "Site.Test", homeserver: "https://matrix.site.test" };
+  const { fetch, calls } = stubFetch(happyRoutes());
+  const out = await completeFederatedCallback({ code: "c", state: own.state, cookie: signFedState(own, SECRET, T0) }, deps(fetch, { isOwnServer: (s) => s.toLowerCase() === "site.test" }));
+  assert.deepEqual(out, { ok: false, error: OWN_SERVER_SIGN_IN });
+  assert.equal(calls.length, 0, `fetched ${calls.join(", ")} — no code exchange, no client chain written`);
+  // The same login for an outside server still goes through (the refusal is for our own name only).
+  const other = stubFetch(happyRoutes());
+  assert.equal((await completeFederatedCallback({ code: "c", state: STATE.state, cookie: signFedState(STATE, SECRET, T0) }, deps(other.fetch))).ok, true);
 });
 
 // ─── The cookie ───────────────────────────────────────────────────────────────
@@ -136,6 +149,131 @@ test("a genuine sign-in passes, binding the token endpoint to the vouched homese
     "https://gadget.test/.well-known/matrix/client",
     `${HS}/_matrix/client/v1/auth_metadata`,
   ]);
+});
+
+test("the callback records the vouched issuer's revocation endpoint with the session's binding (null when it publishes none)", async () => {
+  const withRevoke = stubFetch(happyRoutes({ [`${HS}/_matrix/client/v1/auth_metadata`]: json({ ...METADATA, revocation_endpoint: "https://auth.gadget.test/oauth2/revoke" }) }));
+  const out = await completeFederatedCallback({ code: "c", state: STATE.state, cookie: signFedState(STATE, SECRET, T0) }, deps(withRevoke.fetch));
+  assert.equal(out.ok && out.revocationEndpoint, "https://auth.gadget.test/oauth2/revoke");
+  assert.equal(out.ok && out.clientId, STATE.clientId);
+  const without = stubFetch(happyRoutes());
+  const none = await completeFederatedCallback({ code: "c", state: STATE.state, cookie: signFedState(STATE, SECRET, T0) }, deps(without.fetch));
+  assert.equal(none.ok && none.revocationEndpoint, null);
+});
+
+test("the callback names a client the outside server no longer knows (invalid_client) — the registry entry it came from — so the site registers afresh", async () => {
+  const { fetch } = stubFetch(happyRoutes({ [STATE.tokenEndpoint]: json({ error: "invalid_client" }, 401) }));
+  const out = await completeFederatedCallback({ code: "c", state: STATE.state, cookie: signFedState(STATE, SECRET, T0) }, deps(fetch));
+  assert.deepEqual(out, {
+    ok: false, error: "token_exchange_failed",
+    forgetClient: { registrationEndpoint: STATE.registrationEndpoint, clientId: STATE.clientId },
+  });
+});
+
+test("invalid_client from a token endpoint that is not the vouched server's issuer forgets nothing: a refusal and a journal line", async () => {
+  const errors: unknown[][] = [];
+  // The state's token endpoint answers invalid_client, but gadget.test's own issuer is elsewhere.
+  const { fetch } = stubFetch(happyRoutes({
+    [STATE.tokenEndpoint]: json({ error: "invalid_client" }, 401),
+    [`${HS}/_matrix/client/v1/auth_metadata`]: json({ ...METADATA, issuer: "https://login.gadget-elsewhere.test/", authorization_endpoint: "https://login.gadget-elsewhere.test/a", token_endpoint: "https://login.gadget-elsewhere.test/t", registration_endpoint: "https://login.gadget-elsewhere.test/r" }),
+  }));
+  const out = await completeFederatedCallback({ code: "c", state: STATE.state, cookie: signFedState(STATE, SECRET, T0) }, deps(fetch, { log: { error: (...a: unknown[]) => errors.push(a) } }));
+  assert.deepEqual(out, { ok: false, error: "issuer_mismatch" });
+  assert.ok(errors.some((a) => String(a[0]).includes("REJECTED")), "the refusal is in the journal");
+});
+
+test("initiate's endpoints are the server's own (discoverServer from its name), never the browser's", async () => {
+  const { fetch } = stubFetch(happyRoutes());
+  const found = await discoverServer("gadget.test", fetch);
+  assert.ok(found.ok);
+  assert.equal(found.ok && found.homeserver, HS);
+  assert.deepEqual(found.ok && [found.metadata.authorizationEndpoint, found.metadata.tokenEndpoint, found.metadata.registrationEndpoint],
+    [METADATA.authorization_endpoint, METADATA.token_endpoint, METADATA.registration_endpoint]);
+  const dead = stubFetch({});
+  assert.deepEqual(await discoverServer("gadget.test", dead.fetch), { ok: false, error: "well_known_unreachable" });
+});
+
+// ─── One client per outside server (A2-04) ────────────────────────────────────
+
+/** site.oauth_clients in memory, answering federatedClientId's three statements. */
+function clientTable() {
+  const rows = new Map<string, string>();
+  const key = (p: unknown[]) => `${p[0]}\n${p[1]}`;
+  const query = async (sql: string, params: unknown[]) => {
+    if (/^\s*SELECT client_id FROM site\.oauth_clients WHERE registration_endpoint = \$1 AND redirect_uri = \$2/i.test(sql)) {
+      const c = rows.get(key(params));
+      return { rows: c ? [{ client_id: c }] : [] };
+    }
+    if (/^\s*INSERT INTO site\.oauth_clients \(registration_endpoint, redirect_uri, client_id\)[\s\S]*ON CONFLICT \(registration_endpoint, redirect_uri\) DO NOTHING/i.test(sql)) {
+      if (rows.has(key(params))) return { rows: [] };
+      rows.set(key(params), params[2] as string);
+      return { rows: [{ client_id: params[2] }] };
+    }
+    if (/^\s*DELETE FROM site\.oauth_clients WHERE registration_endpoint = \$1 AND redirect_uri = \$2 AND client_id = \$3/i.test(sql)) {
+      if (rows.get(key(params)) === params[2]) rows.delete(key(params));
+      return { rows: [] };
+    }
+    throw new Error(`unexpected SQL: ${sql}`);
+  };
+  return { rows, query };
+}
+
+const REG = METADATA.registration_endpoint;
+const REDIRECT = "https://site.test/api/auth/matrix-callback";
+
+test("the first sign-in to an outside server registers this site once; every later one — any member, any device — reuses it", async () => {
+  const t = clientTable();
+  let registrations = 0;
+  const register = async () => `client-${++registrations}`;
+  const first = await federatedClientId({ query: t.query, register }, REG, REDIRECT);
+  const second = await federatedClientId({ query: t.query, register }, REG, REDIRECT);
+  assert.equal(first, "client-1");
+  assert.equal(second, "client-1", "the second device signs in as the same client");
+  assert.equal(registrations, 1);
+  // Another server, or another redirect (a dev origin), is its own registration.
+  assert.equal(await federatedClientId({ query: t.query, register }, "https://auth.other.test/oauth2/registration", REDIRECT), "client-2");
+  assert.equal(await federatedClientId({ query: t.query, register }, REG, "http://localhost:3002/api/auth/matrix-callback"), "client-3");
+});
+
+test("two first sign-ins racing: both use the one client that was stored", async () => {
+  const t = clientTable();
+  let n = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const register = async () => { const id = `client-${++n}`; await gate; return id; };
+  const a = federatedClientId({ query: t.query, register }, REG, REDIRECT);
+  const b = federatedClientId({ query: t.query, register }, REG, REDIRECT);
+  release();
+  const [ca, cb] = await Promise.all([a, b]);
+  assert.equal(ca, cb, "one stored client, whichever registration lost");
+  assert.equal(t.rows.size, 1);
+});
+
+test("restart: a new process reuses the stored client (nothing about it lives in memory)", async () => {
+  const t = clientTable();
+  await federatedClientId({ query: t.query, register: async () => "client-1" }, REG, REDIRECT);
+  const fresh = await import(`./federatedSignIn.ts?restart=${Date.now()}`) as typeof import("./federatedSignIn.ts");
+  assert.equal(await fresh.federatedClientId({ query: t.query, register: async () => assert.fail("registered again") }, REG, REDIRECT), "client-1");
+});
+
+test("retry: a registration that fails stores nothing, and the next sign-in registers", async () => {
+  const t = clientTable();
+  await assert.rejects(federatedClientId({ query: t.query, register: async () => { throw new Error("registration failed: 503"); } }, REG, REDIRECT));
+  assert.equal(t.rows.size, 0);
+  assert.equal(await federatedClientId({ query: t.query, register: async () => "client-ok" }, REG, REDIRECT), "client-ok");
+  // A client the server forgot is dropped, so the next sign-in registers afresh.
+  await forgetFederatedClient(t.query, { registrationEndpoint: REG, redirectUri: REDIRECT, clientId: "client-ok" });
+  assert.equal(await federatedClientId({ query: t.query, register: async () => "client-new" }, REG, REDIRECT), "client-new");
+});
+
+test("forgetting is keyed by the registry entry: another server's entry with the same client id string is untouched", async () => {
+  const t = clientTable();
+  // A hostile server answered its registration with another server's client id.
+  await federatedClientId({ query: t.query, register: async () => "shared-id" }, REG, REDIRECT);
+  await federatedClientId({ query: t.query, register: async () => "shared-id" }, "https://auth.evil.test/register", REDIRECT);
+  await forgetFederatedClient(t.query, { registrationEndpoint: "https://auth.evil.test/register", redirectUri: REDIRECT, clientId: "shared-id" });
+  assert.equal(t.rows.size, 1);
+  assert.equal(await federatedClientId({ query: t.query, register: async () => assert.fail("re-registered") }, REG, REDIRECT), "shared-id");
 });
 
 test("R2-11: a token endpoint off the vouched issuer's origin is refused and never stored", async () => {

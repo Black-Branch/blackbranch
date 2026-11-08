@@ -44,6 +44,7 @@
 // Idempotent: a second call finds nothing left to change. Counts only come back.
 
 const { NATIVE_SQL, NATIVE_PLATFORM } = require('./native-platform');
+const { AUTOMOD_HELD_RETENTION_DAYS } = require('./automod');
 
 // The name a kept payment record shows once its person is deleted (the column is NOT NULL).
 const ERASED_NAME = '(deleted)';
@@ -66,6 +67,15 @@ const RESTRICTION_UPSERT_SQL = `INSERT INTO stream.erased_restrictions AS r (pla
              expires_at = CASE WHEN r.expires_at IS NOT NULL AND r.expires_at <= NOW() THEN EXCLUDED.expires_at
                                WHEN r.expires_at IS NULL OR EXCLUDED.expires_at IS NULL THEN NULL
                                ELSE GREATEST(r.expires_at, EXCLUDED.expires_at) END`;
+
+/** When the restriction a deletion leaves ends. A ban's end is web's (a timeout's end, or null —
+ *  permanent; a timeout with an open case runs to the later of the two). A CASE without a ban ends
+ *  with the case's evidence: the held-message retention (ADR 0104), when web sent no end itself.
+ *  The daily prune (automod.js) deletes ended rows. */
+function restrictionEnd({ keepLinks, restrictionExpiresAt }, now = Date.now()) {
+  if (keepLinks) return restrictionExpiresAt;
+  return restrictionExpiresAt ?? new Date(now + AUTOMOD_HELD_RETENTION_DAYS * 86_400_000).toISOString();
+}
 
 function createAccountErase({ pool, memory, identity = null, sponsors = null, msgBuffer = [], broadcast = () => {}, redactBuffered = () => {}, log = console }) {
   /**
@@ -125,8 +135,7 @@ function createAccountErase({ pool, memory, identity = null, sponsors = null, ms
          UNION SELECT $3::text, $2::text`, [ids.canonicalIds, matrixId, NATIVE_PLATFORM])).rows;
       if (keepLinks || keepEvidence) {
         const real = pids.filter((r) => r.platform !== NATIVE_PLATFORM && !String(r.platform_id).startsWith('name:'));
-        // A timeout ends: only a ban with an end, and no open case, expires.
-        const expiresAt = keepLinks ? restrictionExpiresAt : null;
+        const expiresAt = restrictionEnd({ keepLinks, restrictionExpiresAt });
         const rr = await client.query(RESTRICTION_UPSERT_SQL,
           [real.map((r) => r.platform), real.map((r) => r.platform_id), matrixId, keepLinks ? 'ban' : 'case', expiresAt]);
         out.restrictionsKept = rr.rowCount;
@@ -247,4 +256,4 @@ function createAccountErase({ pool, memory, identity = null, sponsors = null, ms
   return { erase, exclusiveIdentities, registerAccountEraseRoutes };
 }
 
-module.exports = { createAccountErase, ERASED_NAME, ERASED_CANONICAL, RESTRICTION_UPSERT_SQL };
+module.exports = { createAccountErase, ERASED_NAME, ERASED_CANONICAL, RESTRICTION_UPSERT_SQL, restrictionEnd };

@@ -93,14 +93,39 @@ test("Streamplace: the account resolves and this site's own sign-in description 
   assert.equal(words(await check("streamplace", get, stub([]))), "not in the provider's format");
 });
 
+// Stripe's answer when the customer portal's settings were saved once (the default configuration
+// exists), and when they never were: billingPortal.sessions.create then refuses every subscriber's
+// "Manage subscription" (A1-07, KG-06).
+const PORTAL_SAVED = { status: 200, body: { object: "list", data: [{ id: "bpc_1", object: "billing_portal.configuration", is_default: true, active: true }] } };
+const PORTAL_NEVER_SAVED = { status: 200, body: { object: "list", data: [] } };
+const PORTAL_WORDS = "the customer portal was never saved in Stripe — Settings → Billing → Customer portal → Save, or subscribers cannot manage or cancel";
+
+test("Stripe key: a customer portal never saved is named with the exact Stripe step", async () => {
+  const get = (k: string) => ({ "stripe.secretKey": "rk_live_SECRET" } as Record<string, string>)[k] ?? null;
+  const never = stub([[/billing_portal\/configurations/, PORTAL_NEVER_SAVED], [/api\.stripe\.com\/v1\//, { status: 200, body: { data: [] } }]]);
+  assert.equal(words(await check("stripe", get, never)), PORTAL_WORDS);
+  const q = new URL(never.calls.at(-1)!.url);
+  assert.equal(q.searchParams.get("is_default"), "true", "only the DEFAULT configuration lets a session open without naming one");
+  harmless(never.calls);
+});
+
+test("Stripe portal (the Doctor's row): saved, never saved, or a key that may not read it", async () => {
+  const get = (k: string) => ({ "stripe.secretKey": "rk_test_SECRET" } as Record<string, string>)[k] ?? null;
+  assert.equal(words(await check("stripe-portal", get, stub([[/billing_portal\/configurations/, PORTAL_SAVED]]))), "accepted (test)");
+  assert.equal(words(await check("stripe-portal", get, stub([[/billing_portal\/configurations/, PORTAL_NEVER_SAVED]]))), PORTAL_WORDS);
+  const perm = { status: 403, body: { error: { message: "The provided key 'rk_test_***' does not have the required permissions for this endpoint." } } };
+  assert.equal(normalizeCheckResult(await check("stripe-portal", get, stub([[/billing_portal/, perm]]))).code, "limited", "the site cannot know: check by hand, never red");
+  assert.equal(words(await check("stripe-portal", () => null, stub([]))), "not set: stripe.secretKey");
+});
+
 test("Stripe key: the account and every object type the site reads; a missing Read permission is named", async () => {
   const get = (k: string) => ({ "stripe.secretKey": "rk_test_SECRET" } as Record<string, string>)[k] ?? null;
-  const all = stub([[/api\.stripe\.com\/v1\//, { status: 200, body: { data: [] } }]]);
+  const all = stub([[/billing_portal\/configurations/, PORTAL_SAVED], [/api\.stripe\.com\/v1\//, { status: 200, body: { data: [] } }]]);
   assert.equal(words(await check("stripe", get, all)), "accepted (test)");
-  assert.deepEqual(all.calls.map((c) => new URL(c.url).pathname), ["/v1/account", "/v1/customers", "/v1/subscriptions", "/v1/invoices", "/v1/payment_intents", "/v1/checkout/sessions"]);
+  assert.deepEqual(all.calls.map((c) => new URL(c.url).pathname), ["/v1/account", "/v1/customers", "/v1/subscriptions", "/v1/invoices", "/v1/payment_intents", "/v1/checkout/sessions", "/v1/billing_portal/configurations"]);
   harmless(all.calls);
   const perm = { status: 403, body: { error: { message: "The provided key 'rk_test_***' does not have the required permissions for this endpoint." } } };
-  const denied = stub([[/v1\/(subscriptions|payment_intents)/, perm], [/api\.stripe\.com/, { status: 200, body: { data: [] } }]]);
+  const denied = stub([[/v1\/(subscriptions|payment_intents)/, perm], [/billing_portal\/configurations/, PORTAL_SAVED], [/api\.stripe\.com/, { status: 200, body: { data: [] } }]]);
   assert.equal(words(await check("stripe", get, denied)), "the key cannot read subscriptions, payment intents — give it those Read permissions");
   assert.equal(words(await check("stripe", get, stub([[/stripe/, { status: 401, body: { error: { message: "Invalid API Key provided: rk_test_SECRET" } } }]]))), "rejected (HTTP 401)");
   assert.equal(words(await check("stripe", get, timeoutErr)), "timed out after 8 s");

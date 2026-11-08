@@ -22,6 +22,7 @@
 import type { Pool } from "pg";
 import { extractPaypalCapture } from "./paypalCapture.ts";
 import { broadcastChatEvent } from "./chatEventDelivery.ts";
+import { tipCardIdentity } from "./tipCardIdentity.ts";
 import { createPaymentEventsServer } from "./paymentEventsServer.ts";
 import { moneyCredits, type MoneyCredits } from "./coinsServer.ts";
 import { pointsOrderKey } from "./paypalPointsOrder.ts";
@@ -240,35 +241,20 @@ export function createPaypalWebhookHandlers(deps: { pool: Pool; getChatIdentity?
       );
     }
 
-    // Donor label from the returned display_name, falling back to
-    // getChatIdentity's username when blank — never from the PayPal payload.
-    // Colour and style come from getChatIdentity for EVERY signed-in,
-    // non-anonymous donor (app/api/billing/webhook/route.ts does the same):
-    // gating the lookup on a blank name would send every named tipper out unstyled.
-    let donor = row.display_name;
-    let usernameColor: string | null = null;
-    let usernameStyle: object | null = null;
-    if (!row.anonymous && row.matrix_id) {
-      const identity = await getChatIdentity(row.matrix_id);
-      donor = donor || identity.username;
-      usernameColor = identity.usernameColor;
-      usernameStyle = identity.usernameStyle;
-    }
+    // The card wears the donor's account only under the account's own name — a typed name is a
+    // plain card (tipCardIdentity.ts, ADR 0145). The label is never from the PayPal payload.
+    const identity = !row.anonymous && row.matrix_id ? await getChatIdentity(row.matrix_id) : null;
 
     await broadcastChatEvent({
       kind: "donation",
       // /chat/event dedups on this — a redelivered PAYMENT.CAPTURE.COMPLETED
       // never re-celebrates (the UPDATE above already returned 0 rows for it).
       spendId: `donation:paypal:${cap.captureId}`,
-      donor: row.anonymous ? "Anonymous" : donor || "Anonymous",
-      donorMatrixId: row.anonymous ? null : row.matrix_id,
-      anonymous: row.anonymous,
+      ...tipCardIdentity({ anonymous: row.anonymous, matrixId: row.matrix_id, shownName: row.display_name, identity }),
       amount: cents,
       currency: cap.currency.toLowerCase(),
       message: row.message,
       netUsd: cap.netUsd, // already net of paypal_fee AND platform_fees[] — never capped, never recomputed
-      usernameColor,
-      usernameStyle,
     });
   }
 

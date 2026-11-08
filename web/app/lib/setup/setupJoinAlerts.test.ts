@@ -11,7 +11,8 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateCommunityStep, joinChoice, joinWords, SIGNUP_SWITCH, validateAlertTopics, alertsSet, alertWords } from "./setupValidate.ts";
-import { ADMIN_SECTIONS, KEY_GROUPS } from "../../features/instance/adminLayout.ts";
+import { DEFAULT_SETUP_CHANNELS } from "../community/setupChannels.ts";
+import { ADMIN_SECTIONS, KEY_GROUPS, SUBS } from "../../features/instance/adminLayout.ts";
 import { INSTANCE_KEYS } from "../instanceSchema.generated.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,8 +21,8 @@ const wizard = readFileSync(join(here, "../../features/setup/SetupWizard.tsx"), 
 const render = readFileSync(join(here, "../../../../install/matrix/render.sh"), "utf8");
 
 test("who can join: both answers are needed, and nothing else is one", () => {
-  assert.deepEqual(validateCommunityStep({ federation: false, registration: "open" }), { ok: true, federation: false, registration: "open" });
-  assert.deepEqual(validateCommunityStep({ federation: true, registration: "closed" }), { ok: true, federation: true, registration: "closed" });
+  assert.deepEqual(validateCommunityStep({ federation: false, registration: "open" }), { ok: true, federation: false, registration: "open", channels: [...DEFAULT_SETUP_CHANNELS] });
+  assert.deepEqual(validateCommunityStep({ federation: true, registration: "closed" }), { ok: true, federation: true, registration: "closed", channels: [...DEFAULT_SETUP_CHANNELS] });
   assert.equal(validateCommunityStep({ federation: false }).ok, false, "the question is not optional");
   assert.equal(validateCommunityStep({ federation: false, registration: "invite" }).ok, false);
   assert.equal(validateCommunityStep({ registration: "open" }).ok, false, "federation still needed");
@@ -44,8 +45,10 @@ test("the switch the Finish page names is where the Admin Panel really shows it,
   assert.equal(SIGNUP_SWITCH.label, e.label);
   const group = KEY_GROUPS.find((g) => g.keys.includes("matrix.registration"));
   assert.ok(group, "the key is on an Admin Panel page");
+  // The place is the page the card is on (Site › Community), as the rail names it.
   const section = ADMIN_SECTIONS.find((s) => s.key === group.section)!.label;
-  assert.equal(SIGNUP_SWITCH.place, `Admin Panel → ${section} → ${group.title}`);
+  const page = SUBS[group.section].find((x) => x.key === group.sub)!.label;
+  assert.equal(SIGNUP_SWITCH.place, `Admin Panel → ${section} → ${page}`);
 });
 
 test("alert topics: optional, one or both, real addresses, never the same one twice", () => {
@@ -75,10 +78,18 @@ test("whether alerts are set comes from stream-api's own status; the words say a
   assert.deepEqual(alertsSet({ "ntfy.wakeUrl": { display: null } }), { wake: false, quiet: false });
   assert.match(alertWords({ wake: false, quiet: false }), /Important problems always show in the Admin Panel \(Doctor\); alerts pushed to your phone are optional/);
   assert.match(alertWords({ wake: true, quiet: true }), /Phone alerts are on/);
+  // The topics carry the server's own alerts too (a failed backup or update): the Finish page says so.
+  for (const saved of [{ wake: true, quiet: true }, { wake: true, quiet: false }]) {
+    assert.match(alertWords(saved), /The server's own alerts \(a failed backup or update, low disk\) go there too\.$/);
+  }
+  const card = KEY_GROUPS.find((g) => g.keys.includes("ntfy.wakeUrl"))!;
+  assert.match(card.blurb ?? "", /the server's own \(a failed backup or update, low disk\) included/);
   assert.match(alertWords(null), /could not be checked/);
-  // The place the words name is where the Admin Panel shows the two topics; the Doctor is a section.
+  // The place the words name is the card that shows the two topics, on its page (a card is not a
+  // page: "<Section> → <Page>, card <title>"); the Doctor is a section.
   const group = KEY_GROUPS.find((g) => g.keys.includes("ntfy.wakeUrl") && g.keys.includes("ntfy.quietUrl"))!;
-  assert.ok(alertWords(null).includes(`Admin Panel → ${ADMIN_SECTIONS.find((s) => s.key === group.section)!.label} → ${group.title}`));
+  const page = SUBS[group.section].find((s) => s.key === group.sub)!.label;
+  assert.ok(alertWords(null).includes(`Admin Panel → ${ADMIN_SECTIONS.find((s) => s.key === group.section)!.label} → ${page}, card ${group.title}`));
   assert.ok(ADMIN_SECTIONS.some((s) => s.label === "Doctor"));
   // The topics are stream-api's keys alone, which is why web asks stream-api rather than its own layer.
   for (const k of ["ntfy.wakeUrl", "ntfy.quietUrl"]) assert.deepEqual(INSTANCE_KEYS.find((e) => e.key === k)?.packages, ["stream-api"], k);
@@ -111,7 +122,7 @@ test("the server: the Community step saves the answer and will not move on witho
 
 test("the page: Community asks and sends the answer; Finish shows who can join (also once done) and the alerts", () => {
   assert.match(wizard, /<legend className="px-1 text-xs font-medium text-body">Who can join\?<\/legend>/);
-  assert.match(wizard, /call\("\/api\/setup\/community", \{ federation, registration \}\)/);
+  assert.match(wizard, /call\("\/api\/setup\/community", \{ federation, registration, channels \}\)/);
   assert.match(wizard, /disabled=\{state !== "done" \|\| !registration\}/, "Next waits for an answer");
   assert.equal((wizard.match(/<SignupLine signup=\{signup\} \/>/g) ?? []).length, 2, "on the form and on 'Your site is ready'");
   assert.match(wizard, /alerts: \{ wake, quiet: quietTopic \}/);

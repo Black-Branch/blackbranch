@@ -86,7 +86,7 @@ function TileName({ style, color, name, label, replay }: { style: EquippedStyle;
           fontFamily: "var(--chat-username-font, inherit)",
           fontWeight: "var(--chat-username-weight, 600)" as React.CSSProperties["fontWeight"],
           textShadow: "var(--chat-shadow)",
-          ...usernameStyleCSS(style, color),
+          ...usernameStyleCSS(style, color, name),
         }}
       >
         {name}

@@ -110,7 +110,8 @@ test("ChatSidebar opens the card THROUGH the gate and seeds it", () => {
 
 test("ChatMessage prefetches at pointer-down on the username", () => {
   const src = read("features", "chat", "ChatMessage.tsx");
-  assert.match(src, /onPointerDown=\{onUsernameClick \? \(\) => \{ void prefetchUserCard\(msg\); \} : undefined\}/,
+  // A tip that wears no account opens no card for a viewer (ADR 0145), so it prefetches none.
+  assert.match(src, /onPointerDown=\{openCard && !plainTip \? \(\) => \{ void prefetchUserCard\(msg\); \} : undefined\}/,
     "the pointerdown prefetch is gone — the press→click gap head start with it");
   // vacuity anchor — the END of the file, so a truncated read cannot pass
   assert.match(src, /<\/div>\s*\);\s*\}\);\s*$/, "vacuity anchor: ChatMessage's real tail (memo-wrapped)");

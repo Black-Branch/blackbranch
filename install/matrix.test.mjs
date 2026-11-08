@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { renderHome, runRender, fakeHome } from "./scratch-home.mjs";
 import { loadConfig, countLiterals } from "../tools/check-owner-literals.mjs";
 import { clientWellKnown } from "../web/app/lib/matrixWellKnown.ts";
+import { FORUM_ORDER, GENERAL_ORDER, joinedViaHub } from "./matrix/community-rooms.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
@@ -36,7 +37,7 @@ const files = (home) => ({
 });
 function rendered(extra = "", federation = null) {
   const home = renderHome(extra);
-  if (federation) { mkdirSync(path.join(home, "state")); writeFileSync(path.join(home, "state/federation"), `${federation}\n`); }
+  if (federation) { mkdirSync(path.join(home, "state"), { recursive: true }); writeFileSync(path.join(home, "state/federation"), `${federation}\n`); }
   const r = runRender(home);
   assert.equal(r.status, 0, r.stderr);
   return { home, env: envOf(home), out: r.stdout, ...files(home) };
@@ -47,6 +48,7 @@ test("vacuity: the generator and the bootstrap are the files these tests read", 
   assert.match(read("matrix/render.sh"), /^mx_render_homeserver\(\) \{$/m);
   assert.match(read("matrix/render.sh"), /^mx_render_mas\(\) \{$/m);
   assert.match(read("matrix/render.sh"), /^mx_caddy_routes\(\) \{$/m);
+  assert.match(read("matrix/render.sh"), /^mx_render_appservice_community\(\) \{$/m);
   assert.match(read("matrix/bootstrap.mjs"), /const HUB_ALIAS = "community-hub";/);
 });
 
@@ -66,7 +68,7 @@ test("render writes Synapse's and MAS's config from .env alone — and no owner 
     }
     assert.match(hs, /\nmatrix_authentication_service:\n {2}enabled: true\n {2}endpoint: "http:\/\/mas:8080\/"\n {2}secret: "([0-9a-f]+)"\n/);
     assert.equal(hs.match(/\nmatrix_authentication_service:[\s\S]*?secret: "([0-9a-f]+)"/)[1], env.MAS_SYNAPSE_SECRET);
-    assert.match(hs, /\nretention:\n {2}enabled: true\n {2}default_policy:\n {4}max_lifetime: 180d\n {2}allowed_lifetime_min: 1d\n {2}allowed_lifetime_max: 1y\n/);
+    assert.match(hs, /\nretention:\n {2}enabled: true\n {2}default_policy:\n {4}max_lifetime: 365d\n {2}allowed_lifetime_min: 1d\n {2}allowed_lifetime_max: 365d\n/, "the schema's default cap (retention.test.mjs holds both shapes)");
     assert.match(hs, /^default_room_version: "12"$/m);
     assert.match(hs, /^serve_server_wellknown: false$/m);
     assert.match(hs, /\n {4}x_forwarded: true\n/, "Synapse sits behind the router");
@@ -86,13 +88,94 @@ test("render writes Synapse's and MAS's config from .env alone — and no owner 
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test("the public room list: exactly the bootstrap's two aliases may be listed, nothing else", () => {
+// The community service account's registration, read flat (this suite has no YAML parser): the
+// whole body must be exactly this shape, so a key added, dropped or reordered fails the read.
+const REGISTRATION = /^id: community\nurl: null\nas_token: "([0-9a-f]{64})"\nhs_token: "([0-9a-f]{64})"\nsender_localpart: "([^"\n]+)"\nrate_limited: (true|false)\nnamespaces:\n {2}users:\n {4}- exclusive: true\n {6}regex: "((?:[^"\\\n]|\\.)*)"\n {2}rooms: \[\]\n {2}aliases: \[\]$/;
+function readRegistration(home) {
+  const text = readFileSync(path.join(home, "rendered/synapse/appservice-community.yaml"), "utf8");
+  const body = text.split("\n").filter((l) => l && !l.startsWith("#")).join("\n");
+  const m = body.match(REGISTRATION);
+  assert.ok(m, `the registration does not parse:\n${body}`);
+  return { text, asToken: m[1], hsToken: m[2], senderLocalpart: m[3], rateLimited: m[4] === "true", url: null,
+    userRegex: m[5].replace(/\\(.)/g, "$1") };
+}
+
+test("render writes the community appservice registration", () => {
+  const { home, env, hs } = rendered();
+  try {
+    const reg = readRegistration(home);
+    assert.equal(reg.senderLocalpart, "blackbranch");
+    assert.equal(reg.rateLimited, false);
+    assert.equal(reg.url, null);
+    assert.equal(reg.userRegex, "^@blackbranch:example\\.test$");
+    const ns = new RegExp(reg.userRegex);
+    assert.ok(ns.test("@blackbranch:example.test"), "the namespace holds the service account");
+    for (const other of ["@blackbranchx:example.test", "@blackbranch:exampleXtest", "@blackbranch:example.test.evil", "@x@blackbranch:example.test"]) {
+      assert.ok(!ns.test(other), `the namespace also holds ${other}`);
+    }
+    assert.equal(reg.asToken, env.COMMUNITY_AS_TOKEN); assert.equal(reg.hsToken, env.COMMUNITY_HS_TOKEN);
+    assert.notEqual(reg.asToken, reg.hsToken);
+    assert.equal(statSync(path.join(home, "rendered/synapse/appservice-community.yaml")).mode & 0o777, 0o600, "it holds two secrets");
+    assert.match(hs, /\napp_service_config_files:\n {2}- "\/config\/appservice-community\.yaml"\n/);
+    // Belt and braces beside the exclusive namespace (spike 0.1 P9): MAS's own sign-up policy bans the name.
+    const mas = readFileSync(path.join(home, "rendered/mas/config.yaml"), "utf8");
+    assert.match(mas, /\npolicy:\n {2}data:\n {4}admin_clients:\n {6}- "[0-9A-Z]{26}"\n {4}registration:\n {6}banned_usernames:\n {8}literals:\n {10}- "blackbranch"\n/);
+    assert.equal(countLiterals(reg.text, loadConfig()), 0, "no owner literal in the registration");
+    // A second render changes nothing.
+    const again = runRender(home);
+    assert.equal(again.status, 0, again.stderr);
+    assert.match(again.stdout, /appservice-community\.yaml: unchanged/);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("the community service account's name comes from COMMUNITY_LOCALPART; one that is not a Matrix user name, or a missing token, renders nothing", () => {
+  const { home } = rendered("COMMUNITY_LOCALPART=community.bot\n");
+  try {
+    const reg = readRegistration(home);
+    assert.equal(reg.senderLocalpart, "community.bot");
+    assert.equal(reg.userRegex, "^@community\\.bot:example\\.test$", "a dot in the name is a dot, not any character");
+    assert.ok(!new RegExp(reg.userRegex).test("@communityXbot:example.test"));
+    const before = { ...files(home), reg: reg.text };
+    const env0 = readFileSync(path.join(home, ".env"), "utf8");
+    for (const [what, line] of Object.entries({
+      "an upper-case name": "COMMUNITY_LOCALPART=Blackbranch", "a name with a colon": "COMMUNITY_LOCALPART=a:b",
+      "a regex in the name": "COMMUNITY_LOCALPART=.*", "no token": "COMMUNITY_AS_TOKEN=", "a short token": "COMMUNITY_HS_TOKEN=abcd",
+    })) {
+      const key = line.split("=")[0];
+      writeFileSync(path.join(home, ".env"), env0.replace(new RegExp(`^${key}=.*$`, "m"), line));
+      const r = runRender(home);
+      assert.notEqual(r.status, 0, `${what}: render succeeded`);
+      assert.deepEqual({ ...files(home), reg: readRegistration(home).text }, before, `${what}: a failed render changed a file`);
+    }
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// The service account publishes the rooms it runs. The bootstrap's three rooms stay listed as
+// before: the bootstrap makes them as the streamer, and Synapse checks these rules for a server
+// admin too (DirectoryHandler.edit_published_room_list has no admin bypass in 1.162), so dropping
+// their aliases would leave a new install's rooms unlisted and its rooms check failing every start.
+test("directory rule allows the service account and the bootstrap's three rooms, nothing else", () => {
   const home = renderHome("BB_TLS_MODE=internal\n");
   try {
     const r = runRender(home); assert.equal(r.status, 0, r.stderr);
     const hs = readFileSync(path.join(home, "rendered/synapse/homeserver.yaml"), "utf8");
-    assert.match(hs, /\nroom_list_publication_rules:\n {2}- alias: "#community-hub:example\.test"\n {4}action: allow\n {2}- alias: "#general:example\.test"\n {4}action: allow\n {2}- alias: "#forum:example\.test"\n {4}action: allow\n {2}- action: deny\n/);
+    assert.match(hs, /\nroom_list_publication_rules:\n {2}- user_id: "@blackbranch:example\.test"\n {4}action: allow\n {2}- alias: "#community-hub:example\.test"\n {4}action: allow\n {2}- alias: "#general:example\.test"\n {4}action: allow\n {2}- alias: "#forum:example\.test"\n {4}action: allow\n {2}- action: deny\n(?! )/, "the deny is the last rule");
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("the generator without the community inputs (the maintainers' disposable install) lists no registration and no service account", () => {
+  const out = spawnSync("bash", ["-c", `. "$1"; mx_render_homeserver`, "_", path.join(here, "matrix/render.sh")], { encoding: "utf8", env: {
+    PATH: "/usr/bin:/bin", MX_SERVER_NAME: "example.test", MX_PUBLIC_BASEURL: "https://matrix.example.test/", MX_CONFIG_DIR: "/data", MX_DATA_DIR: "/data",
+    MX_DB_HOST: "db", MX_DB_NAME: "synapse", MX_DB_USER: "u", MX_DB_PASSWORD: "p", MX_REGISTRATION_SECRET: "a", MX_MACAROON_SECRET: "b", MX_FORM_SECRET: "c",
+    MX_MAS_ENDPOINT: "http://mas:8080/", MX_MAS_SECRET: "d", MX_FEDERATION: "off", MX_RETENTION_CAP_DAYS: "365" } });
+  assert.equal(out.status, 0, out.stderr);
+  assert.doesNotMatch(out.stdout, /app_service_config_files|user_id:/);
+  assert.match(out.stdout, /\nroom_list_publication_rules:\n {2}- alias: "#community-hub:example\.test"\n/);
+  const half = spawnSync("bash", ["-c", `. "$1"; MX_COMMUNITY_LOCALPART=blackbranch mx_render_homeserver`, "_", path.join(here, "matrix/render.sh")], { encoding: "utf8", env: {
+    PATH: "/usr/bin:/bin", MX_SERVER_NAME: "example.test", MX_PUBLIC_BASEURL: "https://matrix.example.test/", MX_CONFIG_DIR: "/data", MX_DATA_DIR: "/data",
+    MX_DB_HOST: "db", MX_DB_NAME: "synapse", MX_DB_USER: "u", MX_DB_PASSWORD: "p", MX_REGISTRATION_SECRET: "a", MX_MACAROON_SECRET: "b", MX_FORM_SECRET: "c",
+    MX_MAS_ENDPOINT: "http://mas:8080/", MX_MAS_SECRET: "d", MX_FEDERATION: "off", MX_RETENTION_CAP_DAYS: "365" } });
+  assert.notEqual(half.status, 0, "the name without the registration's path is refused, not half-rendered");
 });
 
 test("federation OFF: no federation listener, an empty whitelist, the router answers 404 for other servers", () => {
@@ -318,7 +401,7 @@ test("the router's config is in its own folder: render writes rendered/caddy/Cad
     // recreates it with the new mount — and `up` removes it then.
     assert.ok(existsSync(path.join(home, "rendered/Caddyfile")));
     const up = read("blackbranch").match(/\ncmd_up\(\) \{\n([\s\S]*?)\n\}\n/)?.[1] ?? "";
-    assert.match(up, /\n {2}info "all services healthy"\n(?: {2}#[^\n]*\n)* {2}matrix_ensure "\$UP_AFTER" \|\| true$/, "the whole of cmd_up was read");
+    assert.match(up, /\n {2}info "all services healthy"\n(?: {2}#[^\n]*\n)* {2}matrix_ensure "\$UP_AFTER" \|\| true\n {2}if community_reconciler_on; then community_reconcile_start apply >\/dev\/null \|\| true; fi$/, "the whole of cmd_up was read");
     assert.match(up, /\n {2}docker_step "the services did not start" compose up -d\n(?: {2}[^\n]*\n)*? {2}rm -f "\$BB_HOME\/rendered\/Caddyfile"\n/, "the old router file goes after everything is started on the new mount");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
@@ -369,6 +452,10 @@ function fakeHomeserver(server = "example.test", owner = `@admin:${server}`, adm
     // Membership: the owner reads a room's state only while joined (a planted room starts without them).
     if ((m = u.match(/^\/join\/(.+)$/))) { rooms.get(m[1])?.members.add(owner); return send(200, { room_id: m[1] }); }
     if ((m = u.match(/^\/rooms\/([^/]+)\/leave$/))) { rooms.get(m[1])?.members.delete(owner); left.push(m[1]); return send(200, {}); }
+    if ((m = u.match(/^\/rooms\/([^/]+)\/invite$/)) && req.method === "POST") {
+      const room = rooms.get(m[1]); if (!room?.members.has(owner)) return send(403, { errcode: "M_FORBIDDEN" });
+      room.state.set(`m.room.member\u0000${json.user_id}`, { membership: "invite" }); writes.push("invite"); return send(200, {});
+    }
     // The whole state as events — the create event's SENDER is only here, never in its content.
     if ((m = u.match(/^\/rooms\/([^/]+)\/state$/)) && req.method === "GET") {
       const room = rooms.get(m[1]); if (!room?.members.has(owner)) return send(403, { errcode: "M_FORBIDDEN" });
@@ -419,15 +506,22 @@ test("bootstrap: creates the space, #general and #forum as the owner, idempotent
     assert.ok(forum, "a forum room was made");
     assert.equal(forum.body.room_alias_name, "forum"); assert.equal(forum.body.room_version, "12"); assert.equal(forum.body.visibility, "public");
     assert.deepEqual(forum.state.get("app.blackbranch.room_type\u0000"), { type: "forum" });
-    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.forum}`), { via: ["example.test"] });
+    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.forum}`), { via: ["example.test"], order: FORUM_ORDER });
     assert.deepEqual(forum.state.get(`m.space.parent\u0000${ids.hub}`), { via: ["example.test"] });
     assert.equal(hub.body.room_version, "12"); assert.equal(general.body.room_version, "12");
     assert.deepEqual(hub.body.creation_content, { type: "m.space" });
     assert.equal(hub.body.name, "Example Stream"); assert.equal(hub.body.room_alias_name, "community-hub");
     assert.equal(general.body.room_alias_name, "general"); assert.equal(general.body.visibility, "public");
-    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.general}`), { via: ["example.test"] });
+    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.general}`), { via: ["example.test"], order: GENERAL_ORDER });
     assert.deepEqual(general.state.get(`m.space.parent\u0000${ids.hub}`), { via: ["example.test"] });
     assert.deepEqual(general.state.get("m.room.retention\u0000"), { max_lifetime: 30 * 24 * 3600 * 1000 });
+    // bootstrap_writes_what_the_core_keeps: everyone in the space may join #general and #forum, the rule
+    // the community reconciler gives a channel anyone may see (so its first run puts nothing back).
+    for (const room of [general, forum]) {
+      assert.deepEqual(room.state.get("m.room.join_rules\u0000"), { join_rule: "restricted", allow: [{ type: "m.room_membership", room_id: ids.hub }] });
+    }
+    assert.deepEqual(joinedViaHub(ids.hub), general.state.get("m.room.join_rules\u0000"), "the shared shape is the one written");
+    assert.ok(GENERAL_ORDER < FORUM_ORDER && FORUM_ORDER < "a0", "both sort before the panel's first key");
     // Run again with the ids recorded, and again with none (found by alias): nothing new.
     const before = writes.length;
     const second = await bootstrap(base, { MX_STORED_HUB: ids.hub, MX_STORED_GENERAL: ids.general });
@@ -453,6 +547,73 @@ test("bootstrap: creates the space, #general and #forum as the owner, idempotent
     assert.equal((await bootstrap(base, {}, "")).code, 1);
     assert.equal((await bootstrap(base, {}, "wrong")).code, 1);
     assert.equal(writes.length, n0);
+  } finally { srv.close(); }
+});
+
+test("bootstrap invites the community account into the three rooms and grants it 100, once; the rooms stay the owner's", async () => {
+  const { srv, rooms, writes } = fakeHomeserver();
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const SVC = "@blackbranch:example.test";
+  try {
+    const first = await bootstrap(base, { MX_COMMUNITY_USER: SVC });
+    assert.equal(first.code, 0, first.err);
+    const ids = JSON.parse(first.out);
+    for (const [label, rid] of [["community space", ids.hub], ["#general", ids.general], ["#forum", ids.forum]]) {
+      const room = rooms.get(rid);
+      assert.equal(room.state.get("m.room.power_levels\u0000").users[SVC], 100, `${label}: 100`);
+      assert.deepEqual(room.state.get(`m.room.member\u0000${SVC}`), { membership: "invite" }, `${label}: invited`);
+      assert.equal(room.creator, "@admin:example.test", `${label}: made by the owner`);
+      assert.ok(ids.created.includes(`community account invited to ${label}`), JSON.stringify(ids.created));
+    }
+    // Restart / retry: a second run changes nothing (granted and invited already).
+    const before = writes.length;
+    const again = await bootstrap(base, { MX_COMMUNITY_USER: SVC, MX_STORED_HUB: ids.hub, MX_STORED_GENERAL: ids.general });
+    assert.equal(again.code, 0, again.err);
+    assert.deepEqual(JSON.parse(again.out).created, []);
+    assert.equal(writes.length, before);
+    // Joined since (its first reconcile run): never invited again.
+    rooms.get(ids.general).state.set(`m.room.member\u0000${SVC}`, { membership: "join" });
+    assert.deepEqual(JSON.parse((await bootstrap(base, { MX_COMMUNITY_USER: SVC })).out).created, []);
+    // An account of another server is refused before anything is written.
+    const n0 = writes.length;
+    const bad = await bootstrap(base, { MX_COMMUNITY_USER: "@blackbranch:elsewhere.test" });
+    assert.equal(bad.code, 1); assert.match(bad.err, /not an account on example\.test/); assert.equal(writes.length, n0);
+  } finally { srv.close(); }
+});
+
+test("the bootstrap hands the community account over only when its name is this install's; the rooms check looks for it", () => {
+  const bb = read("blackbranch");
+  assert.match(bb, /\n {2}if community_registered; then service=\$\(community_user_id\); fi\n/);
+  assert.match(bb, / -e MX_COMMUNITY_USER="\$service" \\\n/);
+  assert.match(bb, /state_key = :'svc'\n {8}AND membership IN \('join', 'invite'\) AND room_id IN \(:'hub', :'gen', \(SELECT room_id FROM f\)\)\) = 3\)\n/);
+  assert.match(bb, /-v svc="\$\(if community_registered; then community_user_id; fi\)"\n/);
+});
+
+test("bootstrap gives #general and #forum their places in the space; a link made before that gets its order, once", async () => {
+  const { srv, rooms, writes } = fakeHomeserver();
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const ids = JSON.parse((await bootstrap(base)).out);
+    const hub = rooms.get(ids.hub);
+    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.general}`), { via: ["example.test"], order: GENERAL_ORDER });
+    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.forum}`), { via: ["example.test"], order: FORUM_ORDER });
+    // An install made before: links with a via and no order.
+    hub.state.set(`m.space.child\u0000${ids.general}`, { via: ["example.test"] });
+    hub.state.set(`m.space.child\u0000${ids.forum}`, { via: ["example.test"] });
+    const again = await bootstrap(base, { MX_STORED_HUB: ids.hub, MX_STORED_GENERAL: ids.general });
+    assert.equal(again.code, 0, again.err);
+    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.general}`), { via: ["example.test"], order: GENERAL_ORDER });
+    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.forum}`), { via: ["example.test"], order: FORUM_ORDER });
+    // Retry: nothing more.
+    const n = writes.length;
+    assert.deepEqual(JSON.parse((await bootstrap(base)).out).created, []);
+    assert.equal(writes.length, n);
+    // Restart after the panel moved a room (the reconciler wrote its own order): the bootstrap leaves it.
+    hub.state.set(`m.space.child\u0000${ids.forum}`, { via: ["example.test"], order: "a5" });
+    assert.deepEqual(JSON.parse((await bootstrap(base)).out).created, []);
+    assert.deepEqual(hub.state.get(`m.space.child\u0000${ids.forum}`), { via: ["example.test"], order: "a5" }, "a place the panel set is the panel's");
   } finally { srv.close(); }
 });
 
@@ -655,6 +816,24 @@ test("matrix ensure: something missing — the bootstrap makes it; a plain start
     // The operator's own way to the same: bootstrap --recreate.
     const by = h.go({}, "matrix", "bootstrap", "--recreate");
     assert.equal(by.status, 0, by.stderr); assert.match(by.calls, /-e MX_RECREATE=1 /);
+  } finally { rmSync(h.home, { recursive: true, force: true }); }
+});
+
+test("matrix ensure: new room ids are recorded, and stream-api is asked to re-read each one (the Admin Panel shows them at once)", () => {
+  const h = roomsHome();
+  try {
+    // A restore brought an older record: the bootstrap's rooms differ from it.
+    writeFileSync(path.join(h.fake, "cfg/matrix.rooms.hub"), "!old:example.test\n");
+    h.state("missing");
+    const r = h.go({}, "matrix", "ensure", "--after-restore");
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /recorded matrix\.rooms\.hub/);
+    const calls = r.calls.split("\n");
+    const write = calls.findIndex((c) => c.includes("-v k=matrix.rooms.hub "));
+    const reload = calls.findIndex((c) => c.startsWith("compose exec -T stream-api node -e") && c.endsWith(" matrix.rooms.hub"));
+    assert.ok(write >= 0, "the hub was recorded");
+    assert.ok(reload > write, "stream-api was asked to re-read the hub after it was recorded");
+    assert.doesNotMatch(r.calls, /-v k=matrix\.rooms\.general /, "an unchanged room is not written");
   } finally { rmSync(h.home, { recursive: true, force: true }); }
 });
 

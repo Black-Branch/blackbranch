@@ -125,6 +125,13 @@ test("the chat window surfaces a dropped socket too", () => {
   // the hook's `connected` — gated on having been up once, so a fresh load's
   // DB-fill-before-socket-open race cannot flash the pill (see chatWindow.test).
   const s = readWhole(WINDOW, WINDOW_TAIL);
-  assert.match(s, /\{everConnected && !connected &&[\s\S]{0,400}?Reconnecting to chat/);
-  assert.match(s, /role="status"/, "a blip is context, not an interruption — never role=alert");
+  assert.match(s, /\{everConnected && !connected && <StatusPill>Reconnecting to chat…<\/StatusPill>\}/);
+  // The pill itself is the one shared StatusPill (the community's reconnect line wears it too).
+  const pill = readWhole("app/components/StatusPill.tsx", /<\/div>\s*\)\s*;\s*}\s*$/);
+  assert.match(pill, /role="status"/, "a blip is context, not an interruption — never role=alert");
+  assert.match(pill, /absolute top-2 left-1\/2 -translate-x-1\/2/, "centred at the top of its panel, as live chat always had it");
+  // Seen at 390 px (look/01-sending.mjs): over a full timeline a 7 %-white pill let the rows'
+  // text show through it, and "Reconnecting to the community…" wrapped onto two lines.
+  assert.match(pill, /\bbg-raised\/95\b/, "the pill is opaque, like PausedPill — rows must not show through it");
+  assert.match(pill, /\bwhitespace-nowrap\b/, "one line at 390 px");
 });

@@ -38,9 +38,12 @@ function reasonOf(r: ActionRow): string {
  *  install has not set up, is left out: there was nothing to reach.
  *  @test-only used in this file (failedPlatforms, the status line); the test pins each case. */
 export function outcomesOf(rows: ActionRow[]): Outcome[] {
+  // A ban's purge writes into the ban's batch: on a platform with an action row, that row answers.
+  const acted = new Set(rows.filter((r) => r.action !== "purge").map((r) => r.platform.toLowerCase()));
   const newest = new Map<string, ActionRow>();
   for (const r of rows) {
     const p = r.platform.toLowerCase();
+    if (r.action === "purge" && acted.has(p)) continue;
     const seen = newest.get(p);
     if (!seen || r.id > seen.id) newest.set(p, r);
   }
@@ -66,6 +69,49 @@ export function propagationLine(outcomes: Outcome[]): string {
     if (o.state === "skipped") return `${name} – (${o.reason})`;
     return `${name} ✗ (${o.reason})`;
   }).join(" · ");
+}
+
+/** A purge row's answer, in a few words; null when there was nothing of theirs there. */
+function removedOn(r: ActionRow): string | null {
+  const name = platformLabel(r.platform);
+  const d = r.detail ?? "";
+  if (d === "no_messages" || d === "unsupported" || /_unset$/.test(d)) return null;
+  // Reader-captured YouTube lines carry ids the Data API cannot delete (liveChatMessages.delete
+  // takes only its own "LCC." ids); a liveChatBans ban stops new messages and removes none.
+  if (d.startsWith("no_api_message_ids")) return `${name} can't remove their earlier messages from here`;
+  const m = /^deleted (\d+)\/(\d+)/.exec(d);
+  if (m) return m[1] === m[2] ? `${name} ${m[1]} removed` : `${name} ${m[1]} of ${m[2]} removed`;
+  return r.ok ? null : `${name} not removed (${reasonOf(r)})`;
+}
+
+/**
+ * What a ban's purge removed, one part per place: "Messages: 5 removed here · Twitch clears them
+ * with the ban · Kick 2 removed · YouTube can't remove their earlier messages from here". Twitch
+ * has no purge row with a ban (modPurge.ts runPurge): a Twitch ban or timeout clears the person's
+ * chat there, so it is named when the ban landed. null when the ban purged nothing (switch off).
+ * @test-only the status line below (fill) calls it; the test pins each place's words.
+ */
+export function removalLine(
+  rows: ActionRow[], purged: number | null | undefined, opts: { clickedSkipped?: boolean; purgeFailed?: boolean } = {},
+): string | null {
+  if (opts.purgeFailed) return "Messages: couldn't be removed. Purge them by hand.";
+  if (purged == null) return null;
+  const parts = [purged > 0 ? `${purged} removed here` : "none to remove here"];
+  if (opts.clickedSkipped) parts.push("the clicked message could not be removed");
+  const newest = new Map<string, ActionRow>();
+  for (const r of rows) {
+    const key = `${r.action === "purge" ? "purge" : "act"}:${r.platform.toLowerCase()}`;
+    const seen = newest.get(key);
+    if (!seen || r.id > seen.id) newest.set(key, r);
+  }
+  const twitch = newest.get("act:twitch");
+  if (twitch?.ok && !newest.has("purge:twitch")) parts.push(`Twitch clears them with the ${twitch.action === "timeout" ? "timeout" : "ban"}`);
+  for (const p of ORDER) {
+    const r = newest.get(`purge:${p}`);
+    const said = r ? removedOn(r) : null;
+    if (said) parts.push(said);
+  }
+  return `Messages: ${parts.join(" · ")}`;
 }
 
 /** The platforms an action FAILED on (✗) — what a history or Bans row marks. */
@@ -102,8 +148,12 @@ export async function failedByBatch(q: RowQuery, batchIds: string[]): Promise<Ma
 
 // ─── Reading an action's outcome back, in the browser ────────────────────────
 
-/** What the ban route answers about the fan-out it started. */
-export type FanOut = { batchId?: string; platforms?: string[] };
+/** What the ban route answers about the fan-out it started; `purged` = the site lines its purge
+ *  removed (null or absent: no purge). */
+export type FanOut = { batchId?: string; platforms?: string[]; purged?: number | null; clickedSkipped?: boolean; purgeFailed?: boolean };
+
+/** The platforms a ban's purge writes a row for (Twitch is left to the ban — modPurge.ts runPurge). */
+const PURGE_ROW_PLATFORMS = ["kick", "youtube"];
 
 async function batchRows(batchId: string): Promise<ActionRow[] | null> {
   try {
@@ -117,26 +167,33 @@ async function batchRows(batchId: string): Promise<ActionRow[] | null> {
 }
 
 /**
- * Poll the batch until every platform the route named has answered, or `tries` run out (the
- * platform calls are network calls of their own). Resolves with the outcomes so far.
- * @test-only the status line below drives it; the test pins its polling with a stubbed fetch.
+ * Poll the batch until every platform the route named has answered (and, with a purge, Kick's and
+ * YouTube's removal), or `tries` run out (the platform calls are network calls of their own).
+ * Resolves with the outcomes so far.
+ * @test-only the status line polls through the same loop (awaitRows); the test pins it with a stubbed fetch.
  */
-export async function awaitPropagation(
-  fan: FanOut, opts: { tries?: number; everyMs?: number; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<Outcome[]> {
+export async function awaitPropagation(fan: FanOut, opts: PollOpts = {}): Promise<Outcome[]> {
+  return outcomesOf(await awaitRows(fan, opts));
+}
+
+type PollOpts = { tries?: number; everyMs?: number; sleep?: (ms: number) => Promise<void> };
+
+async function awaitRows(fan: FanOut, opts: PollOpts = {}): Promise<ActionRow[]> {
   if (!fan.batchId) return [];
   const tries = opts.tries ?? 10;
   const every = opts.everyMs ?? 1000;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => { unref(setTimeout(r, ms)); }));
   const want = new Set((fan.platforms ?? []).map((p) => p.toLowerCase()));
+  const wantPurge = fan.purged == null ? [] : PURGE_ROW_PLATFORMS;
   let rows: ActionRow[] = [];
   for (let i = 0; i < tries; i++) {
     if (i > 0) await sleep(every);
     rows = (await batchRows(fan.batchId)) ?? rows;
-    const have = new Set(rows.map((r) => r.platform.toLowerCase()));
-    if (want.size > 0 && [...want].every((p) => have.has(p))) break;
+    const have = new Set(rows.filter((r) => r.action !== "purge").map((r) => r.platform.toLowerCase()));
+    const purgedOn = new Set(rows.filter((r) => r.action === "purge").map((r) => r.platform.toLowerCase()));
+    if (want.size > 0 && [...want].every((p) => have.has(p)) && wantPurge.every((p) => purgedOn.has(p))) break;
   }
-  return outcomesOf(rows);
+  return rows;
 }
 
 /** Re-run every retryable failure; resolves once the retry route has answered for each.
@@ -152,7 +209,11 @@ export async function retryFailed(outcomes: Outcome[]): Promise<void> {
 
 // ─── One status line per action, for the toast ───────────────────────────────
 
-export type StatusLine = { id: number; label: string; outcomes: Outcome[] | null; fan: FanOut };
+export type StatusLine = {
+  id: number; label: string; outcomes: Outcome[] | null; fan: FanOut;
+  /** What the ban's purge removed (removalLine); null without a purge or until read. */
+  removal: string | null;
+};
 
 const SHOW_MS = 15_000;
 
@@ -178,8 +239,10 @@ function keepFor(id: number) {
 }
 
 async function fill(id: number, fan: FanOut, tries?: number) {
-  const outcomes = await awaitPropagation(fan, { tries });
-  publish(lines.map((l) => (l.id === id ? { ...l, outcomes } : l)));
+  const rows = await awaitRows(fan, { tries });
+  const outcomes = outcomesOf(rows);
+  const removal = removalLine(rows, fan.purged, { clickedSkipped: fan.clickedSkipped === true, purgeFailed: fan.purgeFailed === true });
+  publish(lines.map((l) => (l.id === id ? { ...l, outcomes, removal } : l)));
   keepFor(id);
 }
 
@@ -187,7 +250,7 @@ async function fill(id: number, fan: FanOut, tries?: number) {
 export function trackPropagation(label: string, fan: FanOut): void {
   if (!fan.batchId) return;
   const id = nextId++;
-  publish([...lines, { id, label, outcomes: null, fan }]);
+  publish([...lines, { id, label, outcomes: null, fan, removal: null }]);
   keepFor(id);
   void fill(id, fan);
 }

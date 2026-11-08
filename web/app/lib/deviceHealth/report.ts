@@ -21,7 +21,7 @@ export type HealthReport = {
   cls: number | null;
   req: number;
   bytes: Partial<Record<Category, ByteCount>>;
-  sock: { reconnects: number };
+  sock: { reconnects: number; opens: number };
   player: PlayerReport & { video: VideoReport | null };
   decode: { type: string; supported: boolean; smooth: boolean; powerEfficient: boolean } | null;
   frames: { fps: number; costMs: number } | null;

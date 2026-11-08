@@ -2,6 +2,8 @@ import pool from "@/lib/db";
 import { requireMod, assertCanModerate } from "@/app/lib/admin";
 import { reportSubject, reportsForViewer } from "@/app/lib/modTargets";
 import { NATIVE_SQL } from "@/app/lib/nativePlatform";
+import { appendModLog } from "@/app/lib/modlog";
+import { reportResolvedEntry } from "@/app/lib/modlogActions";
 import { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -77,6 +79,7 @@ export async function POST(req: NextRequest) {
   if (!Number.isInteger(id) || id <= 0) return new Response("Bad Request", { status: 400 });
 
   // Who may close it, before anything is written.
+  let subject: string | null = null;
   if (body?.kind === "ticket") {
     // Tickets are the Admin Panel's (see GET).
     let admin: boolean;
@@ -85,7 +88,6 @@ export async function POST(req: NextRequest) {
   } else if (body?.kind === "report") {
     // Privilege ceiling on who the report is ABOUT: a mod never closes one about themselves, another
     // mod or the owner — an admin does. An unknown report names nobody (the UPDATE matches nothing).
-    let subject: string | null;
     try { subject = await reportSubject(id, (sql, params) => pool.query(sql, params)); } catch { return unavailable(); }
     if (subject) {
       const denied = await assertCanModerate(modId, subject, { selfCase: true });
@@ -103,11 +105,13 @@ export async function POST(req: NextRequest) {
       [id, modId]
     );
   } else {
-    await pool.query(
+    const { rows: closed } = await pool.query(
       `UPDATE site.reports SET status = 'resolved', resolved_at = now(), resolved_by = $2
-       WHERE id = $1 AND status = 'pending'`,
+       WHERE id = $1 AND status = 'pending' RETURNING id`,
       [id, modId]
     );
+    // Logged once, by the mod whose click closed it: a second click (or another mod's) moves nothing.
+    if (closed.length > 0 && subject) await appendModLog(reportResolvedEntry({ mod: modId, subject, reportId: id }));
   }
   return Response.json({ ok: true });
 }

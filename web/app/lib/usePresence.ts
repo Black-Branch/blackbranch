@@ -40,14 +40,19 @@ export function usePresence(): PresenceDirectory | null {
 }
 
 export function presenceOf(dir: PresenceDirectory | null, userId: string): SitePresenceRow | null {
-  return dir?.users[userId] ?? null;
+  return dir?.users?.[userId] ?? null;
 }
 
 /** What the community client knows from m.presence. lastActiveTs is derived
  *  from the SDK's lastPresenceTs − lastActiveAgo (the event carries an "ago",
  *  the SDK stamps when it arrived). */
 export function matrixSnapshotOf(room: Room, userId: string): MatrixSnapshot | null {
-  const u = room.client.getUser(userId);
+  return userSnapshotOf(room.client, userId);
+}
+
+/** The same, from the client (a DM window before its room exists). */
+export function userSnapshotOf(client: Pick<Room["client"], "getUser">, userId: string): MatrixSnapshot | null {
+  const u = client.getUser(userId);
   if (!u) return null;
   const lastActiveTs = u.lastPresenceTs ? u.lastPresenceTs - (u.lastActiveAgo || 0) : null;
   return { presence: u.presence ?? null, lastActiveTs };

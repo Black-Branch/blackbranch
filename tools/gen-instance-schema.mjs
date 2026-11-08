@@ -31,7 +31,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MODULES } from "../config/modules.mjs";
 import { SETUP_CORE, setupProblems } from "../config/setup-core.mjs";
-import { INSTANCE_KEYS, INSTANCE_KEY_PATTERNS, instanceEntry, parseInstanceValue, resolveInstanceValue, checkBackupTarget, runProviderCheck, normalizeCheckResult, describeCheck, parseBotBehavior, renderBotBehavior, messageVisibleSql } from "../config/instance-schema.mjs";
+import { INSTANCE_KEYS, INSTANCE_KEY_PATTERNS, instanceEntry, parseInstanceValue, resolveInstanceValue, checkBackupTarget, signinProviderId, runProviderCheck, normalizeCheckResult, describeCheck, parseBotBehavior, renderBotBehavior, messageVisibleSql } from "../config/instance-schema.mjs";
 
 const REPO = resolve(fileURLToPath(import.meta.url), "../..");
 
@@ -42,7 +42,7 @@ export const TARGETS = {
   "stream-api": {
     file: "stream-api/instanceSchema.generated.js",
     format: "cjs",
-    exports: ["INSTANCE_KEYS", "MODULES", "instanceEntry", "parseInstanceValue", "resolveInstanceValue", "checkBackupTarget", "runProviderCheck", "normalizeCheckResult", "describeCheck", "parseBotBehavior", "messageVisibleSql"],
+    exports: ["INSTANCE_KEYS", "MODULES", "instanceEntry", "parseInstanceValue", "resolveInstanceValue", "checkBackupTarget", "signinProviderId", "runProviderCheck", "normalizeCheckResult", "describeCheck", "parseBotBehavior", "messageVisibleSql"],
   },
   "stream-ingest": {
     file: "stream-ingest/lib/instanceSchema.generated.js",
@@ -52,12 +52,12 @@ export const TARGETS = {
   web: {
     file: "web/app/lib/instanceSchema.generated.mjs",
     format: "esm",
-    exports: ["INSTANCE_KEYS", "MODULES", "SETUP_CORE", "instanceEntry", "parseInstanceValue", "resolveInstanceValue", "checkBackupTarget", "runProviderCheck", "normalizeCheckResult", "describeCheck", "parseBotBehavior", "renderBotBehavior", "messageVisibleSql"],
+    exports: ["INSTANCE_KEYS", "MODULES", "SETUP_CORE", "instanceEntry", "parseInstanceValue", "resolveInstanceValue", "checkBackupTarget", "signinProviderId", "runProviderCheck", "normalizeCheckResult", "describeCheck", "parseBotBehavior", "renderBotBehavior", "messageVisibleSql"],
   },
 };
 
 // The JSDoc types travel with the web copy so TypeScript reads typed entries out of a .mjs.
-const TYPES = `/** @typedef {'string'|'list'|'origin'|'wsOrigin'|'url'|'serverName'|'matrixId'|'localpartTemplate'|'enum'|'secret'|'bool'|'number'|'aiRoute'|'aiTasks'|'aiConnections'|'memoryState'|'setupState'|'backupRepository'} InstanceKind */
+const TYPES = `/** @typedef {'string'|'list'|'origin'|'wsOrigin'|'url'|'serverName'|'matrixId'|'localpart'|'localpartTemplate'|'enum'|'secret'|'bool'|'number'|'aiRoute'|'aiTasks'|'aiConnections'|'memoryState'|'setupState'|'backupRepository'} InstanceKind */
 /** @typedef {'web'|'stream-api'|'stream-ingest'} InstancePackage */
 /**
  * @typedef {object} InstanceEntry
@@ -84,6 +84,10 @@ const TYPES = `/** @typedef {'string'|'list'|'origin'|'wsOrigin'|'url'|'serverNa
  * @property {number} [maxLength]
  * @property {boolean} [productDefault]
  * @property {boolean} [legacyOn]
+ * @property {boolean} [hostRendered]
+ * @property {string} [upstreamId]
+ * @property {boolean} [settable]
+ * @property {boolean} [permanent]
  * @property {string} label
  * @property {string} description
  */
@@ -127,6 +131,7 @@ const FN_TYPES = {
   renderBotBehavior:
     "/**\n * @param {BotBehavior} behavior\n * @param {number} [cap]\n * @returns {{ block: string, used: number, cap: number, omitted: number[] }}\n */\n",
   messageVisibleSql: "/**\n * @param {string} alias\n * @returns {string}\n */\n",
+  signinProviderId: "/**\n * @param {string} slot\n * @param {unknown} [issuer]\n * @returns {string | null}\n */\n",
   checkBackupTarget:
     "/**\n * @param {unknown} target\n * @param {unknown} repository\n * @returns {{ ok: true, host: string|null } | { ok: false, error: string }}\n */\n",
 };
@@ -154,12 +159,15 @@ export function render(pkg) {
   if (t.exports.includes("SETUP_CORE")) out.push(`const SETUP_CORE = ${JSON.stringify(SETUP_CORE, null, 2)};`, "");
   // Emit only what this package uses (an unused emitted function is a lint error there).
   // parseInstanceValue always travels: resolveInstanceValue calls it.
-  const ALL = [instanceEntry, parseInstanceValue, resolveInstanceValue, checkBackupTarget, runProviderCheck, normalizeCheckResult, describeCheck, parseBotBehavior, renderBotBehavior, messageVisibleSql];
+  const ALL = [instanceEntry, parseInstanceValue, resolveInstanceValue, checkBackupTarget, signinProviderId, runProviderCheck, normalizeCheckResult, describeCheck, parseBotBehavior, renderBotBehavior, messageVisibleSql];
   for (const fn of ALL.filter((f) => f === parseInstanceValue || t.exports.includes(f.name))) {
     if (typed) out.push(FN_TYPES[fn.name].trimEnd());
     // stream-api's copy is called from outside the package, which its orphan gate cannot see.
     if (!typed && fn === checkBackupTarget) {
       out.push("// @parked its consumer lives outside this package: install/backup/target.cjs runs this copy inside the stream-api image (the box reads its backup target with it)");
+    }
+    if (!typed && fn === signinProviderId) {
+      out.push("// @parked its consumer lives outside this package: install/matrix/signin.cjs runs this copy inside the stream-api image (the box renders the sign-in providers with it)");
     }
     out.push(fn.toString(), "");
   }
@@ -187,6 +195,26 @@ export const COPIES = [
     "stream-api": { file: "stream-api/publicId.generated.js", format: "cjs" },
     web: { file: "web/app/lib/publicId.generated.mjs", format: "esm" },
   } },
+  // The YouTube classifier: stream-ingest's live lookup and web's community slot read YouTube's
+  // pages with ONE reading (a scheduled page is never live). (A target's `parked` would be why a
+  // copy has no importer yet — carried as the @parked tag above its export; none is parked now.)
+  { source: "config/youtube-live.mjs", name: "YOUTUBE_LIVE", noun: "classifier", targets: {
+    "stream-ingest": { file: "stream-ingest/lib/youtubeLive.generated.js", format: "esm" },
+    web: { file: "web/app/lib/youtubeLive.generated.mjs", format: "esm" },
+  } },
+  // A canonical's moderation standing: web's Allow check and stream-api's chat door and merge read
+  // "is this person banned?" from ONE fragment.
+  { source: "config/canonical-standing.mjs", name: "CANONICAL_STANDING", noun: "standing rule", targets: {
+    "stream-api": { file: "stream-api/canonicalStanding.generated.js", format: "cjs" },
+    web: { file: "web/app/lib/canonicalStanding.generated.mjs", format: "esm" },
+  } },
+  // The per-platform liveness vocabulary: stream-ingest owns the states, stream-api relays them and
+  // web shows them, all in the same words.
+  { source: "config/platform-liveness.mjs", name: "PLATFORM_LIVENESS", noun: "vocabulary", targets: {
+    "stream-ingest": { file: "stream-ingest/lib/platformLiveness.generated.js", format: "esm" },
+    "stream-api": { file: "stream-api/platformLiveness.generated.js", format: "cjs" },
+    web: { file: "web/app/lib/platformLiveness.generated.mjs", format: "esm" },
+  } },
 ];
 // The AI adapter's copies — the two backends only (web makes no model calls).
 export const ADAPTER_TARGETS = COPIES[0].targets;
@@ -209,6 +237,7 @@ export function renderCopy(pkg, copy = COPIES[0], source = readFileSync(join(REP
     "",
     body.trimEnd(),
     "",
+    ...(t.parked ? [`// @parked ${t.parked}`] : []),
     t.format === "cjs" ? `module.exports = { ${copy.name} };` : `export { ${copy.name} };`,
     "",
   ].join("\n");

@@ -17,6 +17,7 @@
 import { instanceList, instanceResolve, instanceString } from "./instanceConfigServer.ts";
 import { matrixServerName } from "./matrixConfig.ts";
 import { instanceEntry, parseInstanceValue } from "./instanceSchema.generated.mjs";
+import { OWN_SERVER_SIGN_IN } from "./signInCodes.ts";
 
 export type FederatedMode = "off" | "on" | "allowlist";
 export type FederatedPolicy = { mode: FederatedMode; allow: readonly string[]; deny: readonly string[]; own: string };
@@ -107,3 +108,31 @@ export async function policyGatedSession<T>(
 
 /** The error code the sign-in page shows as "sign-in from this server isn't enabled". */
 export const FEDERATED_SIGNIN_REFUSED = "federated_signin_disabled";
+
+export { OWN_SERVER_SIGN_IN };
+
+/**
+ * May the FEDERATED sign-in (discover / initiate / callback) start for `serverName`? null = yes,
+ * else the sign-in page's error code. This install's own server is refused here even though
+ * serverAllowed admits it: an own-server account signed in through the "another server" box gets a
+ * dynamically registered public client chain on our own MAS, which the first refresh — made as
+ * the site's confidential client — refuses (`client id mismatch`). Its sign-in is the main button.
+ * @test-only exported so the tests can pass a policy; the routes call federatedSignInRefusal.
+ */
+export function federatedEntryRefusal(policy: FederatedPolicy, serverName: unknown): string | null {
+  const s = normalizeServerName(serverName);
+  if (!s) return FEDERATED_SIGNIN_REFUSED;
+  if (s === normalizeServerName(policy.own)) return OWN_SERVER_SIGN_IN;
+  return serverAllowed(policy, s) ? null : FEDERATED_SIGNIN_REFUSED;
+}
+
+/** discover / initiate: federatedEntryRefusal under the policy as it is now. */
+export function federatedSignInRefusal(serverName: unknown): string | null {
+  return federatedEntryRefusal(currentFederatedPolicy(), serverName);
+}
+
+/** The callback: is this server name this install's own? */
+export function isOwnServer(serverName: unknown): boolean {
+  const s = normalizeServerName(serverName);
+  return s !== null && s === normalizeServerName(matrixServerName());
+}

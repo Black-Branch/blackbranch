@@ -2,6 +2,7 @@
 
 import { dispatchClaimable } from "@/app/lib/claimableEvent";
 import { useMatrixSettings } from "@/app/lib/useMatrixSettings";
+import { useNudgeSlot } from "@/app/lib/nudgeSlot";
 
 // The hook-bearing half of SecureAccountPrompt, split into its own chunk:
 // useMatrixSettings drags in the matrix-js-sdk crypto stack, and this only
@@ -13,7 +14,9 @@ export default function SecureAccountPromptInner({ onDismiss }: { onDismiss: () 
   // & Security and render nothing for it.
   const { flowState } = useMatrixSettings({ consumeVerification: false });
   const needs = flowState === "setup" || flowState === "restore" || flowState === "orphaned";
-  if (!needs) return null;
+  // One first-run prompt at a time (nudgeSlot.ts); this one is first in line.
+  const holds = useNudgeSlot("secure-account", needs);
+  if (!holds) return null;
 
   function secure() {
     // dispatchClaimable, not a bare CustomEvent: the hub's one-host guard
@@ -24,7 +27,12 @@ export default function SecureAccountPromptInner({ onDismiss }: { onDismiss: () 
   }
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[calc(var(--z-nudge)_+_20)] p-3 pointer-events-none">
+    // Sits on the bottom bar's live height (Bar.tsx) plus the panel's gap and frame below it, so it stays
+    // above a composer however tall it grows.
+    <div
+      className="fixed inset-x-0 z-[calc(var(--z-nudge)_+_20)] p-3 pointer-events-none"
+      style={{ bottom: "calc(var(--chrome-bottom-live, var(--chrome-bottom-h)) + var(--panel-gap, 12px) + var(--frame-width, 2px))" }}
+    >
       <div
         className="pointer-events-auto mx-auto max-w-md rounded-xl glass px-3 py-3 modal-in pb-safe"
         // The pop-ups' glass look (round 2a — Card fill is gone). Amber = "act

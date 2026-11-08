@@ -18,7 +18,7 @@
 
 import { useEffect, useState } from "react";
 import { siteName } from "@/app/lib/siteName";
-import { useAutomodQueue, isDismissOnly, degradedLine, type HeldMessage } from "@/app/lib/useAutomodQueue";
+import { useAutomodQueue, isDismissOnly, degradedLine, resolveNote, type HeldMessage } from "@/app/lib/useAutomodQueue";
 import { ShieldWarning } from "@phosphor-icons/react/dist/ssr";
 import { NATIVE_PLATFORM } from "@/app/lib/nativePlatform";
 
@@ -81,9 +81,7 @@ export default function AutomodHoldBar({
     setBusy(m.id);
     const r = await resolve(m.id, action);
     setBusy(null);
-    if (r === "expired") setErr("That hold already expired on Twitch.");
-    else if (r === "failed") setErr("Couldn't resolve that — try again.");
-    else setErr(null);
+    setErr(resolveNote(r));
   }
 
   return (

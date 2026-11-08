@@ -46,7 +46,7 @@ export async function GET() {
   // can carry more rows than a quiet day and, past the cap, silently return
   // less than the full 24 hours with nothing in the payload to say so.
   const { rows } = await pool.query(
-    `SELECT recorded_at, native, streamplace, youtube, twitch, community, radio, folded
+    `SELECT recorded_at, native, streamplace, youtube, twitch, kick, community, radio, folded
      FROM site.player_source_snapshots
      WHERE recorded_at > NOW() - INTERVAL '24 hours'
      ORDER BY recorded_at DESC
@@ -60,7 +60,7 @@ export async function GET() {
     history: rows.map((r) => ({
       recordedAt: new Date(r.recorded_at).toISOString(),
       native: r.native, streamplace: r.streamplace, youtube: r.youtube,
-      twitch: r.twitch, community: r.community, radio: r.radio,
+      twitch: r.twitch, kick: r.kick, community: r.community, radio: r.radio,
       foldedOrVod: r.folded,
     })),
   });

@@ -72,6 +72,8 @@ test("useChatSocket is called directly only by page-scoped hooks — never by a 
       "features/moderation/sections/ChatHistorySection.tsx",
       "lib/useChatMessages.ts",
       "lib/useChatSocket.ts", // the definition itself, not a call site
+      "lib/useLiveFavicon.ts", // called ONCE, from LiveFavicon in the root layout (liveFavicon.render.test.ts pins that)
+      "lib/usePlatformStates.ts", // called ONCE, from StreamView (livePlatforms.test.ts pins that)
       "lib/useSponsorState.ts", // called ONLY from SponsorClockContext.tsx
       "lib/useStreamTimer.ts",
       "lib/useUserLiveMessages.ts",

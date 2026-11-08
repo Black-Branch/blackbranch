@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { PlayerDebugLog, readPlayerDebugSwitch } from "./playerDebug.ts";
+import { PlayerDebugLog, readPlayerDebugSwitch, remountCause } from "./playerDebug.ts";
 import { stripComments } from "./testSource.ts";
 
 test("the switch: the URL turns it on or off and is remembered; otherwise the stored value", () => {
@@ -41,11 +41,39 @@ test("the log keeps the newest events and fits the sink's 4000-character stack",
   assert.ok(out.length <= 3800 && out.length > 3000, `stack is ${out.length} chars`);
 });
 
+// Parked P17: rows showed the player remounting in two tabs at once with no tap,
+// and nothing in the row said WHY. The remount line now names what changed
+// between the last life of the player and this one — what the player is keyed
+// on — so the next stream's rows point at the cause instead of a guess.
+test("remount record names its cause", () => {
+  const was = { src: "youtube", tab: "live", mode: "attached" };
+  assert.equal(remountCause(was, { ...was, src: "native" }), "src:youtube→native");
+  assert.equal(remountCause(was, { ...was, mode: "none", tab: "replay" }), "tab:live→replay,mode:attached→none");
+  assert.equal(remountCause(was, { ...was }), "nothing-changed", "a remount with the same inputs = the page around it remounted");
+  assert.equal(remountCause({ src: "native" }, { src: "native", vod: "abc" }), "vod:-→abc", "a key only one side has");
+  assert.equal(remountCause(null, was), "first-mount");
+});
+
+test("the cause leads the remount line, so the sink's short message carries it", () => {
+  let now = 0;
+  const l = new PlayerDebugLog(40, () => now);
+  now = 31_000;
+  const r = l.push("remount", "cause=src:youtube→native #2 mode=attached")!;
+  assert.match(r.message, /^player debug: remount \(cause=src:youtube→native #2 mode=attached\)/);
+});
+
 test("the player area wires the log, and it touches nothing in playback", () => {
   const area = stripComments(readFileSync(join(import.meta.dirname, "../features/player/StreamPlayerArea.tsx"), "utf8"));
-  assert.match(area, /usePlayerDebug\(boxRef, src\)/);
+  assert.match(area, /usePlayerDebug\(boxRef, src, debugInputs\)/);
   const hook = stripComments(readFileSync(join(import.meta.dirname, "../features/player/usePlayerDebug.ts"), "utf8"));
   assert.doesNotMatch(hook, /\.(play|pause|load)\(\)|\.muted\s*=|\.src\s*=|currentTime\s*=/, "the debug log must only observe");
   assert.match(hook, /reportClientError\("player"/);
+  // Taps are heard page-wide from the log's creation, never only while the box
+  // is mounted — else the unfolding tap is invisible and a remount reads as
+  // unattended (the 10-29/10-30 "no tap for 3.8 h" rows).
+  const create = hook.slice(hook.indexOf("log = new PlayerDebugLog();"), hook.indexOf("return log;\n}"));
+  assert.match(create, /document\.addEventListener\("pointerdown", onTap, true\);/);
+  assert.match(create, /document\.addEventListener\("keydown", onTap, true\);/);
+  assert.equal((hook.match(/addEventListener\("pointerdown"/g) ?? []).length, 1, "one page-wide tap listener, not one per mount");
   assert.ok(hook.trimEnd().endsWith("}"), "END anchor: the whole hook was read");
 });

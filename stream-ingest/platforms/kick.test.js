@@ -22,7 +22,7 @@ test('confirmed offline (is_live:false) reports state:offline, not unknown', asy
   });
   try {
     const r = await fetchKickState();
-    assert.deepEqual(r, { state: 'offline', viewers: null });
+    assert.deepEqual(r, { state: 'offline', viewers: null, key: '', evidence: 'kick-not-live' });
   } finally { restore(); }
 });
 
@@ -30,7 +30,7 @@ test('a live channel with a parseable count reports state:live', async () => {
   stub(async () => ({ ok: true, json: async () => ({ livestream: { is_live: true, viewer_count: 42 } }) }));
   try {
     const r = await fetchKickState();
-    assert.deepEqual(r, { state: 'live', viewers: 42 });
+    assert.deepEqual(r, { state: 'live', viewers: 42, key: '', evidence: 'kick-live' }, 'the v2 fallback carries no start_time key');
   } finally { restore(); }
 });
 
@@ -39,6 +39,7 @@ test('every fetch path failing with no last-good cache reports state:unknown, no
   try {
     const r = await fetchKickState();
     assert.equal(r.state, 'unknown', 'a network failure must never read the same as a confirmed offline answer');
+    assert.equal(r.evidence, 'kick-error');
   } finally { restore(); }
 });
 

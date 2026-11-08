@@ -25,6 +25,7 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 
 const WEBHOOK = "app/api/billing/webhook/route.ts";
 const GIFTS = "app/lib/giftServer.ts";
+const SYNC = "app/lib/subscriptionSync.ts";
 
 test("the donation celebration carries a session-derived spendId", () => {
   const src = read(WEBHOOK);
@@ -34,9 +35,22 @@ test("the donation celebration carries a session-derived spendId", () => {
 });
 
 test("the sub celebration carries a subscription-derived spendId", () => {
+  const sync = read(SYNC);
+  assert.match(sync, /if \(paid\.kind === "first"\) return \{ \.\.\.base, spendId: `sub:\$\{sub\.id\}`, months: 1 \};/,
+    "month one's card has no subscription-derived spendId — one lost during a restart leaves the bar short on real money");
+  assert.match(sync.slice(-300), /export const syncSubscriptionState = bound\.syncSubscription;\s*$/, "vacuity anchor: subscriptionSync's tail");
+});
+
+// A1-01: the "X subscribed" card is sent from ONE place, invoice.paid. While it hung off
+// customer.subscription.created's state write, a .created that lost the delivery race to
+// checkout.session.completed was dropped by the recency gate, and month one with it.
+test("the route sends a sub card from exactly one place, and never from a state event", () => {
   const src = read(WEBHOOK);
-  assert.match(src, /kind:\s*"sub"[\s\S]{0,400}spendId:\s*`sub:\$\{sub\.id\}`|spendId:\s*`sub:\$\{sub\.id\}`[\s\S]{0,400}kind:\s*"sub"/,
-    "the new-sub broadcast has no spendId — one lost during a restart leaves the bar short on real money");
+  assert.equal((src.match(/kind: "sub",/g) ?? []).length, 1, "a second sub card would double-announce or hang off a droppable event");
+  const sync = src.match(/async function syncSubscription\([\s\S]*?\n\}\n?/)?.[0] ?? "";
+  assert.match(sync, /invalidateTier\(matrixId\);/, "vacuity anchor: syncSubscription's body was not captured");
+  assert.doesNotMatch(sync, /broadcastChatEvent\(/, "a state event must not announce — invoice.paid owns the card");
+  assert.match(src, /case "customer\.subscription\.created":\s*case "customer\.subscription\.updated":\s*case "customer\.subscription\.deleted":\s*await syncSubscription\(event\.data\.object as Stripe\.Subscription, event\.created\);/);
 });
 
 test("the gift celebration keeps its session-derived spendId", () => {
@@ -50,7 +64,7 @@ test("the gift celebration keeps its session-derived spendId", () => {
 test("both celebration callers use the retrying delivery, not a bare fire-and-forget", () => {
   for (const f of [WEBHOOK, GIFTS]) {
     const src = read(f);
-    assert.match(src, /import\s*\{[^}]*broadcastChatEvent[^}]*\}\s*from\s*["'][^"']*chatEventDelivery["']/,
+    assert.match(src, /import\s*\{[^}]*broadcastChatEvent[^}]*\}\s*from\s*["'][^"']*chatEventDelivery(?:\.ts)?["']/,
       `${f} imports broadcastChatEvent from somewhere other than chatEventDelivery — ` +
       "a single-shot streamApiPost swallows a failed delivery");
   }
@@ -66,20 +80,26 @@ test("both celebration callers use the retrying delivery, not a bare fire-and-fo
 const MONEY_JS = "../stream-api/money.js";
 const EVENT_BODY = "app/components/chatEventBody.tsx";
 
-test("invoice.paid is handled, through the guarded renewal helper, with an invoice-derived spendId", () => {
+test("invoice.paid is handled, through the guarded paid-invoice helper, with an invoice-derived spendId", () => {
   const src = read(WEBHOOK);
-  assert.match(src.slice(-600), /months: 1,[\s\S]*currency: price\?\.currency \?\? "usd",\s*\}\);\s*\}\s*\}\s*$/, "vacuity anchor: the route's tail (syncSubscription's first-month card) changed — re-check the read");
-  assert.match(src, /case "invoice\.paid":\s*[\s\S]{0,600}?await recordRenewal\(stripe, event\.data\.object as Stripe\.Invoice\);/,
-    "invoice.paid is not routed to recordRenewal — renewals fund nothing again");
-  assert.match(src, /import \{ renewalFromInvoice, tenureMonths \} from "@\/app\/lib\/subRenewal";/);
-  assert.match(src, /const renewal = renewalFromInvoice\(inv\);\s*if \(!renewal\) return;/,
-    "the billing_reason guard must run FIRST — subscription_create here double-credits the first month");
-  assert.match(src, /kind: "sub",[\s\S]{0,400}spendId: `renewal:\$\{inv\.id\}`/,
+  assert.match(src.slice(-300), /invalidateTier\(matrixId\);\s*\}\s*$/, "vacuity anchor: the route's tail (syncSubscription) changed — re-check the read");
+  assert.match(src, /case "invoice\.paid":\s*[\s\S]{0,600}?await recordPaidInvoice\(event\.data\.object as Stripe\.Invoice\);/,
+    "invoice.paid is not routed to recordPaidInvoice — month one and renewals fund nothing again");
+  assert.match(src, /const card = await paidSubscriptionCard\(inv\);\s*if \(!card\) return;/,
+    "the billing_reason guard must run FIRST");
+  assert.match(src, /kind: "sub",\s*spendId: card\.spendId,/);
+  const sync = read(SYNC);
+  assert.match(sync, /const paid = paidSubscriptionInvoice\(inv\);\s*if \(!paid\) return null;/);
+  assert.match(sync, /spendId: `renewal:\$\{paid\.invoiceId\}`/,
     "the renewal card needs an invoice-derived spendId distinct from the first month's sub:<id>");
-  const fn = src.match(/async function recordRenewal\([\s\S]*?\n\}\n/)?.[0] ?? "";
-  assert.ok(fn.includes("broadcastChatEvent("), "vacuity anchor: recordRenewal's body was not captured");
+  const fn = src.match(/async function recordPaidInvoice\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.ok(fn.includes("broadcastChatEvent("), "vacuity anchor: recordPaidInvoice's body was not captured");
   assert.doesNotMatch(fn, /INSERT INTO|UPDATE |pool\.query/,
-    "recordRenewal must not write site.subscriptions — syncSubscription stays the only writer of tier/status");
+    "recordPaidInvoice must not write site.subscriptions — syncSubscription stays the only writer of tier/status");
+  const card = sync.match(/async function paidInvoiceCard\([\s\S]*?\n {2}\}\n/)?.[0] ?? "";
+  assert.ok(card.includes("tenureMonths("), "vacuity anchor: paidInvoiceCard's body was not captured");
+  assert.doesNotMatch(card, /INSERT INTO|UPDATE |writeTransition|writeState/,
+    "paidInvoiceCard must not write subscription state");
 });
 
 test("a renewal reads as 'resubscribed · N months' on the card and the alert", () => {

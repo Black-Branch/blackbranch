@@ -52,34 +52,58 @@ const SEND_TIMEOUT_MS = 12_000;
 // POST the send, converting a no-response rejection into wording a human can
 // act on. Everything below this line already assumes a Response exists.
 //
-// The two branches say different things ON PURPOSE. `unreachable` means the
-// request never left, so "wasn't sent" is true. `timeout` means we stopped
-// waiting — the server may have processed it and only the reply was lost, so
-// claiming it wasn't sent would be a guess presented as a fact. Resending is
-// safe either way: a spend carries the same `spendId` until it succeeds, so the
-// server replays rather than double-debiting.
-async function sendOrExplain(body: Record<string, unknown>): Promise<Response> {
+// `unreachable` means the request never left, so "not sent" is true. `timeout`
+// means we stopped waiting — the server may have posted it and only the reply
+// was lost. A retry is safe either way: a line carries the same `client_msg_id`
+// on every attempt and the route answers a stored one with the first row
+// instead of posting again (a spend carries its `spendId`, replayed by the coin
+// ledger). So a timed-out line is retried ONCE here before the sender hears
+// anything. A spend is not: a ledger replay answers "ok" while the first
+// attempt may still be delivering (or refunding) its card, so it is left to the
+// sender, who is told resending cannot charge twice.
+async function sendOrExplain(body: Record<string, unknown>, retryOnTimeout: boolean): Promise<Response> {
+  const post = () => postJson("/api/chat/send", body, "POST", { timeoutMs: SEND_TIMEOUT_MS });
   try {
-    return await postJson("/api/chat/send", body, "POST", { timeoutMs: SEND_TIMEOUT_MS });
+    return await post();
   } catch (err) {
-    const kind = networkFailureKind(err);
-    if (kind === "unreachable") {
-      throw new Error("You're offline — message not sent. It's still in the box; try again when you're back.");
+    if (networkFailureKind(err) === "timeout" && retryOnTimeout) {
+      try {
+        return await post();
+      } catch (again) {
+        throw explained(again, false);
+      }
     }
-    if (kind === "timeout") {
-      throw new Error(`${siteName()} didn't answer in time. Your message may not have sent — check chat before resending.`);
-    }
-    throw err;
+    throw explained(err, !retryOnTimeout);
   }
 }
 
-export function useSendChatMessage(setBanExpiry: (expiry: string | null | undefined) => void) {
+function explained(err: unknown, spend: boolean): unknown {
+  const kind = networkFailureKind(err);
+  if (kind === "unreachable") {
+    return new Error("You're offline — message not sent. It's still in the box; try again when you're back.");
+  }
+  if (kind === "timeout") {
+    return new Error(spend
+      ? `${siteName()} didn't answer. Resending is safe — you're never charged twice for one message.`
+      : `${siteName()} didn't answer. Resending is safe — the site never posts the same line twice.`);
+  }
+  return err;
+}
+
+export function useSendChatMessage(
+  setBanExpiry: (expiry: string | null | undefined) => void,
+  /** The community entry the viewer watches (StreamView's pick); the route resolves it against its
+   *  own list and falls back to the featured streamer. */
+  communityKey: string | null = null,
+) {
   async function handleSendMessage(
     text: string,
     replyTo: ChatMsg | null,
     forcedDest?: string | null,
     spend?: { mode: "highlight" | "tts"; spendId: string; expectedPrice: number } | null,
-    encrypted?: boolean
+    encrypted?: boolean,
+    /** The composer's id for this line, kept across its retries; minted here when the caller has none. */
+    clientMsgId: string = crypto.randomUUID(),
   ): Promise<string | null> {
     const skip = skippedPlatforms();
     // Send to = exactly one platform. A reply goes where the replied-to person is
@@ -87,6 +111,7 @@ export function useSendChatMessage(setBanExpiry: (expiry: string | null | undefi
     const alone = !replyTo && forcedDest && isRoutablePlatform(forcedDest) ? forcedDest : null;
     const res = await sendOrExplain({
       message: text,
+      client_msg_id: clientMsgId,
       ...(replyTo ? {
         // A persisted card (migrate-v61) has a numeric site.chat_messages id, so
         // replies thread to it. An unpersisted (ephemeral) card has a string id
@@ -99,6 +124,7 @@ export function useSendChatMessage(setBanExpiry: (expiry: string | null | undefi
         reply_to_platform: replyTo.platform,
       } : {}),
       ...(forcedDest ? { forced_destination: forcedDest } : {}),
+      ...(communityKey ? { community: communityKey } : {}),
       // Platforms that refused this session for good (followers-only…) are left
       // out HERE, before the request leaves the browser — the site line still
       // posts, and no refused call is made again (platformRefusals.ts). A
@@ -106,7 +132,7 @@ export function useSendChatMessage(setBanExpiry: (expiry: string | null | undefi
       ...(skip.length > 0 && !encrypted ? { skip_platforms: skip } : {}),
       ...(spend ? { spend } : {}),
       ...(encrypted ? { encrypted: true } : {}),
-    });
+    }, !spend);
 
     // Held for a moderator (word filter / link gate): 202, so it must be caught before
     // every `res.ok` branch below — the spend one would read it as a purchase. The

@@ -95,18 +95,18 @@ test('the reply preview masks the @mention the bot addresses the viewer by', asy
   assert.match(line, /cmd=!he .*-> "@… got it, he\/him from now on\."$/);
 });
 
-test('a SKIPPED command (no reply channel) is logged the same way', async () => {
+test('a command on a platform with no reply channel is logged the same way', async () => {
   const lines = await run({ platform: 'youtube', userId: 'UCx9', username: 'Sprocket', message: '!karma @casey please' }, {}, ok);
   assertClean(lines, 'Sprocket', 'casey', 'please');
-  const line = lines.find((l) => l.includes('SKIPPED'));
+  const line = lines.find((l) => l.startsWith('[cmd-debug]'));
   assert.ok(line, lines.join('\n'));
-  assert.match(line, /SKIPPED youtube user=UCx9 cmd=!karma /);
+  assert.match(line, /^\[cmd-debug\] youtube user=UCx9 cmd=!karma .* reply=false /);
 });
 
 test('an over-long command word is cut, so a pasted line cannot ride in as the "command"', async () => {
   const long = `!${'casey'.repeat(20)}`;
   const lines = await run({ platform: 'twitch', userId: 'u-8', username: 'x', message: long }, {}, ok);
-  const line = lines.find((l) => l.includes('SKIPPED'));
+  const line = lines.find((l) => l.startsWith('[cmd-debug]'));
   const cmd = line.match(/cmd=(\S+)/)[1];
   assert.ok(cmd.length <= 24, `command word is ${cmd.length} chars`);
 });

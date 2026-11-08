@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const { capMap } = require('./chat-dedup');
 const { NATIVE_PLATFORM, NATIVE_SQL, isNativePlatform } = require('./native-platform');
 const { ERASED_CANONICAL } = require('./account-erase');
+const { CANONICAL_STANDING } = require('./canonicalStanding.generated');
 
 function createIdentity({ pool, requestAggregateRefresh }) {
   // platform:userId → { canonical, name }. A hit with an unchanged name skips both
@@ -132,6 +133,38 @@ function createIdentity({ pool, requestAggregateRefresh }) {
         await client.query('UPDATE stream.nameidx SET canonical = $1 WHERE canonical = $2', [survivor, v]);
         await client.query('UPDATE site.platform_links SET canonical_id = $1 WHERE canonical_id = $2', [survivor, v])
           .catch(() => {});
+        // Our own held lines name their sender's canonical (blocklist-review.js, automod.js); a mod's
+        // Allow posts as it (chat.js). They follow the person into the survivor, or Allow would find
+        // nobody. A Twitch AutoMod row's user_id is a Twitch id, not a canonical — never touched.
+        // EXCEPT a loser banned now (its standing — config/canonical-standing.mjs — has a row): its
+        // pending lines are closed as denied here, so a line held under the ban is never posted
+        // later under the survivor's name.
+        await client.query(
+          `UPDATE site.automod_held SET status = 'denied', resolved_by = 'system', resolved_at = now()
+            WHERE user_id = $1 AND source <> 'twitch' AND status = 'pending'
+              AND EXISTS (SELECT 1 FROM (${CANONICAL_STANDING}) s WHERE s.target_id = $1)`, [v]);
+        await client.query(`UPDATE site.automod_held SET user_id = $1 WHERE user_id = $2 AND source <> 'twitch'`, [survivor, v]);
+        // A canonical's standing lives in its OWN mod_log rows, and the loser is deleted below: its
+        // standing rows are carried to the survivor as NEW rows — a new id and now(), so an unban
+        // the survivor had before never lifts them and a later one does. EVERY standing row, with no
+        // comparison: standing is a union of rows, so adding one never weakens it — and a survivor's
+        // row may be one an account placed and can lift on its own (web accountBans.ts liftOursSql),
+        // so a loser row left behind would be covered by nothing that lasts. Each carried row KEEPS
+        // its reason and appends the carry note
+        // ("<reason> · carried by merge from <loser>") — the reason is the provenance web reads to
+        // tell what an account placed (web accountBans.ts placedBySql: equal, or starts with
+        // "<words><account> · "), so ending that account's timeout or reducing its ban still finds
+        // the row after a merge. The loser's own rows stay (audit).
+        await client.query(
+          `INSERT INTO site.mod_log (action, target_id, performed_by, duration_minutes, expires_at, reason)
+           SELECT r.action, $1, 'system', r.duration_minutes, r.expires_at,
+                  CASE WHEN r.reason IS NULL OR r.reason = '' THEN 'carried by merge from ' || $2
+                       ELSE r.reason || ' · carried by merge from ' || $2 END
+             FROM (${CANONICAL_STANDING}) s
+             JOIN site.mod_log r ON r.id = s.id
+            WHERE s.target_id = $2
+            ORDER BY s.id`,
+          [survivor, v]);
       }
       // Combine impressions: keep the longest read across survivor+victims, sum
       // interactions, keep any non-null pronouns is N/A (pronouns live on site.users).

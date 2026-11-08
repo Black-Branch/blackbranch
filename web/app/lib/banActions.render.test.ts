@@ -1,7 +1,7 @@
 // Bans, as a mod meets them (owner's decision): the panel form starts on a 10-minute timeout with
 // a reason field and a button that names the action; only a permanent ban asks to be confirmed.
-// The user card's timeout and ban act at once with an Undo (the message removed only when the Undo
-// window closes); its permanent ban asks first.
+// The user card's timeout and ban act at once, and so does the message's removal; the Undo lifts
+// the ban only. Its permanent ban asks first.
 //
 // Run: systemd-run --user --scope -p MemoryMax=8G node --test app/lib/banActions.render.test.ts
 
@@ -68,7 +68,23 @@ test("the form starts on a 10-minute timeout, names it on the button, and sends 
   await act(async () => { setValue(host.querySelector('input[aria-label="Reason"]') as HTMLInputElement, "spam links"); });
   await act(async () => { button(/^Time out 10m$/)!.click(); });
   const [sent] = posts(calls, "/api/mod/ban");
-  assert.deepEqual(sent?.body, { targetId: "@casey:site.test", override: false, durationMinutes: 10, reason: "spam links" });
+  assert.deepEqual(sent?.body, { targetId: "@casey:site.test", override: false, purge: true, durationMinutes: 10, reason: "spam links" });
+  await cleanup();
+});
+
+const SWITCH = "Also remove their recent messages";
+const switchIn = (host: HTMLElement) =>
+  ([...host.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]).find((i) => i.closest("label")?.textContent?.includes(SWITCH)) ?? null;
+
+test("the form's switch removes their recent messages by default; off, the ban says so", async () => {
+  const calls = serve({ "/api/mod/bans": { bans: [] }, "/api/mod/ban": { ok: true, applied: true } });
+  const { host, cleanup } = await mount(React.createElement(BanSection, { note: () => {}, initialTarget: "@casey:site.test" }));
+  const box = switchIn(host);
+  assert.ok(box, "the form has no switch for their messages");
+  assert.equal(box.checked, true, "the switch starts off");
+  await act(async () => { box.click(); });
+  await act(async () => { button(/^Time out 10m$/)!.click(); });
+  assert.equal(posts(calls, "/api/mod/ban")[0]?.body?.purge, false, "the request did not carry the switch");
   await cleanup();
 });
 
@@ -110,17 +126,31 @@ async function openCardTools() {
   return { calls, ...card };
 }
 
-test("the card's ⏱ times out for 10 minutes at once, with an Undo; the message goes only when the Undo window closes", async () => {
-  const { calls, cleanup } = await openCardTools();
+test("the card's ⏱ times out for 10 minutes at once, with an Undo; their recent messages go with it", async () => {
+  const { calls, host, cleanup } = await openCardTools();
+  const box = switchIn(host);
+  assert.ok(box, "the card has no switch for their messages");
+  assert.equal(box.checked, true, "the switch starts off");
   await act(async () => { button(/^Time out for 10m$/)!.click(); });
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   const sent = posts(calls, "/api/mod/ban");
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.body?.durationMinutes, 10);
+  assert.equal(sent[0]!.body?.purge, true, "the request did not carry the switch");
   assert.equal(pendingUndos().length, 1, "no Undo was offered");
-  assert.equal(posts(calls, "/api/mod/delete").length, 0, "the message was removed before the Undo window closed");
+  assert.equal(posts(calls, "/api/mod/delete").length, 0, "the clicked line was removed a second time beside the purge");
   flushUndos();
-  assert.equal(posts(calls, "/api/mod/delete").length, 1);
+  await cleanup();
+});
+
+test("the card's switch turned off: the ban removes only the clicked message, at once", async () => {
+  const { calls, host, cleanup } = await openCardTools();
+  await act(async () => { switchIn(host)!.click(); });
+  await act(async () => { button(/^Time out for 10m$/)!.click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  assert.equal(posts(calls, "/api/mod/ban")[0]?.body?.purge, false);
+  assert.equal(posts(calls, "/api/mod/delete").length, 1, "the clicked message stayed up");
+  flushUndos();
   await cleanup();
 });
 
@@ -163,8 +193,28 @@ test("after an action, ONE status line names each platform, and its Retry re-run
   // (Earlier tests' actions may still be listed; this action's line is the one that names Twitch.)
   const line = [...dom.window.document.querySelectorAll("[data-propagation]")].find((e) => /Twitch/.test(e.textContent ?? ""));
   assert.equal(line?.textContent, "Ban: Twitch ✓ · Kick ✗ (missing scope)Retry");
+  assert.equal(line?.textContent?.includes("Messages:"), false, "a ban with no purge spoke about messages");
   await act(async () => { (line!.querySelector("button") as HTMLButtonElement).click(); });
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   assert.deepEqual(posts(calls, "/api/mod/platform-actions/retry").map((c) => c.body), [{ id: 2 }]);
+  await cleanup();
+});
+
+test("after a ban with its purge, the status line says what each place removed, YouTube plainly", async () => {
+  serve({
+    "/api/mod/platform-actions": { actions: [
+      { id: 11, platform: "twitch", action: "ban", ok: true, status: null, detail: null },
+      { id: 12, platform: "youtube", action: "ban", ok: true, status: 200, detail: null },
+      { id: 13, platform: "kick", action: "ban", ok: false, status: null, detail: "target_no_kick_id" },
+      { id: 14, platform: "kick", action: "purge", ok: true, status: null, detail: "no_messages" },
+      { id: 15, platform: "youtube", action: "purge", ok: true, status: null, detail: "no_api_message_ids (4 innertube-only)" },
+    ] },
+  });
+  const { cleanup } = await mount(React.createElement(ModUndoToast));
+  await act(async () => { trackPropagation("Ban", { batchId: "c", platforms: ["twitch", "kick", "youtube"], purged: 5 }); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  const line = [...dom.window.document.querySelectorAll("[data-propagation]")].find((e) => /Messages:/.test(e.textContent ?? ""));
+  assert.equal(line?.textContent, "Ban: Twitch ✓ · Kick – (not on Kick) · YouTube ✓" +
+    "Messages: 5 removed here · Twitch clears them with the ban · YouTube can't remove their earlier messages from here");
   await cleanup();
 });

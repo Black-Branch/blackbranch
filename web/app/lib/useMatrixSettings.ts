@@ -166,6 +166,8 @@ export function useMatrixSettings({
 
   const verification = useMatrixVerification({
     client,
+    // Your own devices only; another person's request is the person-to-person prompt's.
+    kind: "self",
     pendingVerification,
     clearPendingVerification,
     checkCrossSigningStatus,
@@ -219,6 +221,8 @@ export function useMatrixSettings({
     hasCrossSigningKeys: hasServerIdentity, // server-published identity (UI prop name kept)
     flowState,
     backupActive,
+    // The account has a recovery key (secret storage, read from the server's account data).
+    fourSExists,
     checkCrossSigningStatus,
     // SAS
     ...verification,

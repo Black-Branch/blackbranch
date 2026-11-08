@@ -46,5 +46,45 @@ function hasDmHost(): boolean {
   return hosts > 0;
 }
 
+// The conversation on screen. The Community timeline writes it; an arriving DM line for that room
+// opens no window over the conversation the viewer is already reading. "On screen" is asked at
+// the moment of the arrival through `shown` (mounted, its pane the active one, the tab visible),
+// so nothing here has to follow pane switches or visibility.
+let onScreen: { roomId: string; shown: () => boolean } | null = null;
+
+/** Register `roomId` as the conversation on screen while `shown()` holds; null clears. The
+ *  returned release clears only this registration, so an older timeline's unmount after a newer
+ *  one mounted does nothing. */
+export function setRoomOnScreen(roomId: string | null, shown: () => boolean = () => true): () => void {
+  const mine = roomId === null ? null : { roomId, shown };
+  onScreen = mine;
+  return () => { if (onScreen === mine) onScreen = null; };
+}
+
+/** The room on screen right now, or null. */
+export function roomOnScreen(): string | null {
+  return onScreen && onScreen.shown() ? onScreen.roomId : null;
+}
+
+// "Open in Community": the DM window parks its room and signals. The chat column switches to the
+// Matrix tab on the signal; the Community view takes the room on the signal AND when it mounts, so
+// a view that mounts after the signal (the tab's first open) still opens it. Taken once.
+const openRooms = channel<string>();
+let parkedRoom: string | null = null;
+
+/** Show `roomId` in the Community view (the Matrix tab). */
+export function requestOpenRoom(roomId: string): void {
+  parkedRoom = roomId;
+  openRooms.emit(roomId);
+}
+export const onOpenRoomRequest = openRooms.on;
+
+/** The room waiting to be opened, cleared as it is returned. */
+export function takeOpenRoom(): string | null {
+  const id = parkedRoom;
+  parkedRoom = null;
+  return id;
+}
+
 export const publishAnnouncement = announcements.emit;
 export const onAnnouncement = announcements.on;

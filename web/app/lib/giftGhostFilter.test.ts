@@ -88,37 +88,50 @@ test("against real Postgres: both recipient queries drop ghosts and staff, keep 
   await db.connect();
   try {
     await db.query("BEGIN");
-    const ids = [GHOST, PERSON, ...STAFF_MATRIX_IDS];
+    // Probe rows of THIS run only (the database may be a shared throwaway full of other people):
+    // a ghost and a person no other row can match, found by their own prefix (suggest) and inside a
+    // window as large as the whole table (community) — so neither LIMIT can cut them off, and a
+    // "not picked" below means "considered and excluded", never "fell outside the limit".
+    const tag = `${process.pid}${Date.now()}`;
+    const ghost = `@discord_9${tag}:site.test`;
+    const person = `@probe${tag}:site.test`;
+    const ids = [ghost, person, ...STAFF_MATRIX_IDS];
     await db.query(
-      `INSERT INTO site.users (matrix_id, display_name) SELECT id, 'probe' FROM unnest($1::text[]) id`,
+      `INSERT INTO site.users (matrix_id, display_name) SELECT id, 'probe' FROM unnest($1::text[]) id ON CONFLICT DO NOTHING`,
       [ids],
     );
     // The SQL regex agrees with the JS one on every id.
     const { rows: agree } = await db.query<{ id: string; ghost: boolean }>(
       `SELECT id, id ~ $1 AS ghost FROM unnest($2::text[]) id`,
-      [PATTERN, [...ids, OLD_SHAPE, "@discordant:x"]],
+      [PATTERN, [...ids, GHOST, PERSON, OLD_SHAPE, "@discordant:x"]],
     );
     for (const r of agree) assert.equal(r.ghost, isDiscordGhost(r.id), r.id);
 
     // The real statements with the real parameter shapes.
-    const like = "%";
-    const sug = await db.query<{ matrix_id: string }>(suggestSql, [like, null, PATTERN]);
-    const sugIds = sug.rows.map((r) => r.matrix_id);
-    assert.ok(sugIds.includes(PERSON), "a person must be suggested");
-    assert.ok(!sugIds.includes(GHOST), "a ghost must not be suggested");
+    const suggest = async (prefix: string, pattern: string | null) =>
+      (await db.query<{ matrix_id: string }>(suggestSql, [`${prefix}%`, null, pattern])).rows.map((r) => r.matrix_id);
+    const personPrefix = person.slice(1, person.indexOf(":"));
+    const ghostPrefix = ghost.slice(1, ghost.indexOf(":"));
+    assert.ok((await suggest(personPrefix, PATTERN)).includes(person), "a person must be suggested");
+    assert.ok((await suggest(ghostPrefix, null)).includes(ghost), "vacuity: the ghost was never a candidate for the suggest query");
+    assert.ok(!(await suggest(ghostPrefix, PATTERN)).includes(ghost), "a ghost must not be suggested");
 
-    const com = await db.query<{ matrix_id: string }>(communitySql, [null, 50, [...STAFF_MATRIX_IDS], PATTERN, ["stripe", "paypal"]]);
-    const comIds = com.rows.map((r) => r.matrix_id);
-    assert.ok(comIds.includes(PERSON), "a person must be eligible");
-    assert.ok(!comIds.includes(GHOST), "a ghost must never be picked");
+    const all = Number((await db.query<{ n: string }>(`SELECT count(*) AS n FROM site.users`)).rows[0]!.n) + 1;
+    const community = async (pattern: string | null, staff: string[]) =>
+      (await db.query<{ matrix_id: string }>(communitySql, [null, all, staff, pattern, ["stripe", "paypal"]])).rows.map((r) => r.matrix_id);
+    const comIds = await community(PATTERN, [...STAFF_MATRIX_IDS]);
+    assert.ok(comIds.includes(person), "a person must be eligible");
+    assert.ok(!comIds.includes(ghost), "a ghost must never be picked");
     for (const s of STAFF_MATRIX_IDS) assert.ok(!comIds.includes(s), `${s} must never be picked`);
+    // Non-vacuous: without the filters, the same window holds the ghost and the staff.
+    const unfiltered = await community(null, []);
+    assert.ok(unfiltered.includes(ghost), "vacuity: the ghost was never a candidate for the community query");
+    for (const s of STAFF_MATRIX_IDS) assert.ok(unfiltered.includes(s), `vacuity: ${s} was never a candidate`);
 
     // Module OFF binds NULL — and `matrix_id !~ NULL` is NULL, which would drop EVERY row
     // (the NOT-IN trap). The IS NULL arm must keep people eligible.
-    const off = await db.query<{ matrix_id: string }>(communitySql, [null, 50, [...STAFF_MATRIX_IDS], null, ["stripe", "paypal"]]);
-    assert.ok(off.rows.map((r) => r.matrix_id).includes(PERSON), "module off must not exclude everyone");
-    const offSug = await db.query<{ matrix_id: string }>(suggestSql, [like, null, null]);
-    assert.ok(offSug.rows.map((r) => r.matrix_id).includes(PERSON), "module off must not exclude everyone (suggest)");
+    assert.ok((await community(null, [...STAFF_MATRIX_IDS])).includes(person), "module off must not exclude everyone");
+    assert.ok((await suggest(personPrefix, null)).includes(person), "module off must not exclude everyone (suggest)");
   } finally {
     await db.query("ROLLBACK").catch(() => {});
     await db.end();

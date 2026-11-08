@@ -15,10 +15,15 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import Hls from "hls.js";
 import { stripComments } from "./testSource.ts";
-import { HLS_CONFIG } from "./hlsConfig.ts";
-import { escalationFor, escalationAfterGrace, playbackIsAdvancing, reconnectDelayMs, DISCONNECT_GRACE_MS, MAX_RECONNECTS } from "./whepEscalation.ts";
+import { hlsConfigFor } from "./hlsConfig.ts";
+const HLS_CONFIG = hlsConfigFor(false); // the ordinary config — hlsConfig.test.ts covers the smooth one
+import {
+  escalationFor, escalationAfterGrace, playbackIsAdvancing, reconnectDelayMs, retryBudgetSpent, offerChoicesWhileReconnecting,
+  watchdogVerdict, DISCONNECT_GRACE_MS, MAX_RECONNECTS, CONNECT_TIMEOUT_MS, SIGNAL_DEADLINE_MS, ICE_CHECK_MS, ICE_GATHER_CAP_MS,
+  WHEP_RELAY_TIMEOUT_MS, BUSY_RETRY_S, busyRetryMs,
+} from "./whepEscalation.ts";
 
-const base = { everConnected: true, retryCount: 0, maxReconnects: 4, aborted: false };
+const base = { everConnected: true, aborted: false };
 
 test("THE REGRESSION: `disconnected` must NOT escalate — it is transient", () => {
   const a = escalationFor({ ...base, state: "disconnected" });
@@ -45,10 +50,64 @@ test("`failed` having NEVER connected stops and offers the choice — no retry o
   );
 });
 
-test("retry budget is honoured: the last retry falls back instead of looping", () => {
-  assert.deepEqual(escalationFor({ ...base, state: "failed", retryCount: 3 }), { kind: "reconnect" });
-  assert.deepEqual(escalationFor({ ...base, state: "failed", retryCount: 4 }), { kind: "fallback" });
-  assert.deepEqual(escalationFor({ ...base, state: "failed", retryCount: 9 }), { kind: "fallback" });
+// ── Retry: a session that has played keeps trying for as long as it is mounted ──
+// Prod 10-30: an Android phone lost its network for minutes at a time; the old
+// ten-try budget ended a long dead spot in "Can't connect" and a tap. The site's
+// liveness unmounts the player when the stream is over, so "keep trying" ends
+// when the stream does.
+
+test("retry: `failed` after a good connection reconnects with no budget — the hundredth time too", () => {
+  assert.deepEqual(escalationFor({ ...base, state: "failed" }), { kind: "reconnect" });
+  for (const retryCount of [0, MAX_RECONNECTS - 1, MAX_RECONNECTS, 100]) {
+    assert.equal(retryBudgetSpent({ everConnected: true, retryCount }), false, `retry ${retryCount} after playing`);
+  }
+});
+
+test("retry: a session that has NEVER played still stops at the budget and offers the choice", () => {
+  assert.equal(retryBudgetSpent({ everConnected: false, retryCount: MAX_RECONNECTS - 1 }), false);
+  assert.equal(retryBudgetSpent({ everConnected: false, retryCount: MAX_RECONNECTS }), true);
+});
+
+test("retry: a long reconnect also offers the escapes, from the old budget on", () => {
+  assert.equal(offerChoicesWhileReconnecting(MAX_RECONNECTS - 1), false);
+  assert.equal(offerChoicesWhileReconnecting(MAX_RECONNECTS), true);
+  assert.equal(offerChoicesWhileReconnecting(50), true);
+});
+
+// ── The watchdog: judged by how far the attempt got ─────────────────────────
+
+test("the signal deadline is derived from the relay's own: the player never abandons a request the relay can still answer", () => {
+  assert.equal(SIGNAL_DEADLINE_MS, ICE_GATHER_CAP_MS + WHEP_RELAY_TIMEOUT_MS + 2000);
+  assert.ok(SIGNAL_DEADLINE_MS > ICE_GATHER_CAP_MS + WHEP_RELAY_TIMEOUT_MS, "an answer the relay sends at its deadline must still be awaited");
+  assert.ok(SIGNAL_DEADLINE_MS > CONNECT_TIMEOUT_MS, "the old single 9 s deadline cut the relay off");
+});
+
+test("watchdog: while the offer is unanswered it waits out the signal deadline, then retries — even a first connect", () => {
+  for (const phase of ["ice", "signal"] as const) {
+    assert.deepEqual(watchdogVerdict({ phase, elapsedMs: CONNECT_TIMEOUT_MS, answeredAtMs: null, everConnected: false }),
+      { kind: "wait", ms: SIGNAL_DEADLINE_MS - CONNECT_TIMEOUT_MS }, `${phase} at 9 s`);
+    // Our own site did not answer: that is the viewer's HTTP, not a network
+    // that blocks WebRTC — never "Compatibility mode usually works".
+    assert.deepEqual(watchdogVerdict({ phase, elapsedMs: SIGNAL_DEADLINE_MS, answeredAtMs: null, everConnected: false }), { kind: "reconnect" });
+    assert.deepEqual(watchdogVerdict({ phase, elapsedMs: SIGNAL_DEADLINE_MS, answeredAtMs: null, everConnected: true }), { kind: "reconnect" });
+  }
+});
+
+test("watchdog: answered but never connected — the media path is judged, and only a never-played session gets the choice", () => {
+  const early = { phase: "connect" as const, answeredAtMs: 400 };
+  assert.deepEqual(watchdogVerdict({ ...early, elapsedMs: 5000, everConnected: false }), { kind: "wait", ms: CONNECT_TIMEOUT_MS - 5000 });
+  assert.deepEqual(watchdogVerdict({ ...early, elapsedMs: CONNECT_TIMEOUT_MS, everConnected: false }), { kind: "fallback" });
+  assert.deepEqual(watchdogVerdict({ ...early, elapsedMs: CONNECT_TIMEOUT_MS, everConnected: true }), { kind: "reconnect" });
+});
+
+test("watchdog: a late answer still gets its full ICE window", () => {
+  const late = { phase: "connect" as const, answeredAtMs: 11_000, everConnected: false };
+  assert.deepEqual(watchdogVerdict({ ...late, elapsedMs: 11_000 }), { kind: "wait", ms: ICE_CHECK_MS });
+  assert.deepEqual(watchdogVerdict({ ...late, elapsedMs: 11_000 + ICE_CHECK_MS }), { kind: "fallback" });
+});
+
+test("watchdog: a playing attempt is left alone", () => {
+  assert.deepEqual(watchdogVerdict({ phase: "media", elapsedMs: 60_000, answeredAtMs: 500, everConnected: true }), { kind: "none" });
 });
 
 test("a teardown WE initiated is never read as a failure", () => {
@@ -74,9 +133,10 @@ test("`closed` from the far side IS terminal (only `aborted` excuses it)", () =>
   );
 });
 
-test("after grace expires, a still-disconnected link is treated as failed", () => {
+test("after grace expires, a still-disconnected link is treated as failed — and keeps being retried", () => {
+  // Prod: `grace-expired — pc=disconnected/disconnected` is the commonest row
+  // (Android, Windows Firefox). It reconnects; it never ends in the panel.
   assert.deepEqual(escalationAfterGrace(base), { kind: "reconnect" });
-  assert.deepEqual(escalationAfterGrace({ ...base, retryCount: 4 }), { kind: "fallback" });
   assert.deepEqual(escalationAfterGrace({ ...base, everConnected: false }), { kind: "fallback" });
 });
 
@@ -88,7 +148,7 @@ test("a blip that heals costs the viewer nothing", () => {
   assert.equal(blip.kind, "wait");
   const healed = escalationFor({ ...base, state: "connected" });
   assert.equal(healed.kind, "none");
-  assert.deepEqual(escalationFor({ ...base, state: "failed", retryCount: 0 }), { kind: "reconnect" });
+  assert.deepEqual(escalationFor({ ...base, state: "failed" }), { kind: "reconnect" });
 });
 
 // ── playbackIsAdvancing: never contradict the picture on screen ──────────────
@@ -173,11 +233,9 @@ test("no stop in StreamplaceThinPlayer bypasses the playback guard", () => {
   // declareStop() — declareStop probes the playlist and resolves to
   // setStatus(hlsFailureKind(...)) ("ended" or "failed"), so that inner call
   // is the RESOLUTION of an already-guarded path, not a second, unguarded one.
-  // There are exactly two declarations: the WebRTC failIfStalled (which the
-  // relay's 429 branch now calls into as failIfStalled("relay:429") rather
-  // than repeating the guard inline — one writer of "failed", not two), and
-  // the HLS giveUp's declareStop; any other is a path that can paint an error
-  // over working video.
+  // There are exactly two declarations: the WebRTC failIfStalled and the HLS
+  // giveUp's declareStop; any other is a path that can paint an error over
+  // working video. (A relay 429 is "busy" and declares nothing.)
   const failed = src.match(/setStatus\("failed"\)/g) ?? [];
   const declareStopCalls = src.match(/void declareStop\(\)/g) ?? [];
   assert.equal(failed.length + declareStopCalls.length, 2,
@@ -186,17 +244,13 @@ test("no stop in StreamplaceThinPlayer bypasses the playback guard", () => {
   const guardedFailed = src.match(/if \(!playbackHealthy\(\)\) \{[^}]*(?:setStatus\("failed"\)|void declareStop\(\))/g) ?? [];
   assert.equal(guardedFailed.length, 2,
     'a failure declaration (setStatus("failed") or declareStop()) is no longer behind !playbackHealthy()');
-  // The 429 branch is a CALLER of failIfStalled, not a second inline guard.
-  assert.match(src, /if \(!playbackHealthy\(\)\) \{ clearTimeout\(watchdog\); failIfStalled\("relay:429"\); \}/,
-    "the 429 branch must delegate to failIfStalled rather than declaring \"failed\" itself");
 
-  // "ended" is a stop too. A remote track ending is confirmed against the
-  // picture the same way — frames can advance for a few seconds after the
-  // event — so it has exactly one writer, and that writer is guarded.
-  const ended = src.match(/setStatus\("ended"\)/g) ?? [];
-  assert.equal(ended.length, 1, `expected 1 guarded setStatus("ended"), found ${ended.length}`);
-  assert.match(src, /if \(!playbackHealthy\(\)\) \{[^}]*setStatus\("ended"\)/,
-    'setStatus("ended") is not behind !playbackHealthy() — an end can be declared over advancing frames');
+  // "ended" has no WebRTC writer at all: a track the node ends is a reconnect
+  // (prod 10-18 → 10-31: ten "Stream has ended" panels over a live stream).
+  // The one way to "ended" is compatibility mode's 404 probe, hlsFailureKind,
+  // which already sits behind the guard above (declareStop).
+  assert.equal((src.match(/setStatus\("ended"\)/g) ?? []).length, 0, 'a literal setStatus("ended") is back');
+  assert.equal((src.match(/setStatus\(hlsFailureKind\(status\)\)/g) ?? []).length, 1, "the HLS probe is the one writer of ended");
 
   // And the removed rungs must stay removed.
   assert.doesNotMatch(src, /setMode\("hls"\)[^;]*;\s*return;\s*\}\s*retryCountRef/,
@@ -205,30 +259,24 @@ test("no stop in StreamplaceThinPlayer bypasses the playback guard", () => {
     "the HLS→embed auto-demotion is back — it rewrites a PERSISTED preference");
 });
 
-test("an ended broadcast is sticky — the reconnect machinery stands down", () => {
-  // The peer connection follows the ended tracks into `failed`. Without these
-  // gates that would overwrite "Stream has ended" with four reconnects and a
-  // panel blaming the viewer's network.
+test("a track the node ends reconnects once the picture has stopped — the end is liveness's call, not the player's", () => {
+  // Was "an ended broadcast is sticky": the player declared "Stream has ended"
+  // on a track's `ended` and cancelled the armed reconnect. On prod that panel
+  // sat over a live stream until a tap (track-ended attempt=0, ten times on one
+  // viewer). The player is mounted only while liveness says stream.place is
+  // live, so a track end is the node dropping us. Run in
+  // features/player/streamplaceReconnect.render.test.ts; pinned here too.
   const src = readPlayer();
-  assert.match(src, /const scheduleReconnect = \(reason: string\) => \{\s*if \(aborted \|\| retryRef\.current \|\| endedRef\.current \|\| endTimer\) return;/);
-  assert.match(src, /const failIfStalled = \(reason: string\) => \{\s*if \(aborted \|\| endedRef\.current \|\| endTimer\) return;/);
-  assert.match(src, /if \(endedRef\.current \|\| endTimer\) return;/,
-    "the connection-state handler must stand down while an end is declared or pending");
-  assert.match(src, /endedRef\.current = false;/, "a fresh negotiation clears the ended state");
-  assert.match(src, /if \(st === "connected"\) \{[\s\S]*?return;\s*\}\s*if \(endedRef\.current \|\| endTimer\) return;/,
-    "the end gate must follow the connected branch — a connect must still win");
-
-  // The wire from the event to the guarded hold, the bound on that hold, and the
-  // cancellation of an armed reconnect. Without the bound, one track of two
-  // ending over a still-moving picture re-arms the hold forever and gates every
-  // escalation path for the life of the negotiation.
-  assert.match(src, /e\.track\.addEventListener\("ended", \(\) => \{ if \(!aborted\) endIfStalled\(\); \}\)/,
-    "a track ending must go through endIfStalled, or 'ended' is unreachable");
+  assert.match(src, /e\.track\.addEventListener\("ended", \(\) => \{ if \(!aborted\) reconnectIfTrackStalled\(\); \}\)/,
+    "a track ending must go through the guarded hold");
+  assert.match(src, /if \(!playbackHealthy\(\)\) \{ endRechecks = 0; scheduleReconnect\("track-ended"\); return; \}/,
+    "a stopped picture after a track end reconnects, with its own reason");
   assert.match(src, /MAX_END_RECHECKS = 5/);
-  assert.match(src, /if \(endRechecks >= MAX_END_RECHECKS\) \{\s*endRechecks = 0;[\s\S]*?applyEscalation\(escalationFor\(\{[\s\S]*?state: pc\.connectionState,?\s*\}\), `state:\$\{pc\.connectionState\}`\);\s*return;\s*\}/,
-    "the stand-down must re-judge the connection");
-  assert.match(src, /if \(!playbackHealthy\(\)\) \{[^}]*clearRetry\(\);[^}]*setStatus\("ended"\)/,
-    "declaring an end must cancel an armed reconnect");
+  assert.match(src, /if \(endRechecks >= MAX_END_RECHECKS\) \{ endRechecks = 0; return; \}/,
+    "fifteen seconds of moving picture after a track end is not a stop: the hold stands down");
+  assert.doesNotMatch(src, /endedRef/, "the sticky end gate is back — it cancelled the reconnect a live stream needed");
+  assert.match(src, /const scheduleReconnect = \(reason: string\) => \{\s*if \(aborted \|\| retryRef\.current\) return;/,
+    "an armed reconnect absorbs a second track's end (one row per drop)");
 });
 
 test("recovery cancels the stall loops", () => {
@@ -289,7 +337,7 @@ test("compatibility mode catches up to live — and its config actually construc
   assert.equal(made.config.capLevelToPlayerSize, true);
   made.destroy();
   const src = readPlayer();
-  assert.match(src, /new Hls\(HLS_CONFIG\)/, "the component must use the one exported literal");
+  assert.match(src, /new Hls\(hlsConfigFor\(smooth\)\)/, "the component must build from the exported configs (hlsConfig.test.ts constructs both)");
 });
 
 test("the stats poll is WebRTC-only, like the panel and its toggle", () => {
@@ -300,18 +348,28 @@ test("the stats poll is WebRTC-only, like the panel and its toggle", () => {
   assert.match(toHls, /setShowStats\(false\)/, "switching back must not show a panel nobody asked for");
 });
 
-test("a 429 from the relay is terminal with its own words, and never a reconnect", () => {
+// A relay 429 is "busy": wait as long as Retry-After says (10 s without one) and
+// try again by itself. The wait is bounded both ways — a 0 must not become a
+// tight loop, and a huge value must not leave a viewer waiting minutes.
+test("busy: the wait comes from Retry-After, bounded, 10 s by default", () => {
+  assert.equal(BUSY_RETRY_S, 10);
+  assert.equal(busyRetryMs(null), 10_000, "no header");
+  assert.equal(busyRetryMs("7"), 7_000);
+  assert.equal(busyRetryMs(" 12 "), 12_000);
+  assert.equal(busyRetryMs("soon"), 10_000, "junk is the default, never NaN");
+  assert.equal(busyRetryMs("0"), 2_000, "never a tight loop");
+  assert.equal(busyRetryMs("-5"), 10_000, "a negative is junk");
+  assert.equal(busyRetryMs("3600"), 60_000, "never a wait of minutes");
+  const now = Date.UTC(2026, 10, 6, 12, 0, 0);
+  assert.equal(busyRetryMs(new Date(now + 20_000).toUTCString(), now), 20_000, "an HTTP date counts from now");
+  assert.equal(busyRetryMs(new Date(now - 20_000).toUTCString(), now), 2_000, "a date already past is the floor");
+});
+
+test("the relay's 429 sits before the generic reconnect and never reads as a broken transport", () => {
   const src = readPlayer();
-  assert.match(src, /if \(res\.status === 429\) \{\s*setFailReason\("throttled"\);\s*if \(!playbackHealthy\(\)\) \{ clearTimeout\(watchdog\); failIfStalled\("relay:429"\); \}\s*return;\s*\}\s*if \(!res\.ok\) \{ scheduleReconnect\(`relay:\$\{res\.status\}`\); return; \}/,
-    "the 429 branch must sit BEFORE the generic !ok reconnect, cancel the watchdog (its reconnect would retry into the budget) and return without scheduling one");
-  assert.match(src, /failReason === "throttled"\s*\? "Too many connection attempts from this network"/);
-  assert.match(src, /mode === "webrtc" && failReason !== "throttled" && \(/, "Compatibility mode spends the same budget — hidden while throttled");
-  // Every negotiation starts clean — the WebRTC IIFE and the HLS start(), and
-  // nowhere else (a clear on the manual restarts would be a second, partial
-  // mechanism: the watchdog's automatic reconnect is not a manual restart).
-  assert.equal((src.match(/setFailReason\(null\)/g) ?? []).length, 2, "the two negotiation tops");
-  assert.match(src, /setStatus\("connecting"\);\s*setFailReason\(null\);[\s\S]*?const offer = await pc\.createOffer\(\)/, "WebRTC: cleared before the offer");
-  assert.match(src, /const start = async \(\) => \{\s*setStatus\("connecting"\);\s*setFailReason\(null\);/, "HLS: cleared at the top of start()");
+  assert.match(src, /if \(res\.status === 429\) \{ waitWhileBusy\(res\.headers\.get\("retry-after"\)\); return; \}\s*if \(!res\.ok\) \{ scheduleReconnect\(`relay:\$\{res\.status\}`\); return; \}/,
+    "the 429 branch must come first and return: the generic branch would count it as a transport failure");
+  assert.doesNotMatch(src, /failReason|"throttled"/, "the terminal 'too many attempts' panel is gone; busy retries by itself");
 });
 
 test("the HLS giveUp loop is bounded like the WebRTC end hold", () => {
@@ -342,12 +400,11 @@ test("the reconnect ladder grows and then holds: 2, 4, 8, 15, then 30 s", () => 
   assert.equal(reconnectDelayMs(-1), 2000);
 });
 
-test("the retry budget outlasts a short node blip: the waits alone span more than three minutes", () => {
+test("the escapes appear after more than three minutes of trying, never sooner", () => {
   assert.equal(MAX_RECONNECTS, 10);
   const waits = Array.from({ length: MAX_RECONNECTS }, (_, i) => reconnectDelayMs(i + 1)).reduce((a, b) => a + b, 0);
-  // Each attempt also sits behind the player's 9 s connect timeout, so the
-  // wall time to "Can't connect" is longer still — about five minutes.
-  assert.ok(waits >= 180_000, `waits total ${waits} ms — the old ladder's 20 s is what stranded chido`);
+  // A short node blip ends before the screen asks the viewer to do anything.
+  assert.ok(waits >= 180_000, `waits total ${waits} ms — the old ladder's 20 s stranded a viewer`);
 });
 
 test("the player schedules from the ladder and takes its budget from this module", () => {
@@ -355,6 +412,11 @@ test("the player schedules from the ladder and takes its budget from this module
   assert.match(src, /const delay = reconnectDelayMs\(retryCountRef\.current\);/, "the delay must come from reconnectDelayMs");
   assert.doesNotMatch(src, /Math\.min\(2000 \*/, "the inline 2s→8s formula is back");
   assert.doesNotMatch(src, /const MAX_RECONNECTS =/, "the budget must not be redefined in the player");
-  assert.match(src, /import \{[^}]*\bMAX_RECONNECTS\b[^}]*\} from "@\/app\/lib\/whepEscalation";/, "the budget is imported from the policy module");
-  assert.match(src, /if \(retryCountRef\.current >= MAX_RECONNECTS\) \{ failIfStalled\("max-reconnects"\); return; \}/, "the cap check itself is unchanged");
+  assert.match(src, /import \{[^}]*\bretryBudgetSpent\b[^}]*\} from "@\/app\/lib\/whepEscalation";/, "the budget is the policy module's");
+  assert.match(src, /if \(retryBudgetSpent\(\{ everConnected: everConnectedRef\.current, retryCount: retryCountRef\.current \}\)\) \{ failIfStalled\("max-reconnects"\); return; \}/,
+    "the cap applies only through retryBudgetSpent — a session that has played is never capped");
+  assert.doesNotMatch(src, /retryCountRef\.current >= MAX_RECONNECTS/, "a raw cap check is back");
+  assert.doesNotMatch(src, /const CONNECT_TIMEOUT_MS =/, "the connect deadline must not be redefined in the player");
+  assert.match(src, /watchdogVerdict\(\{ phase, elapsedMs: Date\.now\(\) - startedAt, answeredAtMs: answeredAt, everConnected: everConnectedRef\.current \}\)/,
+    "the watchdog is judged by the policy module, by phase");
 });

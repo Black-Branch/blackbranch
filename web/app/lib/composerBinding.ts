@@ -38,7 +38,21 @@ export type BindingFace = {
 };
 
 export type ComposerBinding =
-  | { kind: "sendTo"; windowId: string; send: (text: string) => Promise<void>; face: BindingFace; onRelease: () => void };
+  | {
+      kind: "sendTo"; windowId: string; send: (text: string) => Promise<void>; face: BindingFace; onRelease: () => void;
+      /** The window let go of the box BY ITSELF (the conversation stopped being sendable — their
+       *  request arrived on my draft, someone else joined) while the box held text typed for it:
+       *  the window takes the text and answers true, and the box is emptied — a private line is
+       *  never left in a box whose Enter now posts to Live. False when the person let go (a close,
+       *  the send-to control): their text stays where they put it. */
+      keep?: (text: string) => boolean;
+      /** A line the window kept (above, or a `/dm name text` that was refused): handed back to the
+       *  box once the window holds it again. Called only while the box is empty. */
+      takeKept?: () => string | undefined;
+      /** The box's text while it holds this window, on every change (and once as it binds): the
+       *  DM window announces typing from it. Never a send. */
+      onText?: (text: string) => void;
+    };
 
 let current: ComposerBinding | null = null;
 const listeners = new Set<() => void>();
@@ -83,6 +97,27 @@ export function currentBinding(): ComposerBinding | null {
 export function subscribeComposerBinding(listener: () => void): () => void {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
+}
+
+/** The chat box's side of keep / takeKept, synchronous with the slot (a listener, not a render):
+ *  when the holder goes, its text goes with it if the holder keeps it; when a holder (re)declares
+ *  and the box is empty, a kept line comes back. ChatInput is the one caller. */
+export function watchBoundText(read: () => string, write: (text: string) => void): () => void {
+  let held = current;
+  const check = () => {
+    const prev = held;
+    held = current;
+    if (prev && prev.windowId !== current?.windowId) {
+      const text = read();
+      if (text.trim() && prev.keep?.(text)) write("");
+    }
+    if (current && !read().trim()) {
+      const kept = current.takeKept?.();
+      if (kept) write(kept);
+    }
+  };
+  check();
+  return subscribeComposerBinding(check);
 }
 
 /** @test-only clears the slot and the listeners between tests. */

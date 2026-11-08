@@ -4,10 +4,10 @@ import { useState, useEffect, useRef } from "react";
 import { subscribeRoomRefresh } from "@/app/lib/matrixRoomEvents";
 import type { Room, MatrixEvent } from "matrix-js-sdk";
 import { useMatrixClient } from "@/app/lib/MatrixClientContext";
-import { Bar } from "@/app/components/chrome";
+import { Bar, BarButton } from "@/app/components/chrome";
 import { Avatar } from "@/app/components/Avatar";
 import { stripReplyFallback } from "@/app/lib/stripReplyFallback";
-import { memberName } from "@/app/lib/matrixDisplay";
+import { memberName, memberAvatar } from "@/app/lib/matrixDisplay";
 import { senderLabel } from "@/app/lib/discordSender";
 import PlatformIcon from "@/app/components/PlatformIcon";
 import { useOutsideClick } from "@/app/lib/useOutsideClick";
@@ -34,7 +34,7 @@ function preview(room: Room, ev: MatrixEvent): { name: string; fromDiscord: bool
   const { label: name, fromDiscord } = senderLabel(memberName(member, senderId), senderId);
   const c = ev.getContent() as Record<string, unknown>;
   const text = mediaKindLabel(ev.getType(), c.msgtype) ?? stripReplyFallback((c.body as string) ?? "");
-  return { name, fromDiscord, mxc: member?.getMxcAvatarUrl() ?? null, text };
+  return { name, fromDiscord, mxc: memberAvatar(member), text };
 }
 
 // Right-panel list of every thread in the open channel (the footer "Threads"
@@ -80,15 +80,11 @@ export function ThreadsListPanel({
       <Bar slot="top" name="mx-header" center={
         <>
           {onBack && (
-            <button onClick={onBack} aria-label="Back" className="text-secondary hover:text-strong text-sm px-1 shrink-0">
-              ←
-            </button>
+            <BarButton size="touch" icon={<span className="text-sm">←</span>} label="Back" onClick={onBack} />
           )}
           <span className="text-base">🧵</span>
           <span className="text-sm font-medium text-body flex-1 truncate">Threads</span>
-          <button onClick={onClose} className="text-muted hover:text-strong text-xs shrink-0" title="Close">
-            ✕
-          </button>
+          <BarButton size="touch" icon={<span className="text-xs">✕</span>} label="Close" onClick={onClose} />
         </>
       } />
 
@@ -145,7 +141,7 @@ export function ThreadsListPanel({
               >
                 {/* Root line */}
                 <div className="flex items-center gap-2 min-w-0">
-                  <Avatar mxcUrl={rp.mxc} name={rp.name} size={20} />
+                  <Avatar mxcUrl={rp.mxc} name={rp.name} size="sm" />
                   <span className="text-body font-medium truncate" style={{ fontSize: "var(--text-chat-md)" }}>
                     {rp.name}
                     {rp.fromDiscord && (

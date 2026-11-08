@@ -15,6 +15,8 @@ type Session = { id: string; mode: string; amount_total: number; metadata?: Reco
 function rig(opts: { session?: Session | null; invoice?: { id: string; billing_reason: string; amount_paid: number; parent?: unknown } | null;
   cancelled?: string[]; donationCents?: number | null; answer?: { status: number; body: unknown } } = {}) {
   const posts: Record<string, unknown>[] = [];
+  const ended: string[] = [];
+  const restored: string[] = [];
   const stripe = {
     checkout: { sessions: { list: async () => ({ data: opts.session ? [opts.session] : [] }) } },
     invoicePayments: { list: async () => ({ data: opts.invoice ? [{ invoice: opts.invoice.id }] : [] }) },
@@ -32,8 +34,10 @@ function rig(opts: { session?: Session | null; invoice?: { id: string; billing_r
     pool: pool as never,
     stripe: () => stripe,
     post: async (_path, body) => { posts.push(body as Record<string, unknown>); return new Response(JSON.stringify(answer.body), { status: answer.status }); },
+    endGift: async (g) => { ended.push(g.sessionId); },
+    restoreGift: async (ref) => { restored.push(ref); },
   });
-  return { ...r, posts };
+  return { ...r, posts, ended, restored };
 }
 const ev = (type: string, object: Record<string, unknown>) => ({ type, data: { object } }) as unknown as Stripe.Event;
 const DONATION: Session = { id: "cs_1", mode: "payment", amount_total: 1000, metadata: { kind: "donation" } };
@@ -110,4 +114,72 @@ test("a held reversal (202) is success; 404 unknown_event and any other refusal 
   await assert.rejects(lost.onStripeEvent(ev("refund.created", { id: "re_x", payment_intent: "pi_1", amount: 100 })), /answered 404/);
   const bad = rig({ session: DONATION, answer: { status: 503, body: { error: "x" } } });
   await assert.rejects(bad.onStripeEvent(ev("refund.created", { id: "re_y", payment_intent: "pi_1", amount: 100 })), /answered 503/);
+});
+
+// Area-1 round 2, A1-09 / P10 (k 2026-10-25): a refunded or disputed gift kept entitling its
+// recipient for its whole term while the money was gone. A refund or a dispute of a gift now ends
+// the gift at once, beside the ledger reversal it already wrote.
+test("a refunded gift and a disputed gift each end that gift, and still reverse its money", async () => {
+  const GIFT: Session = { id: "cs_g9", mode: "payment", amount_total: 500, metadata: { kind: "gift" } };
+  const refunded = rig({ session: GIFT });
+  await refunded.onStripeEvent(ev("refund.created", { id: "re_g9", payment_intent: "pi_g9", amount: 500 }));
+  assert.deepEqual(refunded.ended, ["cs_g9"]);
+  assert.equal(refunded.posts[0]!.spendId, "gift:cs_g9", "the ledger reversal is written as before");
+  const disputed = rig({ session: GIFT });
+  await disputed.onStripeEvent(ev("charge.dispute.created", { id: "dp_g9", payment_intent: "pi_g9", amount: 500 }));
+  assert.deepEqual(disputed.ended, ["cs_g9"]);
+  assert.equal(disputed.posts[0]!.reason, "dispute");
+  // Not a gift: nothing ended. An outcome that came first (the refund failed): nothing ended either.
+  const tip = rig({ session: DONATION });
+  await tip.onStripeEvent(ev("refund.created", { id: "re_t", payment_intent: "pi_1", amount: 100 }));
+  assert.deepEqual(tip.ended, []);
+  const first = rig({ session: GIFT, cancelled: ["stripe:refund:re_g9"] });
+  await first.onStripeEvent(ev("refund.created", { id: "re_g9", payment_intent: "pi_g9", amount: 500 }));
+  assert.deepEqual(first.ended, []);
+});
+
+// Review R3 (round 2): a refund that fails, a dispute the streamer wins, or a card-network inquiry
+// that closes harmlessly gave the MONEY back (restore) but not the gift. The gift comes back with it.
+test("a failed refund, a won dispute and a harmlessly closed inquiry restore the gift with the money", async () => {
+  const GIFT: Session = { id: "cs_g10", mode: "payment", amount_total: 500, metadata: { kind: "gift" } };
+  const failed = rig({ session: GIFT });
+  await failed.onStripeEvent(ev("refund.updated", { id: "re_g10", payment_intent: "pi_g10", amount: 500, status: "failed" }));
+  assert.deepEqual(failed.restored, ["stripe:refund:re_g10"]);
+  assert.equal(failed.posts[0]!.reason, "restore", "the money is restored as before");
+  for (const status of ["won", "warning_closed"]) {
+    const closed = rig({ session: GIFT });
+    await closed.onStripeEvent(ev("charge.dispute.closed", { id: "dp_g10", payment_intent: "pi_g10", amount: 500, status }));
+    assert.deepEqual(closed.restored, ["stripe:dispute:dp_g10"], status);
+  }
+  const lost = rig({ session: GIFT });
+  await lost.onStripeEvent(ev("charge.dispute.closed", { id: "dp_g11", payment_intent: "pi_g10", amount: 500, status: "lost" }));
+  assert.deepEqual(lost.restored, [], "a lost dispute restores nothing");
+  const tip = rig({ session: DONATION });
+  await tip.onStripeEvent(ev("refund.updated", { id: "re_t2", payment_intent: "pi_1", amount: 100, status: "failed" }));
+  assert.deepEqual(tip.restored, [], "only a gift has a gift to restore");
+});
+
+test("the gift's end carries the reversal's ref, reason, amount and the payment's gross", async () => {
+  const GIFT: Session = { id: "cs_g12", mode: "payment", amount_total: 1500, metadata: { kind: "gift" } };
+  const seen: unknown[] = [];
+  const h = rig({ session: GIFT });
+  const r = createSupportReversals({
+    pool: { query: async () => ({ rows: [] }) } as never,
+    stripe: () => ({ checkout: { sessions: { list: async () => ({ data: [GIFT] }) } } }) as never,
+    post: async () => new Response("{}", { status: 200 }),
+    endGift: async (g) => { seen.push(g); },
+  });
+  await r.onStripeEvent(ev("refund.created", { id: "re_g12", payment_intent: "pi_g12", amount: 500 }));
+  assert.deepEqual(seen, [{ sessionId: "cs_g12", ref: "stripe:refund:re_g12", reason: "refund", amount: 500, gross: 1500, slots: 1 }]);
+  // A community gift's slot count is the purchase's own (its Checkout session's metadata), never the live rows.
+  const COMM: Session = { id: "cs_g13", mode: "payment", amount_total: 1500, metadata: { kind: "gift", gift_type: "community", count: "3" } };
+  const seen2: unknown[] = [];
+  await createSupportReversals({
+    pool: { query: async () => ({ rows: [] }) } as never,
+    stripe: () => ({ checkout: { sessions: { list: async () => ({ data: [COMM] }) } } }) as never,
+    post: async () => new Response("{}", { status: 200 }),
+    endGift: async (g) => { seen2.push(g); },
+  }).onStripeEvent(ev("refund.created", { id: "re_g13", payment_intent: "pi_g13", amount: 500 }));
+  assert.equal((seen2[0] as { slots: number }).slots, 3);
+  assert.ok(h);
 });

@@ -1,5 +1,5 @@
-// Every outbound fetch on the player's upstream paths — the YouTube liveness
-// scrape, the avatar lookup, the VOD list, the mod tooling's channel resolve —
+// Every outbound fetch on the player's upstream paths — the community slot's
+// YouTube page read (a background refresher since liveness Task 9), the avatar lookup, the VOD list, the mod tooling's channel resolve —
 // carries a deadline, and a failed scrape is remembered for a short while.
 //
 // Why a source scan: these functions import the pg pool and call the network,
@@ -20,6 +20,7 @@ import { stripComments } from "./testSource.ts";
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const STATUS = "app/lib/streamStatus.ts";
+const LIVE = "app/lib/communityLive.ts";
 const VODS = "app/lib/vods.ts";
 const EMBED_ROUTE = "app/api/mod/embed/route.ts";
 const MANAGER = "app/components/CommunityEmbedManager.tsx";
@@ -44,29 +45,36 @@ function calls(src: string, name: string): string[] {
   return out;
 }
 
-test("streamStatus.ts: the live scrape and the avatar lookup carry a deadline", () => {
-  const src = read(STATUS, /statusCache\.get\(\);\s*$/);
+test("communityLive.ts: the live page read and the avatar lookup carry a deadline", () => {
+  const src = read(LIVE, /return community\.snapshot\(\);\s*}\s*$/);
   const found = calls(src, "fetch");
-  assert.equal(found.length, 2, `expected the scrape + the avatar lookup, found ${found.length}`);
+  assert.equal(found.length, 2, `expected the page read + the avatar lookup, found ${found.length}`);
   for (const c of found) {
     assert.match(c, /signal: AbortSignal\.timeout\(YT_FETCH_TIMEOUT_MS\)/, `unbounded fetch: ${c.slice(0, 80)}…`);
   }
   assert.match(src, /YT_FETCH_TIMEOUT_MS = 7_000/);
 });
 
-test("streamStatus.ts: a failed scrape is remembered briefly, a good one for the full TTL", () => {
-  const src = read(STATUS, /statusCache\.get\(\);\s*$/);
-  assert.match(src, /YT_FAIL_CACHE_MS = 45 \* 1000/);
-  assert.match(src, /ttlMs: YT_FAIL_CACHE_MS/, "the failure entry must carry its own, shorter TTL");
-  assert.match(src, /ttlMs: YT_CACHE_MS/, "the good entry keeps the 5-minute TTL");
+test("communityLive.ts: a failed avatar lookup is remembered briefly, a good one for a day", () => {
+  const src = read(LIVE, /return community\.snapshot\(\);\s*}\s*$/);
   assert.match(src, /Date\.now\(\) - cached\.ts < cached\.ttlMs/, "one lookup, per-entry TTL");
+  assert.match(src, /AVATAR_CACHE_MS = 24 \* 60 \* 60 \* 1000/);
   assert.match(src, /AVATAR_FAIL_CACHE_MS = 5 \* 60 \* 1000/);
   assert.match(src, /ttlMs: AVATAR_FAIL_CACHE_MS/, "a failed avatar lookup must not be remembered for 24h");
 });
 
-test("streamStatus.ts: the rotation is scanned in parallel, priority still decides", () => {
+test("communityLive.ts: the rotation is read in parallel, every row's page through the one classifier", () => {
+  const src = read(LIVE, /return community\.snapshot\(\);\s*}\s*$/);
+  assert.match(src, /await Promise\.all\(\[\s+Promise\.all\(rows\.map\(async \(row\) =>[\s\S]{0,300}?readYouTube\(/);
+  assert.match(src, /YOUTUBE_LIVE\.classifyLivePage\(html, channelId\)/);
+  assert.equal(src.match(/classifyLivePage\(/g)?.length, 1, "one classifier call, no second page reader");
+  assert.doesNotMatch(src, /"isLive":true/, "the old substring test is gone");
+});
+
+test("streamStatus.ts: no platform is read on the request path", () => {
   const src = read(STATUS, /statusCache\.get\(\);\s*$/);
-  assert.match(src, /await Promise\.all\(\[\s+Promise\.all\(rows\.map\(\(row\) => \(row\.youtube_channel_id \? checkYouTubeLive\(row\.youtube_channel_id\) : null\)\)\),\s+twitchLiveLogins\(/);
+  assert.doesNotMatch(src, /youtube\.com|googleapis|fetch\(/, "the status loader fetches nothing but stream-api");
+  assert.match(src, /communitySnapshot\(\)/);
 });
 
 test("vods.ts: all three fetches carry a deadline", () => {

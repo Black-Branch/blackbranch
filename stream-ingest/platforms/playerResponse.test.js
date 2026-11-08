@@ -6,10 +6,15 @@
 // inside a JSON string (a video title or description), which truncates the JSON,
 // fails the parse, and returns null — indistinguishable from "the stream ended".
 // A video title would be enough to take the YouTube connector offline.
+//
+// The extractor is the shared classifier's (config/youtube-live.mjs, generated into
+// lib/youtubeLive.generated.js), so these pin the copy stream-ingest and web both run.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePlayerResponse } from './youtube.js';
+import { YOUTUBE_LIVE } from '../lib/youtubeLive.generated.js';
+
+const { parsePlayerResponse } = YOUTUBE_LIVE;
 
 const wrap = (json) => `<script>var ytInitialPlayerResponse = ${json};var meta = {};</script>`;
 

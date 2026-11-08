@@ -1,8 +1,8 @@
 // Discord's typing-indicator copy, and the id list the room's members yield
-// for the reader. An `m.typing` ephemeral event carries no room_id (it is
-// folded into each member's `.typing` flag before the SDK re-emits it as
-// RoomMemberEvent.Typing), so both the seed and the update read the flag off
-// the room itself — one expression, so they cannot drift.
+// for the reader. An `m.typing` ephemeral event carries no room_id (the SDK
+// folds it into each member's `.typing` flag before emitting it), so both the
+// seed and the update read the flag off the room itself — one expression, so
+// they cannot drift.
 
 export function typingLabel(names: string[]): string | null {
   const n = names.length;

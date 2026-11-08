@@ -20,21 +20,22 @@ const read = (rel: string) => {
 };
 
 test("nothing switched off → every live source, in the Live row's order", () => {
-  assert.deepEqual(liveSourcesOn([]), ["native", "streamplace", "youtube", "twitch"]);
-  assert.deepEqual(availableSources({ live: true, hasCommunity: false, fallbacks: [] }), ["native", "streamplace", "youtube", "twitch"]);
+  assert.deepEqual(liveSourcesOn([]), ["native", "streamplace", "youtube", "twitch", "kick"]);
+  assert.deepEqual(availableSources({ live: true, hasCommunity: false, fallbacks: [] }), ["native", "streamplace", "youtube", "twitch", "kick"]);
 });
 
 test("a switched-off source leaves the Live row and the drop-down; unknown names are ignored", () => {
   const on = liveSourcesOn(["twitch", "kick", "bogus"]);
-  assert.deepEqual(on, ["native", "streamplace", "youtube"]);
+  assert.deepEqual(on, ["native", "streamplace", "youtube"], "Kick is a source now: switching it off takes it out");
   assert.deepEqual(availableSources({ live: true, hasCommunity: true, fallbacks: ["radio"], liveOn: on }), ["native", "streamplace", "youtube", "community", "radio"]);
   assert.deepEqual(liveOptions("youtube", on).map((o) => o.key), ["native", "streamplace", "youtube"]);
-  assert.deepEqual(liveOptions("youtube").map((o) => o.key), ["native", "streamplace", "youtube", "twitch"], "the default is all four");
+  assert.deepEqual(liveOptions("youtube").map((o) => o.key), ["native", "streamplace", "youtube", "twitch", "kick"], "the default is all five");
+  assert.deepEqual(liveOptions("kick", liveSourcesOn(["twitch"])).find((o) => o.key === "kick"), { key: "kick", label: "Kick", platform: "kick", checked: true });
   assert.deepEqual(availableSources({ live: false, hasCommunity: false, fallbacks: ["radio"], liveOn: on }), ["radio"], "offline is unchanged");
 });
 
 test("FAIL OPEN: a setting that switches every source off is ignored — a player with no source is a dark site", () => {
-  assert.deepEqual(liveSourcesOn(["native", "streamplace", "youtube", "twitch"]), ["native", "streamplace", "youtube", "twitch"]);
+  assert.deepEqual(liveSourcesOn(["native", "streamplace", "youtube", "twitch", "kick"]), ["native", "streamplace", "youtube", "twitch", "kick"]);
 });
 
 test("a remembered source that is off plays the first one on; one that is on is kept", () => {
@@ -58,7 +59,8 @@ test("the setting is one list of known names, edited at once, read by the websit
   assert.deepEqual(e.packages, ["web"]);
   assert.deepEqual(parseInstanceValue(e, ["twitch", "youtube", "twitch"]), { ok: true, value: ["twitch", "youtube"] });
   assert.deepEqual(parseInstanceValue(e, "native, streamplace"), { ok: true, value: ["native", "streamplace"] });
-  const bad = parseInstanceValue(e, ["kick"]);
+  assert.deepEqual(parseInstanceValue(e, ["kick"]), { ok: true, value: ["kick"] }, "Kick's embed is a switch like the others");
+  const bad = parseInstanceValue(e, ["bogus"]);
   assert.equal(bad.ok, false, "a name outside the list is refused");
   // A list without `values` still takes any text (the rule is opt-in per key).
   assert.deepEqual(parseInstanceValue(instanceEntry("chat.botUsernames")!, ["anything"]), { ok: true, value: ["anything"] });
@@ -68,7 +70,8 @@ test("the home page reads the setting per render and the player takes every sour
   const page = read("app/(main)/page.tsx");
   assert.match(page, /embedsOff=\{instanceList\("player\.embedsOff"\)\}/);
   const view = read("app/components/StreamView.tsx");
-  assert.match(view, /const liveOn = useMemo\(\(\) => liveSourcesOn\(/);
+  // The switched-on set-up sources, then the per-platform liveness filter (livePlatforms.test.ts).
+  assert.match(view, /const liveOn = useMemo\(\s*\(\) => liveSourcesLive\(liveSourcesOn\(/);
   assert.match(view, /const liveSource = liveSourceOn\(parseLiveSource\(storedLive\) \?\? liveSourceFromLegacy\(legacyEmbed, legacySpThin\), liveOn\);/);
   assert.match(view, /availableSources\(\{ live, hasCommunity, fallbacks: fallbackIds, liveOn \}\)/);
   assert.match(view, /liveOn=\{liveOn\}/);
@@ -76,13 +79,21 @@ test("the home page reads the setting per render and the player takes every sour
 
 // ── Only sources this install has a channel for ────────────────────────────────────────────────
 
-const SETUP = { streamplaceChannel: "", youtubeChannelId: "", youtubeShown: true, twitchChannel: "" };
+const SETUP = { streamplaceChannel: "", youtubeChannelId: "", youtubeShown: true, twitchChannel: "", kickSlug: "" };
 
 test("a source with no channel is not set up: an empty stream.place channel drops the site player and the embed", () => {
   assert.deepEqual(liveSourcesSetUp({ ...SETUP, twitchChannel: "casey" }), ["twitch"]);
   assert.deepEqual(liveSourcesSetUp({ ...SETUP, streamplaceChannel: "casey.example" }), ["native", "streamplace"]);
   assert.deepEqual(liveSourcesSetUp({ ...SETUP, youtubeChannelId: "UCabc", youtubeShown: false }), [], "YouTube with its module off is not offered");
-  assert.deepEqual(liveSourcesSetUp({ streamplaceChannel: "a", youtubeChannelId: "UC", youtubeShown: true, twitchChannel: "b" }), ["native", "streamplace", "youtube", "twitch"]);
+  assert.deepEqual(liveSourcesSetUp({ streamplaceChannel: "a", youtubeChannelId: "UC", youtubeShown: true, twitchChannel: "b", kickSlug: "c" }), ["native", "streamplace", "youtube", "twitch", "kick"]);
+});
+
+test("a Kick slug sets up the Kick embed — on by default (decision 0135); none, no Kick source", () => {
+  assert.deepEqual(liveSourcesSetUp({ ...SETUP, kickSlug: "casey" }), ["kick"]);
+  assert.ok(liveSourcesSetUp({ ...SETUP, twitchChannel: "casey", kickSlug: "casey" }).includes("kick"));
+  assert.deepEqual(liveSourcesSetUp({ ...SETUP, kickSlug: "  " }), [], "a blank slug is no channel");
+  assert.deepEqual(liveSourcesOn([], liveSourcesSetUp({ ...SETUP, twitchChannel: "casey", kickSlug: "casey" })), ["twitch", "kick"], "nothing switched off: Kick is offered");
+  assert.deepEqual(liveSourcesOn(["kick"], liveSourcesSetUp({ ...SETUP, twitchChannel: "casey", kickSlug: "casey" })), ["twitch"]);
 });
 
 test("a first-time viewer on a Twitch-only install lands on Twitch, not an empty stream.place embed", () => {
@@ -103,11 +114,20 @@ test("wiring: the page hands the set-up sources and the Kick channel; the player
   const page = read("app/(main)/page.tsx");
   assert.match(page, /liveSetUp=\{liveSourcesSetUp\(\{/);
   assert.match(page, /youtubeShown: !off\.includes\("youtube"\)/);
+  assert.match(page, /kickSlug: instanceString\("platform\.kick\.slug"\) \?\? "",/);
   assert.match(page, /kickChannel=\{instanceString\("platform\.kick\.slug"\) \?\? ""\}/);
   const view = read("app/components/StreamView.tsx");
   assert.match(view, /livePlayable=\{liveOn\.length > 0\}/);
   const area = read("app/features/player/StreamPlayerArea.tsx");
   assert.match(area, /\{tab === "live" && live && !livePlayable && \(/);
-  assert.match(area, /Live on Kick — this site has no Kick player yet\./);
-  for (const a of ["sp", "yt", "tw"]) assert.match(area, new RegExp(`\\{tab === "live" && playLive && active === "${a}"`), `the ${a} embed mounts only with a playable source`);
+  // The card's copy is livePlatforms' (Task 7): "Live on <Platform>." / "The stream has ended."; the
+  // Kick link stays while the stream may be on Kick.
+  assert.match(area, /Live on \{platformLabel\(liveCard\.platform\)\}\./);
+  assert.match(area, /\{kickChannel && liveCard\.kind !== "ended" && \(liveCard\.kind === "none" \|\| liveCard\.platform === "kick"\) && \(/);
+  assert.match(area, /Watch on Kick/);
+  // The Kick link is for a Kick the Live row does not offer (its switch off): with the embed on,
+  // Kick plays in the player instead.
+  assert.match(view, /kickChannel=\{kickOffered \? "" : kickChannel\}/);
+  assert.match(view, /const kickOffered = liveSourcesOn\(embedsOffKey \? embedsOffKey\.split\(","\) : \[\], setUpList\)\.includes\("kick"\);/);
+  for (const a of ["sp", "yt", "tw", "kk"]) assert.match(area, new RegExp(`\\{tab === "live" && playLive && active === "${a}"`), `the ${a} embed mounts only with a playable source`);
 });

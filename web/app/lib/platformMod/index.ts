@@ -78,9 +78,11 @@ export function fanOutPurge(
   targetMatrixId: string,
   kickMessageIds: string[],
   youtubeMessageIds: string[],
-  batchId: string
+  batchId: string,
+  opts: { twitch: boolean } = { twitch: true }
 ): void {
-  void purgeOnTwitch(modMatrixId, targetMatrixId, batchId);
+  // A ban's purge leaves Twitch to the ban (modPurge.ts runPurge).
+  if (opts.twitch) void purgeOnTwitch(modMatrixId, targetMatrixId, batchId);
   void purgeOnKick(modMatrixId, targetMatrixId, kickMessageIds, batchId);
   void purgeOnYouTube(modMatrixId, targetMatrixId, youtubeMessageIds, batchId);
 }

@@ -4,18 +4,23 @@
 // the bot's stream-state, the offline gate). stream-ingest owns the platform
 // tokens and calls these endpoints; stream-api never polls platforms itself.
 
+const { PLATFORM_LIVENESS: { RESUME_GRACE_MS } } = require('./platformLiveness.generated');
+
 // A YouTube video id is exactly 11 URL-safe base64 characters.
 function youtubeVideoId(v) {
   return typeof v === 'string' && /^[A-Za-z0-9_-]{11}$/.test(v) ? v : null;
 }
 
-function createLifecycle({ pool, broadcast, onStreamStart = null, onStreamEnd = null, now = Date.now }) {
+function createLifecycle({ pool, broadcast, onStreamStart = null, onStreamEnd = null, now = Date.now, getLiveness = null }) {
+  // Each platform's public state (platform-states.js), on both answers: the site reads it from
+  // /stream/current. With no relay wired it is the empty snapshot — never an invented state.
+  const liveness = () => (getLiveness ? getLiveness() : { at: now(), platforms: {} });
   // A stream ends two ways — /stream/end, and the heartbeat self-heal in
   // liveState() when it never fires — and both are "the stream ended" to anything
   // that keys on it (e.g. a forced-on bot goes back to auto). Best-effort,
   // after the row is closed; never fails its caller. It can fire more than
   // once for one session (two liveState() calls racing the self-heal, or a
-  // second /stream/end for the same id), so a hook must be idempotent.
+  // resumed session ending again), so a hook must be idempotent.
   async function streamEnded(streamId) {
     if (!onStreamEnd) return;
     try { await onStreamEnd(streamId); }
@@ -31,6 +36,9 @@ function createLifecycle({ pool, broadcast, onStreamStart = null, onStreamEnd = 
   // the right failure direction (live, not dark).
   const FORCED_END_TTL_MS = 15 * 60 * 1000;
   let forcedEnd = null; // { at, by, streamId }
+  // The last resume (liveState's grace for it). In memory: a restart drops it, by which time the
+  // poller has long posted the reopened session's first heartbeat.
+  let resumed = null; // { streamId, at }
   const activeForcedEnd = () =>
     forcedEnd && now() - forcedEnd.at <= FORCED_END_TTL_MS ? forcedEnd : null;
   // Heartbeat liveness, shared by /stream/current and /bot/stream-state. A
@@ -44,7 +52,7 @@ function createLifecycle({ pool, broadcast, onStreamStart = null, onStreamEnd = 
   // journal by /stream/end below.
   function offlineState() {
     const f = activeForcedEnd();
-    return f ? { live: false, forcedEndAt: f.at } : { live: false };
+    return f ? { live: false, forcedEndAt: f.at, liveness: liveness() } : { live: false, liveness: liveness() };
   }
 
   async function liveState() {
@@ -62,7 +70,13 @@ function createLifecycle({ pool, broadcast, onStreamStart = null, onStreamEnd = 
       [r.rows[0].stream_id]
     );
     const hasHeartbeat = !!v.rows[0]?.fresh;
-    const inStartGrace = Date.now() - new Date(r.rows[0].started_at).getTime() < START_GRACE_MIN * 60_000;
+    // A resume is proof of life too, with a start's grace: the reopened row's started_at and last
+    // heartbeat are from before the drop, and the poller's first new snapshot comes after its
+    // publish and YouTube lookup — a read in between must not close the night again.
+    const resumedLately = resumed && resumed.streamId === String(r.rows[0].stream_id)
+      && now() - resumed.at < START_GRACE_MIN * 60_000;
+    const inStartGrace = resumedLately
+      || Date.now() - new Date(r.rows[0].started_at).getTime() < START_GRACE_MIN * 60_000;
     if (!hasHeartbeat && !inStartGrace) {
       await pool.query(
         `UPDATE stream.sessions SET ended_at = NOW() WHERE stream_id = $1 AND ended_at IS NULL`,
@@ -81,6 +95,7 @@ function createLifecycle({ pool, broadcast, onStreamStart = null, onStreamEnd = 
       viewers: v.rows[0] ? { twitch: v.rows[0].twitch, youtube: v.rows[0].youtube,
                              kick: v.rows[0].kick, streamplace: v.rows[0].streamplace,
                              total: v.rows[0].total } : null,
+      liveness: liveness(),
     };
   }
 
@@ -101,8 +116,32 @@ function createLifecycle({ pool, broadcast, onStreamStart = null, onStreamEnd = 
   function registerLifecycleRoutes(app, { requireInternal, wrap }) {
     // POST /stream/start
     app.post('/stream/start', requireInternal, wrap(async (req, res) => {
-      const { streamId } = req.body;
+      const { streamId, resume } = req.body;
       if (!streamId) return res.status(400).json({ error: 'streamId required' });
+      // A resume (ADR 0134 E8): the poller saw the SAME broadcast come back within
+      // RESUME_GRACE_MS of its own end, so the night goes on under the same id. Only a row it
+      // closed inside the window reopens; anything else is a 409 and the poller mints a new id.
+      // A forced end never resumes. No onStreamStart: nothing touched the credit pool between the
+      // end and now, so it still holds tonight's cohort under this same id (a rebuild would make the
+      // same pool). onStreamEnd needs no undo: its one consumer (a bot forced on → auto) follows
+      // the reopened session.
+      if (resume === true) {
+        const f = activeForcedEnd();
+        if (f && String(f.streamId) === String(streamId)) {
+          return res.status(409).json({ error: 'a forced end does not resume' });
+        }
+        // An open row (ended_at NULL) fails the comparison too: only a closed row reopens.
+        const r = await pool.query(
+          `UPDATE stream.sessions SET ended_at = NULL
+           WHERE stream_id = $1 AND ended_at > NOW() - ($2::int * INTERVAL '1 millisecond')`,
+          [streamId, RESUME_GRACE_MS]
+        );
+        if (r.rowCount === 0) return res.status(409).json({ error: 'not resumable' });
+        forcedEnd = null;
+        resumed = { streamId: String(streamId), at: now() };
+        console.log(`[API] Stream resumed: ${streamId}`);
+        return res.json({ ok: true, resumed: true });
+      }
       await pool.query(
         'INSERT INTO stream.sessions (stream_id) VALUES ($1) ON CONFLICT DO NOTHING',
         [streamId]
@@ -125,11 +164,17 @@ function createLifecycle({ pool, broadcast, onStreamStart = null, onStreamEnd = 
     app.post('/stream/end', requireInternal, wrap(async (req, res) => {
       const { streamId, forced, by } = req.body;
       if (!streamId) return res.status(400).json({ error: 'streamId required' });
+      // A forced end is remembered even when the row is already closed: the poller may have
+      // ended it a moment before the mod's press, and the press still means "keep it off"
+      // (no resume, and the hold above).
       if (forced) forcedEnd = { at: now(), by: typeof by === 'string' ? by : null, streamId };
-      await pool.query(
-        `UPDATE stream.sessions SET ended_at = NOW() WHERE stream_id = $1`,
+      // Only an open row closes: a second end (a retry, the poller racing a mod) changes nothing —
+      // not the end time, not the avg, and fires no hook.
+      const closed = await pool.query(
+        `UPDATE stream.sessions SET ended_at = NOW() WHERE stream_id = $1 AND ended_at IS NULL`,
         [streamId]
       );
+      if (closed.rowCount === 0) return res.json({ ok: true, already: true });
       // Snapshot avg message word count for this stream
       await pool.query(`
         UPDATE stream.sessions SET avg_message_words = (

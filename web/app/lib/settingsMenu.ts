@@ -53,6 +53,8 @@ export interface MenuSection {
   /** ⑤ Behavior half B: an account-list editor drawn after the items
    *  (BehaviorListPanel) — the hidden people or the highlighted words. */
   panel?: "people" | "words";
+  /** A sample drawn under the group's controls, in the colours they set (MentionColourPreview). */
+  preview?: "mentionColours";
   /** One line under the group title — what the group does not say by its rows alone. */
   hint?: string;
   /** Shown only when the install's plugin provides this part ("console" — the console beside
@@ -94,6 +96,8 @@ export const SECTIONS: MenuSection[] = [
   { title: "Emotes", tab: "rows", items: [s("emoteSize"), s("emoteOverlap")] },
   // ── Colours ──
   { title: "Text colours", tab: "colours", items: [s("textColor"), s("tsColor"), s("fallbackNameMode"), s("fallbackNameColor", (v) => v.fallbackNameMode === "colour")] },
+  { title: "Mentions & highlights", tab: "colours", items: [s("mentionColor"), s("highlightColor")], preview: "mentionColours",
+    hint: "A mention names you or replies to you. A highlight has one of your words from Behavior › Words." },
   // Model B: one page gradient behind everything (Background 1/2 +
   // Direction); every bar and the chat body are one tint over it, each with its
   // own strength (how see-through it is).
@@ -104,8 +108,10 @@ export const SECTIONS: MenuSection[] = [
   // ── Site & bars ──
   { title: "Composer", tab: "site", items: [s("emoteBtnOn"), s("emoteAutoSuggest"), s("sendBtnOn"), s("sendToBtnOn"), s("toolsBtnOn")] },
   { title: "Sizes", tab: "site", items: [s("frameWidth"), s("panelGap")] },
+  { title: "On a phone", tab: "site", items: [s("phoneEdgeToEdge"), s("communityPhoneText")],
+    hint: "Only on screens narrower than 608 px." },
   { title: "Tabs", tab: "site", items: [s("hideTabBar")] },
-  { title: "Player", tab: "site", items: [s("streamAutoMute")] },
+  { title: "Player", tab: "site", items: [s("streamAutoMute"), s("playerSmooth")] },
   // ── Effects ── (each switch lives here ONCE)
   // GLASS ≠ TRANSPARENCY: `transparencyOn` governs every translucent surface
   // (glass fill, bar tint, chat body tint); `glassOn` governs the blur ONLY,
@@ -140,8 +146,10 @@ export const SECTIONS: MenuSection[] = [
     hint: "Text, names, badges, pronouns, avatar size, alternating rows, colours and the shadow follow your chat settings." },
   { title: "Edits & deletions", tab: "community", items: [s("mxEditedTag"), s("mxDeleted")] },
   { title: "Channel list", tab: "community", items: [s("mxUnread"), s("mxHideMuted")] },
-  { title: "Privacy", tab: "community", items: [s("mxReceipts"), s("mxTyping")],
-    hint: "Off: others don't see that you've read or are typing. Your own unread counts still clear." },
+  // The Community composer's own key (#242: it sat in Site & bars › Composer, the live chat's).
+  { title: "Composer", tab: "community", items: [s("communityReturnKey")] },
+  // No hint (#246): its "Off: …" read as the current state while both switches were on.
+  { title: "Privacy", tab: "community", items: [s("mxReceipts"), s("mxTyping")] },
 ];
 
 // ─── Menu search ─────────────────────────────────────────────────────────────
@@ -196,7 +204,7 @@ export const OVERLAY_KEYS = new Set<SettingKey>([
   "animEmotesOn", "piCycle", "unAnim", "shadowOn", "shadowHard", "shadowStrength", "shadowBlur", "shadowAngle", "shadowDistance",
 ]);
 // @test-only same reason as OVERLAY_KEYS just above — source-scanned, not imported.
-export const WINDOW_ONLY_KEYS = new Set<SettingKey>(["chatFade", "voteColor", "histLength"]);
+export const WINDOW_ONLY_KEYS = new Set<SettingKey>(["chatFade", "voteColor", "histLength", "mentionColor", "highlightColor"]);
 
 /** SECTIONS filtered to what the /chat window ("window") or the OBS overlay
  *  ("obs") can actually show — empty sections dropped, so a rail built from

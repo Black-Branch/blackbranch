@@ -40,18 +40,25 @@ test("a server that only ENDS in our name is foreign", () => {
   assert.equal(refreshPathFor(row, OWN).kind, "federated");
 });
 
-// matrixSession.ts imports @/auth and the pg pool, so it cannot run here: this pins that BOTH of its
-// readers of the OIDC columns (the refresh and the account page) go through refreshPathFor.
-test("matrixSession reads the OIDC columns only through refreshPathFor", () => {
-  const raw = readFileSync(join(import.meta.dirname, "matrixSession.ts"), "utf8");
-  const src = stripComments(raw);
-  const outsideSelect = src.replace(/`[^`]*`/g, "``");
-  assert.doesNotMatch(outsideSelect, /row\.oidc_(token_endpoint|client_id)/, "no direct read of the per-user OIDC columns");
-  const resolveStart = src.indexOf("async function resolve(");
-  const resolveBody = src.slice(resolveStart, src.indexOf("\n}\n", resolveStart));
-  assert.match(resolveBody, /refreshPathFor\(row\)/);
-  const acctStart = src.indexOf("async function accountUrlFor(");
-  const acctBody = src.slice(acctStart, src.indexOf("\n}\n", acctStart));
-  assert.match(acctBody, /refreshPathFor\(row\)/);
-  assert.match(src, /export async function destroyMatrixSession\(/, "the scan did not reach the END of the file");
+// Every reader of the OIDC columns — the refresh and the sign-out (matrixSessionCore.ts) and the
+// account page (matrixSession.ts) — goes through refreshPathFor. (The core's refresh classification
+// is executed in matrixSessionCore.test.ts; this pins only who reads the columns.)
+test("the session code reads the OIDC columns only through refreshPathFor", () => {
+  const body = (src: string, start: string) => {
+    const i = src.indexOf(start);
+    assert.ok(i >= 0, `${start} not found`);
+    return src.slice(i, src.indexOf("\n}\n", i));
+  };
+  const mxRaw = readFileSync(join(import.meta.dirname, "matrixSession.ts"), "utf8");
+  const coreRaw = readFileSync(join(import.meta.dirname, "matrixSessionCore.ts"), "utf8");
+  for (const [name, raw] of [["matrixSession.ts", mxRaw], ["matrixSessionCore.ts", coreRaw]] as const) {
+    const outsideSelect = stripComments(raw).replace(/`[^`]*`/g, "``");
+    assert.doesNotMatch(outsideSelect, /row\.oidc_(token_endpoint|client_id)/, `${name}: no direct read of the per-user OIDC columns`);
+  }
+  const core = stripComments(coreRaw);
+  assert.match(body(core, "export async function resolveTokens("), /refreshPathFor\(row, deps\.ownServer\)/);
+  assert.match(body(core, "export async function endUpstream("), /refreshPathFor\(row, deps\.ownServer\)/);
+  assert.match(body(stripComments(mxRaw), "async function accountUrlFor("), /refreshPathFor\(row\)/);
+  assert.match(mxRaw, /export async function destroyMatrixSession\(/, "the scan did not reach the END of matrixSession.ts");
+  assert.match(core, /export async function resolveTokens\(/, "vacuity: the core was read");
 });

@@ -158,11 +158,37 @@ test('the aggregate rebuild is stopped and awaited before the pool ends', () => 
   }
 });
 
+// A stop in the first second: the two writers chained on the settings layer's first load —
+// ai.start (records the plugin slots) and memoryBoot (reads the embedding column) — ran after
+// pool.end() and printed "Cannot use a pool after calling end" (CI run 40144098062, run 3).
+test('the boot writers chained on the settings load are held in bootLoads; ai.stop() flushes before the pool ends', () => {
+  assert.match(src, /bootLoads\.push\(instanceConfig\.ready\.then\(\(\) => ai\.start\(/, 'ai.start is not held in bootLoads');
+  assert.match(src, /bootLoads\.push\(instanceConfig\.ready\.then\(function memoryBoot\(\) \{\s*if \(shuttingDown\) return;/,
+    'the first memory boot is not held in bootLoads, or its 30 s retry can start after the drain');
+  assert.match(src, /return memory\.boot\(\)\.catch\(/, 'the memory boot is not part of the held promise');
+  const iBoot = src.indexOf('await Promise.allSettled(bootLoads)');
+  const iAiStop = src.indexOf('await ai.stop()');
+  const iPoolEnd = src.indexOf('await pool.end()');
+  assert.ok(iAiStop > iBoot, 'ai.stop() runs before the boot writers settle (or never): its usage counts are lost');
+  assert.ok(iAiStop < iPoolEnd, 'ai.stop() flushes after the pool ended');
+});
+
 test('the Streamlabs socket is closed so no donation lands after the pool is gone', () => {
   assert.match(src, /const streamlabs = startStreamlabs/,
     'startStreamlabs returns a { stop } handle; discarding it leaves a live donation socket ' +
     'attached to a service that is shutting down');
   assert.match(src, /streamlabs\.stop\(\)/, 'the handle is captured but never used');
+});
+
+test('the drain stops the platform-states silence timer (unref\'d, so harmless — the call keeps platform-states.test.js true)', () => {
+  const start = src.indexOf('async function shutdown(');
+  const end = src.indexOf("process.on('SIGTERM'");
+  // Both ends must be found (-1 would slice to the end of the file and pass vacuously), in order.
+  assert.ok(start !== -1, 'the shutdown function was not found in the scan');
+  assert.ok(end !== -1, 'the SIGTERM handler that ends the shutdown slice was not found');
+  assert.ok(start < end, 'the slice runs backwards');
+  const drain = src.slice(start, end);
+  assert.match(drain, /platformStates\.stop\(\)/);
 });
 
 test('ws-hub exposes wss to index.js, or the drain has nothing to terminate', () => {

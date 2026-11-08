@@ -100,10 +100,10 @@ and `reply-parent-msg-id` are also available for exact targeting.
 | msg id | `payload.id` | unwired: not stored |
 | emotes | parse `[emote:id:name]` | → `{name: files.kick.com/emotes/id/fullsize}` |
 
-### Replies: available, not wired
+### Replies: wired
 Kick delivers reply context in `payload.metadata` (`original_sender {id, username}`
-+ `original_message {id, content}`). **TODO:** parse it into `replyToUsername`/
-`replyToText`. *(Verify exact shape from a live reply frame.)*
++ `original_message {id, content}`); `handleChatEvent` in `platforms/kick.js` reads it
+into `replyToUsername`/`replyToText`, with the quoted line's emote markup stripped.
 
 ### Other events on the same socket
 `GiftedSubscriptionsEvent` (monetization) and `ChatMessageDeletedEvent` /
@@ -220,10 +220,9 @@ the bot account + write auth (app password / OAuth). This is the bot's stream.pl
 ## How this feeds each downstream feature
 
 **1. Reliable reply formatting.** Native reply data exists on Twitch (tags),
-stream.place (ATProto refs) and Kick (`metadata`, not yet wired). YouTube has none —
-fall back to `@mention` heuristic only. stream-api already accepts inline
-`replyToUsername`/`replyToText`; next step is Kick `metadata` + stream.place
-`record.reply` resolution.
+stream.place (the hydrated `replyTo` view) and Kick (`metadata`), and all three connectors
+send it to stream-api as inline `replyToUsername`/`replyToText`. YouTube has none —
+fall back to `@mention` heuristic only.
 
 **2. Data collection.** Each connector already normalizes into the `/chat` body
 (`platform, userId, username, message, isMod, isVip, isMember, tier, emotes,

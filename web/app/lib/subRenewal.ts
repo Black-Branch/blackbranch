@@ -1,25 +1,26 @@
-// A subscription RENEWAL, read off a Stripe `invoice.paid` event.
+// A paid subscription invoice, read off a Stripe `invoice.paid` event: the event that says money
+// moved for a subscription, and so the ONE source of every "subscribed" / "resubscribed" card and
+// the bar credit it carries (subscriptionSync.ts paidInvoiceCard builds the card from this).
 //
-// Why this exists: a renewal reaches the webhook only as
-// `customer.subscription.updated` with announce=false — no card, no
-// stream.support_events row, no bar credit — so the site's own recurring
-// income would be invisible while Twitch resubs are counted. `invoice.paid` is
-// the event that says money moved for a cycle.
+// Why the invoice and not the subscription's state events: Stripe does not order deliveries, and
+// the per-viewer recency gate drops a state event stamped older than the last one written. A first
+// month credited from `customer.subscription.created` was lost whenever that event lost the race.
+// An invoice is paid once; its spendId is fixed by what it is, so any delivery order credits it
+// exactly once (stream-api's ledger dedups on the spendId).
 //
-// The guards are the whole point, so they live in a pure function the tests
-// can RUN (the webhook route imports pg and Stripe at load and cannot be):
-//   • billing_reason === "subscription_cycle" ONLY. The first invoice is
-//     `subscription_create` and is already celebrated + credited by
-//     `customer.subscription.created` — taking it here would credit the bar
-//     twice for one payment. `subscription_update` is a proration on a change,
-//     not a renewal, and there is one tier anyway.
-//   • amount_paid > 0 — a 100%-coupon or $0 cycle funds nothing.
+// The guards live in a pure function the tests can RUN (the webhook route imports pg and Stripe at
+// load and cannot be):
+//   • billing_reason "subscription_create" = month one (spendId `sub:<subscription id>`, the id the
+//     refund path recomputes — paymentReversalsLedger.ts); "subscription_cycle" = a renewal
+//     (spendId `renewal:<invoice id>`). `subscription_update` is a proration on a change, not a
+//     month, and there is one tier anyway.
+//   • amount_paid > 0 — a trial's $0 first invoice, a 100%-coupon or a $0 cycle funds nothing.
 //   • the subscription id must be present (Stripe API 2025-03+ moved it to
 //     `parent.subscription_details`).
 
 /** The slice of Stripe.Invoice this module reads — structural, so a test can
  *  pass a literal and the route can pass the real object. */
-type RenewalInvoiceLike = {
+type PaidInvoiceLike = {
   id: string;
   billing_reason: string | null;
   amount_paid: number;
@@ -28,28 +29,31 @@ type RenewalInvoiceLike = {
   parent: { subscription_details: { subscription: string | { id: string } } | null } | null;
 };
 
-type Renewal = {
+type PaidSubscriptionInvoice = {
+  /** "first" = the subscription's first paid invoice; "renewal" = a later cycle. */
+  kind: "first" | "renewal";
   invoiceId: string;
   subscriptionId: string;
   customerId: string | null;
-  /** Gross paid for the cycle, in the invoice's minor unit (cents). */
+  /** Gross paid, in the invoice's minor unit (cents). */
   amount: number;
   currency: string;
 };
 
-/** The renewal an invoice represents, or null when it is not a renewal. */
-export function renewalFromInvoice(inv: RenewalInvoiceLike): Renewal | null {
-  if (inv.billing_reason !== "subscription_cycle") return null;
+/** The paid month an invoice represents, or null when it funds no month. */
+export function paidSubscriptionInvoice(inv: PaidInvoiceLike): PaidSubscriptionInvoice | null {
+  const kind = inv.billing_reason === "subscription_create" ? "first" : inv.billing_reason === "subscription_cycle" ? "renewal" : null;
+  if (!kind) return null;
   if (!(inv.amount_paid > 0)) return null;
   const s = inv.parent?.subscription_details?.subscription;
   const subscriptionId = typeof s === "string" ? s : s?.id;
   if (!subscriptionId) return null;
   const customerId = typeof inv.customer === "string" ? inv.customer : inv.customer?.id ?? null;
-  return { invoiceId: inv.id, subscriptionId, customerId, amount: inv.amount_paid, currency: inv.currency };
+  return { kind, invoiceId: inv.id, subscriptionId, customerId, amount: inv.amount_paid, currency: inv.currency };
 }
 
 /**
- * Months subscribed, from the count of paid invoices on the subscription. A
+ * Months subscribed at a renewal, from the count of paid invoices on the subscription. A
  * cycle invoice means at least two have been paid (the first + this one), so
  * a short or failed listing floors there rather than announcing "1 month" on
  * a renewal.

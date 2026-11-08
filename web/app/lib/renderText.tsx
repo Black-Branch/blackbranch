@@ -374,6 +374,8 @@ function EmoteImg({
       crossOrigin={emoteCrossOrigin(sizedSrc)}
       alt={name}
       title={name}
+      // A phone has no hover: EmoteNameBubble shows this name on a tap.
+      data-emote-name={name}
       // decoding:async keeps the image decode off the render path (matters during
       // chat bursts, where synchronous decode of many WebPs would jank paint);
       // fetchPriority:high lets a visible in-chat emote jump the browser's request

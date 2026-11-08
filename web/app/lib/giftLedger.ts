@@ -21,8 +21,18 @@ export type GiftGivenRow = {
   created_at: string | Date;
   /** Already resolved by the server: display name, else the Matrix local part. */
   recipient_name: string;
-  expires_at: string | Date;
+  /** NULL for a gift queued behind its recipient's subscription: its start is their renewal date,
+   *  which only the recipient sees (GIFT_GIVEN_DATES_SQL). */
+  expires_at: string | Date | null;
+  queued?: boolean;
 };
+
+/** The gifter's view of a gift's dates, as SQL over `site.gift_subscriptions g`: a gift queued behind
+ *  its recipient's subscription (giftQueue.ts) comes back with NO date and `queued` true — its dates
+ *  are the recipient's renewal date plus its months (review R5). */
+export const GIFT_GIVEN_DATES_SQL =
+  `CASE WHEN g.follows_subscription AND g.starts_at > now() THEN NULL ELSE g.expires_at END AS expires_at,
+   (g.follows_subscription AND g.starts_at > now()) AS queued`;
 
 export type GiftPendingRow = {
   stripe_session_id: string;
@@ -53,6 +63,10 @@ export function groupGiftPurchases(given: GiftGivenRow[], pending: GiftPendingRo
     // The purchase's date is its earliest grant — a slot claimed weeks later
     // must not make the purchase look newer than it is.
     if (iso(g.created_at) < p.createdAt) p.createdAt = iso(g.created_at);
+    if (g.queued || g.expires_at == null) {
+      p.recipients.push({ name: g.recipient_name, expiresAt: null, active: false, queued: true });
+      continue;
+    }
     const expiresAt = iso(g.expires_at);
     p.recipients.push({ name: g.recipient_name, expiresAt, active: new Date(expiresAt) > now });
   }

@@ -1,12 +1,13 @@
 import { MatrixClientProvider } from "@/app/lib/MatrixClientContext";
 import PwaInstallNudge from "@/app/components/PwaInstallNudge";
-import MatrixAppsHint from "@/app/components/MatrixAppsHint";
 import SecureAccountPrompt from "@/app/components/SecureAccountPrompt";
+import UserVerificationPrompt from "@/app/components/UserVerificationPrompt";
 import PresenceBeat from "@/app/components/PresenceBeat";
 
 // No top nav — the wordmark lives on the video embed bar and the user
 // settings (with the crypto traffic-light dot) live in the chat typing bar.
-// App-wide nudges (PWA install, mobile Matrix-app hint, secure-account prompt)
+// App-wide nudges (PWA install, secure-account prompt, another person's
+// verification request)
 // mount here, inside MatrixClientProvider, so they cover the whole app but not
 // the /popout overlay.
 export default function MainLayout({ children }: { children: React.ReactNode }) {
@@ -28,8 +29,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         <main id="main-content" className="flex-1 min-h-0">{children}</main>
       </div>
       <PwaInstallNudge />
-      <MatrixAppsHint />
       <SecureAccountPrompt />
+      <UserVerificationPrompt />
       <PresenceBeat />
     </MatrixClientProvider>
   );

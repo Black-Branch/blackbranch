@@ -5,6 +5,7 @@ import { sanitizeChatMessage } from "@/app/lib/sanitize";
 import { matchesBlacklist } from "@/app/lib/blacklist";
 import { clampReport } from "@/app/lib/support/validate";
 import { clampMessageReport, reportedAuthor } from "@/app/lib/reportTarget";
+import { notifyNewReport } from "@/app/lib/reportNotify";
 import { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -42,6 +43,8 @@ export async function POST(req: NextRequest) {
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [author.matrixId, author.canonicalId, matrixId, reason, byMessage.platform, String(byMessage.messageId)]
     );
+    // The streamer's quiet push (count only); not awaited — the report is saved.
+    void notifyNewReport();
     return Response.json({ ok: true });
   }
 
@@ -73,5 +76,6 @@ export async function POST(req: NextRequest) {
     `INSERT INTO site.reports (reported_id, reporter_id, reason) VALUES ($1, $2, $3)`,
     [rows[0]!.matrix_id, matrixId, reason]
   );
+  void notifyNewReport();
   return Response.json({ ok: true });
 }

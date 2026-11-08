@@ -15,7 +15,7 @@ test("the chat bar carries a Fold chat button in its trailing group, before Comm
   const fold = bar.indexOf('label="Fold chat"');
   const full = bar.indexOf("onToggleFull && (() =>");
   assert.ok(fold > 0 && full > fold, "Fold chat renders before the full toggle");
-  assert.match(bar, /\{onFoldChat && \(\s*<BarButton icon=\{<CaretDoubleRight size=\{13\} weight="bold" \/>\} label="Fold chat" onClick=\{onFoldChat\} \/>\s*\)\}/);
+  assert.match(bar, /\{onFoldChat && \(\s*<BarButton size="touch" icon=\{<CaretDoubleRight size=\{13\} weight="bold" \/>\} label="Fold chat" onClick=\{onFoldChat\} \/>\s*\)\}/);
   assert.ok(bar.trimEnd().endsWith("}"), "END anchor");
 });
 

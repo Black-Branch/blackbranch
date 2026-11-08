@@ -69,9 +69,10 @@ export function HomeView({
 
   // The Leaderboard draws its own header (its title is the face it shows).
   // News shows once a feed has items: no feed (or a feed that never answered) is no card.
-  const widgets = homeWidgets({ vods: vodPlaylist() !== null, news: (data?.news?.length ?? 0) > 0, boards: data?.leaderboard?.on !== false }).map((def) => (
+  const defs = homeWidgets({ vods: vodPlaylist() !== null, news: (data?.news?.length ?? 0) > 0, boards: data?.leaderboard?.on !== false });
+  const widget = (def: HomeWidgetDef) => (
     <Widget key={def.id} def={def} header={def.id === "boards" ? null : undefined}>{body(def)}</Widget>
-  ));
+  );
 
   // auto-fit: a column only where 17rem fits, so an open chat gives two
   // readable columns and a phone one — no viewport breakpoint decides it
@@ -79,15 +80,33 @@ export function HomeView({
   // had narrowed to ~180px each). min(17rem,100%): a track is never wider than its
   // cell, or a pane under ~616px would scroll sideways. auto-rows-min: a panel is
   // as tall as its content, never stretched to its neighbour's.
-  const grid = <div className="grid grid-cols-[repeat(auto-fit,minmax(min(17rem,100%),1fr))] gap-3 min-w-0 auto-rows-min">{widgets}</div>;
+  // The status card (`full`) sits on its own row ABOVE this grid, not inside it:
+  // a col-span-full item spans every track, which keeps auto-fit's empty tracks
+  // alive — two lists on a wide pane sat at 17rem beside blank columns (#237).
+  const lists = (
+    <div className="flex flex-col gap-3 min-w-0">
+      {defs.filter((d) => d.full).map(widget)}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(17rem,100%),1fr))] gap-3 min-w-0 auto-rows-min">
+        {defs.filter((d) => !d.full).map(widget)}
+      </div>
+    </div>
+  );
 
   if (compact) {
-    return <div className="h-full overflow-y-auto p-3">{grid}</div>;
+    return <div className="h-full overflow-y-auto p-3">{lists}</div>;
   }
 
   const header = homeHeader();
+  // The card column forms only where the PANE has room for the card (300px at
+  // most) + the gap (12px) + one 17rem widget: 300 + 12 + 272 = 584px = 36.5rem.
+  // A viewport breakpoint (`md:`) cannot answer that — the chat beside Home takes
+  // its own width, so a 900px window with the chat open left the widgets 200px
+  // and they squished (#237). The scroller is the size container (a container
+  // query cannot match its own container, so the grid is its child). Below the
+  // threshold the card stacks on top and every widget takes the full width.
+  // homeView.render.test.ts derives 36.5rem from these terms.
   return (
-    <div className="h-full overflow-y-auto p-3 md:p-4">
+    <div className="h-full overflow-y-auto p-3 md:p-4 @container">
       {!signedIn && (
         <header className="mb-3">
           <h2 className="text-lg font-semibold text-strong">{header.heading}</h2>
@@ -95,11 +114,11 @@ export function HomeView({
         </header>
       )}
       {error && data !== null && <p className="text-xs text-muted mb-2">Showing the last answer; a refresh failed.</p>}
-      <div className="grid gap-3 grid-cols-1 md:grid-cols-[minmax(240px,300px)_1fr]">
+      <div className="grid gap-3 grid-cols-1 @[36.5rem]:grid-cols-[minmax(240px,300px)_1fr]">
         {signedIn
           ? <div data-home-left="card" className="min-w-0"><SignedInColumn active={active} /></div>
           : <SignInColumn platforms={(data as HomeBody | null)?.platforms ?? null} />}
-        {grid}
+        {lists}
       </div>
     </div>
   );

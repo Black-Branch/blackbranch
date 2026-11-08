@@ -20,7 +20,16 @@ export type SubscriptionView = {
   giftExpiresAt: string | null;
   /** Who gave the current gift, or null when anonymous / unknown. */
   giftFrom: string | null;
+  /** When a gift queued behind the viewer's own subscription begins (ISO), or null (A1-03). */
+  giftStartsAt?: string | null;
 };
+
+/** "Your gift starts on Nov 26, after your current subscription." — a gift to someone already
+ *  paying monthly begins when the paying stops (subscriptions/giftQueue.ts); null without one. */
+export function queuedGiftLine(me: SubscriptionView, fmt: DateFormatter = defaultFormat): string | null {
+  if (!me.giftStartsAt) return null;
+  return `Your gift starts on ${fmt(new Date(me.giftStartsAt))}, after your current subscription.`;
+}
 
 export type StatusTone = "renews" | "ending" | "gift" | "ended";
 
@@ -108,8 +117,9 @@ export type GiftPurchaseView = {
   months: number;
   anonymous: boolean;
   createdAt: string;
-  /** Everyone this purchase has reached so far, with each one's own end date. */
-  recipients: { name: string; expiresAt: string; active: boolean }[];
+  /** Everyone this purchase has reached so far, with each one's own end date — none for a gift
+   *  queued behind its recipient's subscription (its dates are theirs alone; review R5). */
+  recipients: { name: string; expiresAt: string | null; active: boolean; queued?: boolean }[];
   /** Community slots nobody has claimed yet. */
   waiting: number;
   /** When the waiting slots stop being claimable (the latest one). */
@@ -122,11 +132,13 @@ const months = (n: number) => `${n} ${n === 1 ? "month" : "months"}`;
 export function giftPurchaseLine(p: GiftPurchaseView, fmt: DateFormatter = defaultFormat): string {
   // active/ended per recipient was decided by the server against its own clock.
   const latest = p.recipients.reduce<string | null>(
-    (acc, r) => (acc == null || new Date(r.expiresAt) > new Date(acc) ? r.expiresAt : acc),
+    (acc, r) => (r.expiresAt == null ? acc : acc == null || new Date(r.expiresAt) > new Date(acc) ? r.expiresAt : acc),
     null
   );
   const anyActive = p.recipients.some((r) => r.active);
-  const tail = latest == null ? "" : anyActive ? ` · active until ${fmt(new Date(latest))}` : ` · ended ${fmt(new Date(latest))}`;
+  const queued = p.recipients.some((r) => r.queued);
+  const tail = latest == null ? (queued ? " · queued after their current subscription" : "")
+    : anyActive ? ` · active until ${fmt(new Date(latest))}` : ` · ended ${fmt(new Date(latest))}`;
 
   if (p.kind === "direct") {
     const name = p.recipients[0]?.name ?? "someone";

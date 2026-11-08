@@ -11,10 +11,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Pool } from "pg";
 import Stripe from "stripe";
+import { readFileSync } from "node:fs";
 
 const PRICE = "price_test_supporter";
 process.env.STRIPE_PRICE_SUPPORTER = PRICE; // tiers.ts reads it at import
 const { createSubscriptionSync } = await import("./subscriptionSync.ts");
+const { entitlementOf } = await import("./subscriptions/entitlement.ts");
 
 const DB_URL = process.env.SQL_PARSE_DATABASE_URL || "";
 // Never production: only a throwaway on this machine (a shell may carry DATABASE_URL = prod).
@@ -329,4 +331,154 @@ test("subscription state in any delivery order", { skip }, async (t) => {
     await Promise.all([first, second]);
     assert.deepEqual(await row(who), { status: "canceled", tier: null });
   });
+
+  // ── Month one is credited from its invoice, not from the subscription's state (A1-01) ──
+  //
+  // Stripe does not order deliveries. When checkout.session.completed is stamped a second after
+  // customer.subscription.created and processed first, the recency gate drops .created; while the
+  // "X subscribed" card hung off .created's write, that lost month one (no card, no bar credit, no
+  // support_events row). The card now comes from `invoice.paid` with billing_reason =
+  // subscription_create, spendId `sub:<subscription id>` (stream-api's ledger dedups on it), so no
+  // ordering of the state events can lose it.
+  const invoice = (subId: string, reason: string, paid: number, id = `in_${subId}_${reason}`) => ({
+    id, billing_reason: reason, amount_paid: paid, currency: "usd", customer: null,
+    parent: { subscription_details: { subscription: subId } },
+  });
+  const withInvoices = (stripe: Stripe, paidCount: number) => {
+    (stripe as unknown as { invoices: unknown }).invoices = {
+      list: async () => ({ object: "list", has_more: false, data: Array.from({ length: paidCount }, () => ({ amount_paid: 500 })) }),
+    };
+    return stripe;
+  };
+
+  await t.test("a customer.subscription.created delivered after its checkout.session.completed still credits month one once", async () => {
+    const { who, subId } = await fresh();
+    const current = new Map([[subId, snapshot(subId, who, "active")]]);
+    const { syncSubscription, paidInvoiceCard } = createSubscriptionSync({ pool, stripe: () => fakeStripe(current).stripe });
+    // checkout.session.completed, stamped one second later, processed first…
+    assert.ok(await syncSubscription({ id: subId }, T + 1));
+    // …then customer.subscription.created: dropped by the recency gate, exactly as before.
+    assert.equal(await syncSubscription({ id: subId }, T), null, "the out-of-order gate is unchanged");
+    assert.deepEqual(await row(who), { status: "active", tier: "supporter" });
+    // The first invoice still credits month one, with the subscription-derived spendId.
+    const card = await paidInvoiceCard(invoice(subId, "subscription_create", 500));
+    assert.deepEqual(card, { matrixId: who, spendId: `sub:${subId}`, months: 1, amount: 500, currency: "usd", priceId: PRICE });
+  });
+
+  await t.test("an incomplete subscription that later goes active still credits month one once", async () => {
+    const { who, subId } = await fresh();
+    const current = new Map([[subId, snapshot(subId, who, "incomplete")]]);
+    const { syncSubscription, paidInvoiceCard } = createSubscriptionSync({ pool, stripe: () => fakeStripe(current).stripe });
+    await syncSubscription({ id: subId }, T); // .created, snapshot incomplete (a delayed method)
+    current.set(subId, snapshot(subId, who, "active"));
+    await syncSubscription({ id: subId }, T + 30); // .updated → active
+    const card = await paidInvoiceCard(invoice(subId, "subscription_create", 500));
+    assert.equal(card?.spendId, `sub:${subId}`);
+    assert.equal(card?.months, 1);
+  });
+
+  await t.test("retry: a redelivered invoice.paid yields the same card, so stream-api credits it once", async () => {
+    const { who, subId } = await fresh();
+    const current = new Map([[subId, snapshot(subId, who, "active")]]);
+    const { paidInvoiceCard } = createSubscriptionSync({ pool, stripe: () => fakeStripe(current).stripe });
+    const inv = invoice(subId, "subscription_create", 500);
+    assert.deepEqual(await paidInvoiceCard(inv), await paidInvoiceCard(inv));
+  });
+
+  await t.test("restart: a new process given the same invoice derives the same spendId", async () => {
+    const { who, subId } = await fresh();
+    const current = new Map([[subId, snapshot(subId, who, "active")]]);
+    const before = await createSubscriptionSync({ pool, stripe: () => fakeStripe(current).stripe }).paidInvoiceCard(invoice(subId, "subscription_create", 500));
+    const after = await createSubscriptionSync({ pool, stripe: () => fakeStripe(current).stripe }).paidInvoiceCard(invoice(subId, "subscription_create", 500));
+    assert.equal(after?.spendId, before?.spendId);
+    assert.equal(after?.spendId, `sub:${subId}`);
+  });
+
+  await t.test("a trial's $0 first invoice credits nothing; its first charge is the cycle invoice, month one", async () => {
+    const { who, subId } = await fresh();
+    const trial = { ...snapshot(subId, who, "active"), trial_end: T } as Stripe.Subscription;
+    const current = new Map([[subId, trial]]);
+    const { paidInvoiceCard } = createSubscriptionSync({ pool, stripe: () => withInvoices(fakeStripe(current).stripe, 2) });
+    assert.equal(await paidInvoiceCard(invoice(subId, "subscription_create", 0)), null, "a trial is not a payment");
+    const cycle = await paidInvoiceCard(invoice(subId, "subscription_cycle", 500, `in_${subId}_c1`));
+    assert.deepEqual(cycle, { matrixId: who, spendId: `renewal:in_${subId}_c1`, months: 1, amount: 500, currency: "usd", priceId: PRICE });
+  });
+
+  await t.test("a renewal keeps its invoice-derived spendId and its tenure", async () => {
+    const { who, subId } = await fresh();
+    const current = new Map([[subId, snapshot(subId, who, "active")]]);
+    const { paidInvoiceCard } = createSubscriptionSync({ pool, stripe: () => withInvoices(fakeStripe(current).stripe, 3) });
+    const r = await paidInvoiceCard(invoice(subId, "subscription_cycle", 500, `in_${subId}_c2`));
+    assert.equal(r?.spendId, `renewal:in_${subId}_c2`);
+    assert.equal(r?.months, 3);
+    assert.equal(await paidInvoiceCard(invoice(subId, "subscription_update", 120)), null, "a proration is not a month");
+  });
+
+  // ── Stripe's final retry (area-1 round 2, A1-08 / P07; k 2026-10-25) ──
+  //
+  // past_due entitles with grace on the period end, and Stripe moves the period end on every
+  // unpaid cycle, so with the Dashboard's last-retry action set to "leave past_due" a subscriber who
+  // stopped paying kept Supporter for ever. When Stripe has given up (the latest invoice is unpaid
+  // and has no next attempt), the subscription reads as cancelled, written by the one transition
+  // function; Stripe's "cancel" and "mark unpaid" endings already end access. The replayed sequence:
+  const recordOf = async (subId: string) => (await pool.query<{ status: string; provider_status: string }>(
+    `SELECT status, provider_status FROM site.subscription_records WHERE external_id = $1`, [subId])).rows[0];
+  const pastDue = (subId: string, who: string, latest: string) =>
+    ({ ...snapshot(subId, who, "past_due"), latest_invoice: latest }) as Stripe.Subscription;
+  const withLatest = (stripe: Stripe, invoices: Map<string, { status: string; next_payment_attempt: number | null }>) => {
+    (stripe as unknown as { invoices: unknown }).invoices = {
+      retrieve: async (id: string) => ({ id, object: "invoice", ...invoices.get(id)! }),
+      list: async () => ({ object: "list", has_more: false, data: [] }),
+    };
+    return stripe;
+  };
+
+  await t.test("final retry: renewal fails, Stripe retries, gives up — access ends; a later redelivery keeps it ended", async () => {
+    const { who, subId } = await fresh();
+    const inv = `in_${subId}_r1`;
+    const invoices = new Map<string, { status: string; next_payment_attempt: number | null }>([[inv, { status: "open", next_payment_attempt: 1_800_100_000 }]]);
+    const current = new Map([[subId, snapshot(subId, who, "active")]]);
+    const { syncSubscription } = createSubscriptionSync({ pool, stripe: () => withLatest(fakeStripe(current).stripe, invoices) });
+    await syncSubscription({ id: subId }, T);
+    // The renewal charge fails; Stripe will retry (invoice.payment_failed, next attempt set).
+    current.set(subId, pastDue(subId, who, inv));
+    await syncSubscription({ id: subId }, T + 10);
+    assert.deepEqual(await recordOf(subId), { status: "past_due", provider_status: "past_due" }, "still retrying: past_due, entitled with grace");
+    // The last retry fails: no next attempt. Stripe leaves the subscription past_due.
+    invoices.set(inv, { status: "open", next_payment_attempt: null });
+    await syncSubscription({ id: subId }, T + 20);
+    assert.equal((await recordOf(subId))!.status, "ended", "Stripe gave up: the subscription is cancelled here");
+    assert.deepEqual(await row(who), { status: "canceled", tier: null });
+    // retry/restart: a later customer.subscription.updated (Stripe still says past_due) changes nothing.
+    await syncSubscription({ id: subId }, T + 30);
+    await createSubscriptionSync({ pool, stripe: () => withLatest(fakeStripe(current).stripe, invoices) }).syncSubscription({ id: subId }, T + 30);
+    assert.equal((await recordOf(subId))!.status, "ended");
+    // The subscriber pays the open invoice after all: Stripe makes it active again, and so do we.
+    invoices.set(inv, { status: "paid", next_payment_attempt: null });
+    current.set(subId, snapshot(subId, who, "active"));
+    await syncSubscription({ id: subId }, T + 40);
+    assert.equal((await recordOf(subId))!.status, "active");
+  });
+
+  await t.test("Stripe's own endings: cancel ends access, mark-unpaid ends access", async () => {
+    for (const ending of ["canceled", "unpaid"] as const) {
+      const { who, subId } = await fresh();
+      const current = new Map([[subId, snapshot(subId, who, "active")]]);
+      const { syncSubscription } = createSubscriptionSync({ pool, stripe: () => fakeStripe(current).stripe });
+      await syncSubscription({ id: subId }, T);
+      current.set(subId, snapshot(subId, who, ending));
+      await syncSubscription({ id: subId }, T + 10);
+      const e = await entitlementOf(pool, who, ["stripe", "paypal"]);
+      assert.equal(e.supporter, false, `${ending}: no access`);
+    }
+  });
+});
+
+// The webhook re-reads the subscription on invoice.payment_failed, so Stripe's last retry ends it
+// even when the Dashboard's last-retry action sends no status change (A1-08). The route imports pg
+// and Stripe at load, so this is a scan; the decision itself runs above.
+test("wiring: invoice.payment_failed re-syncs the invoice's subscription", () => {
+  const src = readFileSync(new URL("../api/billing/webhook/route.ts", import.meta.url), "utf8");
+  assert.match(src.trimEnd().slice(-120), /invalidateTier\(matrixId\);\s*\}$/, "vacuity anchor: the route was read to its end");
+  assert.match(src, /case "invoice\.payment_failed": \{\s*await handleInvoicePaymentFailed\(event\);[\s\S]{0,600}if \(subId\) await syncSubscription\(\{ id: subId \}, event\.created\);/);
 });

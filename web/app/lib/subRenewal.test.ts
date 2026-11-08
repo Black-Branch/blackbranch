@@ -1,15 +1,15 @@
-// The renewal guards are RUN here — the webhook route cannot be loaded under
+// The paid-invoice guards are RUN here — the webhook route cannot be loaded under
 // node --test (pg + Stripe at import), so the decision lives in subRenewal.ts.
 //
 // Run: node --test app/lib/subRenewal.test.ts
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renewalFromInvoice, tenureMonths } from "./subRenewal.ts";
+import { paidSubscriptionInvoice, tenureMonths } from "./subRenewal.ts";
 
-type RenewalInvoiceLike = Parameters<typeof renewalFromInvoice>[0];
+type PaidInvoiceLike = Parameters<typeof paidSubscriptionInvoice>[0];
 
-const cycle: RenewalInvoiceLike = {
+const cycle: PaidInvoiceLike = {
   id: "in_1",
   billing_reason: "subscription_cycle",
   amount_paid: 500,
@@ -19,30 +19,32 @@ const cycle: RenewalInvoiceLike = {
 };
 
 test("a subscription_cycle invoice with money paid is a renewal", () => {
-  assert.deepEqual(renewalFromInvoice(cycle), {
-    invoiceId: "in_1", subscriptionId: "sub_1", customerId: "cus_1", amount: 500, currency: "usd",
+  assert.deepEqual(paidSubscriptionInvoice(cycle), {
+    kind: "renewal", invoiceId: "in_1", subscriptionId: "sub_1", customerId: "cus_1", amount: 500, currency: "usd",
   });
 });
 
-test("the FIRST invoice is not a renewal — customer.subscription.created already credits it", () => {
-  assert.equal(renewalFromInvoice({ ...cycle, billing_reason: "subscription_create" }), null,
-    "taking subscription_create here would credit the bar twice for one payment");
-  assert.equal(renewalFromInvoice({ ...cycle, billing_reason: "subscription_update" }), null, "a proration is not a renewal");
-  assert.equal(renewalFromInvoice({ ...cycle, billing_reason: "manual" }), null);
-  assert.equal(renewalFromInvoice({ ...cycle, billing_reason: null }), null);
+test("the FIRST paid invoice is month one — the one source of the first month's credit", () => {
+  assert.deepEqual(paidSubscriptionInvoice({ ...cycle, billing_reason: "subscription_create" }), {
+    kind: "first", invoiceId: "in_1", subscriptionId: "sub_1", customerId: "cus_1", amount: 500, currency: "usd",
+  });
+  assert.equal(paidSubscriptionInvoice({ ...cycle, billing_reason: "subscription_update" }), null, "a proration is not a month");
+  assert.equal(paidSubscriptionInvoice({ ...cycle, billing_reason: "manual" }), null);
+  assert.equal(paidSubscriptionInvoice({ ...cycle, billing_reason: null }), null);
 });
 
-test("a $0 cycle funds nothing", () => {
-  assert.equal(renewalFromInvoice({ ...cycle, amount_paid: 0 }), null);
-  assert.equal(renewalFromInvoice({ ...cycle, amount_paid: -1 }), null);
+test("a $0 invoice funds nothing — a trial's first invoice included", () => {
+  assert.equal(paidSubscriptionInvoice({ ...cycle, amount_paid: 0 }), null);
+  assert.equal(paidSubscriptionInvoice({ ...cycle, amount_paid: -1 }), null);
+  assert.equal(paidSubscriptionInvoice({ ...cycle, billing_reason: "subscription_create", amount_paid: 0 }), null, "a trial is not a payment");
 });
 
 test("the subscription id is read from parent.subscription_details, expanded or not", () => {
-  assert.equal(renewalFromInvoice({ ...cycle, parent: { subscription_details: { subscription: { id: "sub_x" } } } })?.subscriptionId, "sub_x");
-  assert.equal(renewalFromInvoice({ ...cycle, parent: null }), null, "no subscription → not a renewal we can attribute");
-  assert.equal(renewalFromInvoice({ ...cycle, parent: { subscription_details: null } }), null);
-  assert.equal(renewalFromInvoice({ ...cycle, customer: { id: "cus_o" } })?.customerId, "cus_o");
-  assert.equal(renewalFromInvoice({ ...cycle, customer: null })?.customerId, null);
+  assert.equal(paidSubscriptionInvoice({ ...cycle, parent: { subscription_details: { subscription: { id: "sub_x" } } } })?.subscriptionId, "sub_x");
+  assert.equal(paidSubscriptionInvoice({ ...cycle, parent: null }), null, "no subscription → not a month we can attribute");
+  assert.equal(paidSubscriptionInvoice({ ...cycle, parent: { subscription_details: null } }), null);
+  assert.equal(paidSubscriptionInvoice({ ...cycle, customer: { id: "cus_o" } })?.customerId, "cus_o");
+  assert.equal(paidSubscriptionInvoice({ ...cycle, customer: null })?.customerId, null);
 });
 
 test("tenure floors at two — a cycle invoice means the first AND this one were paid", () => {

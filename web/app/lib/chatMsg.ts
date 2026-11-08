@@ -2,7 +2,7 @@ import { localpart } from "./matrixDisplay.ts";
 import { stripBidiControls } from "./bidi.ts";
 import type { PollState } from "./pollState";
 import type { EquippedStyle } from "./usernameStyles";
-import { formatMoney } from "./chatFormat.ts";
+import { formatPrice, SITE_CURRENCY } from "./moneyFormat.ts";
 import { currencyName } from "./currency.ts";
 import { NATIVE_PLATFORM } from "./nativePlatform.ts";
 
@@ -19,6 +19,9 @@ export type ChatMsg = {
   // ever ("Mark first-time chatters" — live frames and the reconnect replay only).
   isBot?: boolean;
   isFirst?: boolean;
+  // stream-api's position for this line in its catch-up buffer (ws-hub.js): the shared socket
+  // resumes from the newest one it has seen, so a reconnect is sent only what changed.
+  seq?: number;
   // Epoch-ms on the WS wire (stream-api sends Date.now()); the history DB fetch
   // serializes it as a string. Consumers must coerce (msgTs / Number(msg.ts)).
   ts: number | string;
@@ -90,6 +93,10 @@ export type ChatMsg = {
   gifterMatrixId?: string | null;
   giftKind?: "direct" | "community";
   count?: number;
+  /** A community gift with every slot parked for the next sign-ups (stream-api alert.js). */
+  waiting?: boolean;
+  /** A direct gift queued behind its recipient's subscription (never its date: the card is public). */
+  queued?: boolean;
   months?: number;
   recipients?: { name: string; matrixId: string | null }[];
   donorMatrixId?: string | null;
@@ -150,7 +157,7 @@ export function cardReplyContext(m: ChatMsg): ChatMsg {
     : m.system === "sub"
     ? "subscribed"
     : m.system === "donation"
-    ? `donated ${formatMoney(m.amount ?? 0, m.currency ?? "usd")}`
+    ? `donated ${formatPrice(m.amount ?? 0, m.currency ?? SITE_CURRENCY, "minor")}`
     : m.system === "highlight"
     ? "highlighted a message"
     : m.system === "cheer"

@@ -64,8 +64,8 @@ const src = readFileSync(join(__dirname, 'ws-hub.js'), 'utf8')
   .split('\n').filter((l) => !l.trimStart().startsWith('//')).join('\n')
   .replace(/\/\*[\s\S]*?\*\//g, '');
 
-test('all three buffer mutators invalidate, and connect sends the cached string', () => {
-  for (const fn of ['bufferPush', 'bufferReplace', 'redactBuffered']) {
+test('every buffer mutator invalidates, and connect sends the cached string', () => {
+  for (const fn of ['bufferPush', 'bufferReplace', 'redactBuffered', 'touchBuffered']) {
     const body = src.slice(src.indexOf(`function ${fn}(`), src.indexOf('\n  }', src.indexOf(`function ${fn}(`)));
     assert.ok(body.length > 0, `vacuity anchor: ${fn} is gone from ws-hub.js`);
     assert.match(body, /history\.invalidate\(\)/,
@@ -73,6 +73,6 @@ test('all three buffer mutators invalidate, and connect sends the cached string'
   }
   assert.match(src, /ws\.send\(history\.get\(ws\.internal\)\)/,
     'the connect path is not serving the cached history frame');
-  assert.match(src, /module\.exports = \{ createWsHub, sweepVerdict, makeHistoryCache, bucketOf, isLocalDirect \}/,
+  assert.match(src, /module\.exports = \{ createWsHub, sweepVerdict, makeHistoryCache, bucketOf, isLocalDirect, publicReplacer \}/,
     'vacuity anchor: the export line changed — update this scan');
 });

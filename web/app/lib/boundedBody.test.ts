@@ -91,7 +91,7 @@ test("the federated and arbitrary-URL readers never buffer an upstream body unbo
   const files = [
     "app/api/avatar/me/route.ts", "app/api/avatar/user/[id]/route.ts", "app/lib/publicAvatar.ts",
     "app/lib/matrixProfile.ts", "app/api/matrix/devices/route.ts", "app/lib/matrixMediaUpload.ts",
-    "app/lib/matrixSession.ts", "app/lib/federatedSignIn.ts", "app/api/auth/matrix-discover/route.ts",
+    "app/lib/matrixSession.ts", "app/lib/matrixSessionCore.ts", "app/lib/federatedSignIn.ts", "app/api/auth/matrix-discover/route.ts",
     "app/api/auth/matrix-initiate/route.ts", "app/api/mod/embed/route.ts",
     "app/api/og/route.ts", "app/lib/rssServer.ts",
   ];
@@ -102,7 +102,10 @@ test("the federated and arbitrary-URL readers never buffer an upstream body unbo
     const raw = readFileSync(new URL(`../../${f}`, import.meta.url), "utf8");
     const src = stripComments(raw);
     assert.ok(src.trimEnd().endsWith(raw.trimEnd().slice(-12)), `${f}: the scan did not reach the END of the file`);
-    assert.match(src, /read(Json|Body|Bytes)Capped\(/, `${f} no longer reads through the capped helper`);
+    // matrixSession.ts reads the token endpoint through the core's readRefreshAnswer, which is in
+    // this list itself and so held to the capped helper.
+    assert.match(src, f === "app/lib/matrixSession.ts" ? /readRefreshAnswer\(res, (MATRIX_JSON|OAUTH_REPLY)_MAX_BYTES\)/ : /read(Json|Body|Bytes)Capped\(/,
+      `${f} no longer reads through the capped helper`);
     const hits = [...src.matchAll(unbounded)].map((m) => m[0]);
     assert.deepEqual(hits, [], `${f} reads an upstream body with no byte limit`);
   }

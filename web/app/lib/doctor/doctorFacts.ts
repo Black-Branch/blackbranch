@@ -10,12 +10,17 @@ import { matrixBaseUrl, matrixFederationServer, matrixOAuthIssuer } from "../mat
 import { legacyNamespaceSet } from "../matrixNamespace";
 import { lockdownDoctorFact, type LockdownDoctorFact } from "../lockdownRegistration";
 import { legacyNativePlatform } from "../nativePlatform";
-import { instanceBool, instanceHeldOn, instanceResolve } from "../instanceConfigServer";
+import { instanceBool, instanceHeldOn, instanceResolve, instanceString } from "../instanceConfigServer";
 import { INSTANCE_KEYS, MODULES, runProviderCheck, normalizeCheckResult, describeCheck } from "../instanceSchema.generated.mjs";
 import { streamApiFetch } from "../streamApi";
 import { decToken } from "../tokenCrypto";
 import { hostRequestsAvailable } from "../hostRequests";
 import { keyInstalled, ownerPluginInstalled } from "../plugins/installed";
+import { communityRunFacts, type RunFact } from "../community/runFacts";
+import { withStripePortal } from "./stripePortalFact";
+import { retentionCapDays } from "../community/communityAdminServer";
+import { PENDING_MATRIX_ERASE_COUNT_SQL } from "../matrixEraseRetry";
+import { openSkips, skipPages } from "./doctorSkipped";
 
 type Snapshot = {
   features?: string[];
@@ -44,7 +49,9 @@ export type SiteFacts = {
   door: { apiCloudflare: boolean | null };
   skipped: string[];
   heldOn: string[];
-  payments: { stripe: ProviderFact; paypal: ProviderFact };
+  /** giftRefunds.partial: partial community-gift refunds (90 days) whose money covered part of a
+   *  slot (giftServer.ts endGift); null when the database could not be read. */
+  payments: { stripe: ProviderFact; paypal: ProviderFact; giftRefunds: { partial: number } | null };
   /** `tested: false` = the channel is set and there is nothing to test (no app keys): not checked. */
   platforms: { id: string; label: string; set: boolean; tested: boolean; ok: boolean | null; detail: string }[];
   /** The Admin Panel's service strip as facts, and chat coming in per platform. `connected` is
@@ -59,6 +66,13 @@ export type SiteFacts = {
   /** site.legacyId: the install value's state (never the word itself), and whether any account here is
    *  older than the platform-key rename (v145) — null when that could not be read. */
   platform: { legacyId: "unset" | "set" | "ignored"; olderAccounts: boolean | null };
+  /** The community's rooms kept as the Community page sets them: the switch, the retention cap the
+   *  homeserver should render, and the newest run and newest finished run (null runs = the log could
+   *  not be read). Counts and times only. */
+  community: { reconciler: boolean; retentionCapDays: number; latest: RunFact | null; lastFinished: RunFact | null } | null;
+  /** Deleted accounts whose Matrix account the site has not deactivated yet, and the distinct fixed
+   *  codes of the last answers (null count: the table could not be read). Never an account id. */
+  deletions: { matrixPending: number | null; codes: string[] };
 };
 type ProviderFact = { on: boolean; test: { ok: boolean | null; code: string; detail: string } | null };
 
@@ -140,7 +154,6 @@ function siteSecretsMissing(env: Record<string, string | undefined> = process.en
 async function tokenFact(): Promise<SiteFacts["secrets"]["token"]> {
   const sources = [
     "SELECT mx_refresh_token AS t FROM site.user_sessions WHERE mx_refresh_token LIKE 'v1:%' LIMIT 1",
-    "SELECT mx_refresh_token AS t FROM site.users WHERE mx_refresh_token LIKE 'v1:%' LIMIT 1",
     "SELECT refresh_token AS t FROM site.accounts WHERE refresh_token LIKE 'v1:%' LIMIT 1",
   ];
   try {
@@ -203,8 +216,13 @@ async function paymentFacts(): Promise<SiteFacts["payments"]> {
     return { on, test: on ? await webCheck(test) : null };
   };
   const [stripe, paypal] = await Promise.all([provider("stripe", "stripe-webhook"), provider("paypal", "paypal-webhook")]);
-  return { stripe, paypal };
+  const giftRefunds = await pool.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM site.gift_reversals
+      WHERE remainder_cents > 0 AND restored_at IS NULL AND created_at > now() - interval '90 days'`)
+    .then((r) => ({ partial: r.rows[0]?.n ?? 0 }), () => null);
+  return { stripe: await withStripePortal(stripe, webCheck), paypal, giftRefunds };
 }
+
 
 /** The platforms the doctor knows, and whether each is set up (its channel is). */
 function platformsSetUp(): { id: string; label: string; set: boolean; test: string | null; why: string }[] {
@@ -306,10 +324,26 @@ async function platformKeyFacts(): Promise<SiteFacts["platform"]> {
   }
 }
 
+async function communityFacts(): Promise<SiteFacts["community"]> {
+  const runs = await communityRunFacts(pool, { timeZone: instanceString("site.timeZone") });
+  if (!runs) return null;
+  return { reconciler: instanceBool("community.reconciler"), retentionCapDays: retentionCapDays(), ...runs };
+}
+
+/** Deleted accounts whose Matrix erase has not landed (matrixEraseRetry.ts retries them). */
+async function deletionFacts(): Promise<SiteFacts["deletions"]> {
+  try {
+    const { rows } = await pool.query<{ n: number; codes: string[] | null }>(PENDING_MATRIX_ERASE_COUNT_SQL);
+    return { matrixPending: rows[0]?.n ?? 0, codes: (rows[0]?.codes ?? []).slice(0, 5) };
+  } catch {
+    return { matrixPending: null, codes: [] };
+  }
+}
+
 export async function gatherSiteFacts(): Promise<SiteFacts> {
   const snap = await readSnapshot();
   const setUp = platformsSetUp();
-  const [db, matrix, token, modules, payments, platforms, platform, door, services] = await Promise.all([dbFacts(), matrixFacts(), tokenFact(), moduleFacts(snap), paymentFacts(), platformFacts(setUp), platformKeyFacts(), doorFacts(), serviceFacts(snap, setUp)]);
+  const [db, matrix, token, modules, payments, platforms, platform, door, services, community, deletions] = await Promise.all([dbFacts(), matrixFacts(), tokenFact(), moduleFacts(snap), paymentFacts(), platformFacts(setUp), platformKeyFacts(), doorFacts(), serviceFacts(snap, setUp), communityFacts(), deletionFacts()]);
   const secrets = snap?.secrets ? Object.values(snap.secrets) : null;
   const state = instanceResolve("setup.state").value as { skipped?: unknown } | null;
   return {
@@ -331,6 +365,13 @@ export async function gatherSiteFacts(): Promise<SiteFacts> {
     platform,
     services,
     alerts: alertFacts(snap),
-    skipped: Array.isArray(state?.skipped) ? state.skipped.filter((x): x is string => typeof x === "string" && /^[a-z0-9:-]{1,64}$/.test(x)) : [],
+    community,
+    deletions,
+    // Judged as read: a step set since in the Admin Panel, or one with nothing to set, is not open.
+    skipped: openSkips(
+      Array.isArray(state?.skipped) ? state.skipped.filter((x): x is string => typeof x === "string" && /^[a-z0-9:-]{1,64}$/.test(x)) : [],
+      skipPages(ownerPluginInstalled()),
+      (key) => { const v = instanceResolve(key).value; return v !== null && v !== undefined && v !== ""; },
+    ),
   };
 }

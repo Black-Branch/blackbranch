@@ -64,6 +64,8 @@ export type NormalizedRow = {
   loafCount: number; loafBlockingMs: number; loafWorst: unknown[];
   inpMs: number | null; inp: Record<string, unknown> | null; cls: number | null;
   reqCount: number; bytes: Record<string, { n: number; b: number; nb: number }>; socketReconnects: number;
+  /** null = the page predates the count (not zero: zero reads as "never connected"). */
+  socketOpens: number | null;
   player: Record<string, unknown> | null; decode: Record<string, unknown> | null;
   frames: Record<string, unknown> | null; anim: Record<string, unknown> | null;
   settings: Record<string, boolean> | null; heapStartMb: number | null; heapPeakMb: number | null;
@@ -150,6 +152,7 @@ export function normalizeReport(body: unknown): NormalizedRow | null {
     loafCount: int(loaf.n, 1e9), loafBlockingMs: int(loaf.blockMs, 2e9), loafWorst: worst,
     inpMs: inp ? inp.ms : null, inp, cls: n(body.cls, 1000, null),
     reqCount: int(body.req, 1e9), bytes, socketReconnects: int(sock.reconnects, 1e6),
+    socketOpens: sock.opens === undefined ? null : int(sock.opens, 1e6),
     player, decode, frames, anim, settings,
     heapStartMb: n(heap.startMb, 1e6, null), heapPeakMb: n(heap.peakMb, 1e6, null),
   };

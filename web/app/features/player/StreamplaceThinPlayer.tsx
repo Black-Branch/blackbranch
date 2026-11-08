@@ -3,17 +3,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { siteName } from "@/app/lib/siteName";
 import { useOutsideClick } from "@/app/lib/useOutsideClick";
-import { escalationFor, escalationAfterGrace, playbackIsAdvancing, reconnectDelayMs, MAX_RECONNECTS } from "@/app/lib/whepEscalation";
+import {
+  escalationFor, escalationAfterGrace, playbackIsAdvancing, reconnectDelayMs, retryBudgetSpent, offerChoicesWhileReconnecting,
+  watchdogVerdict, busyRetryMs, CONNECT_TIMEOUT_MS, ICE_GATHER_CAP_MS, type NegotiationPhase,
+} from "@/app/lib/whepEscalation";
 import { derivePlayerStats, type PlayerStats, type StatsSample } from "@/app/lib/playerStats";
 import { reportClientError } from "@/app/lib/clientError";
 import { readInboundVideoCounters, buildPlayerEvent, type PlayerEventKind } from "@/app/lib/playerTelemetry";
-import { HLS_CONFIG } from "@/app/lib/hlsConfig";
+import { hlsConfigFor, SMOOTH_JITTER_BUFFER_MS } from "@/app/lib/hlsConfig";
+import { useSetting } from "@/app/lib/useSetting";
 import { registerVideoProbe, setPlayerAudio } from "@/app/lib/playerHealth";
 import { readInboundVideo, readVideoElement } from "@/app/lib/deviceHealth/videoQuality";
 import { chooseHlsImpl, hlsFailureKind, hlsPlaylistUrl } from "@/app/lib/hlsPath";
 import { lsGet, lsRemove, lsSet } from "@/app/lib/safeLocalStorage";
 import { parseTransport, TRANSPORT_KEY, type Transport } from "@/app/lib/playerTransport";
 import { siteIcon } from "@/app/lib/siteIcons";
+import { toggleFullscreen } from "./fullscreen";
 import {
   clampVolume, restorableVolume, isSilent, sliderPercent, unmuteVolume, volumeKeyFor, migrateLegacyVolume,
 } from "@/app/lib/playerVolume";
@@ -77,24 +82,19 @@ const RENDITIONS: RenditionOpt[] = [
 // "failed" = we stopped trying and are waiting for the viewer to choose. It is
 // deliberately distinct from "ended": a stream that finished and a transport we
 // could not establish are different facts, and showing "Stream has ended" for
-// the second one is a lie the viewer can't act on.
-type Status = "connecting" | "playing" | "reconnecting" | "ended" | "failed";
+// the second one is a lie the viewer can't act on. "busy" = the relay answered
+// 429: waiting out its Retry-After, then trying again by itself.
+type Status = "connecting" | "playing" | "reconnecting" | "busy" | "ended" | "failed";
 
 
 const CONTROLS_HIDE_MS = 2800;
-// The reconnect budget and its wait ladder live in whepEscalation.ts (tested
-// there): after MAX_RECONNECTS consecutive failed (re)connect attempts, stop
-// retrying and surface the "failed" overlay (viewer picks: retry / HLS /
-// embed) instead of spinning "reconnecting…" forever.
+// The reconnect budget, its wait ladder and the connect watchdog's deadlines
+// (CONNECT_TIMEOUT_MS, judged by phase) live in whepEscalation.ts, tested
+// there. A session that has played keeps reconnecting while it is mounted; one
+// that never connected stops at the budget and shows the "failed" overlay
+// (viewer picks: retry / HLS / embed). The HLS path bounds its own start with
+// CONNECT_TIMEOUT_MS too.
 const STATS_POLL_MS = 3000;
-// If a WebRTC session hasn't reached "connected" within this window, stop
-// waiting: retry if this transport has worked this session, else surface the
-// "failed" overlay so the VIEWER picks HLS/embed (no automatic demotion).
-// Essential for hardened browsers (GrapheneOS Vanadium's default "disable
-// non-proxied UDP") where the connection hangs in "connecting" indefinitely
-// without ever firing a failure. The HLS path bounds its own start with the same
-// window, so "Connecting…" has one deadline whichever transport is in use.
-const CONNECT_TIMEOUT_MS = 9000;
 
 // STUN is required for connectivity on restrictive networks (mobile / cellular
 // CGNAT). stream.place's playback node puts reachable candidates in its SDP
@@ -107,6 +107,16 @@ const CONNECT_TIMEOUT_MS = 9000;
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] },
 ];
+
+// The smoother-playback switch on this transport: the receive buffer the browser
+// aims for (RTCRtpReceiver.jitterBufferTarget, ms; null = the browser's own
+// choice). A browser without the property is left alone.
+function setJitterBuffer(r: RTCRtpReceiver, smooth: boolean): void {
+  if (!("jitterBufferTarget" in r)) return;
+  try {
+    (r as RTCRtpReceiver & { jitterBufferTarget: number | null }).jitterBufferTarget = smooth ? SMOOTH_JITTER_BUFFER_MS : null;
+  } catch { /* a value this engine refuses — its own buffer stands */ }
+}
 
 export default function StreamplaceThinPlayer({
   startMuted,
@@ -130,35 +140,28 @@ export default function StreamplaceThinPlayer({
   // (stop and surface the failed overlay — e.g. a hardened browser blocking
   // WebRTC; the viewer picks HLS/embed themselves, never automatically).
   const everConnectedRef = useRef(false);
-  // The broadcast ended: a remote track's `ended`, confirmed by stalled
-  // playback. Sticky for the life of a negotiation — the peer connection
-  // follows the ended tracks into `failed`, and without this the reconnect
-  // machinery overwrote "Stream has ended" with four retries and a panel that
-  // blamed the viewer's network. Reset at the top of the negotiate effect, so
-  // every fresh negotiation starts clean. Declaring an end also cancels an
-  // armed reconnect, so after an end only a viewer's action (Check again /
-  // Try again / a rendition change) re-runs the effect.
-  const endedRef = useRef(false);
   // The playback node the relay's WHEP answer named (x-playback-server), for
   // player-telemetry rows — see playerTelemetry.ts. Null until the first
   // negotiation's response has been read. Declared at component level, so it
   // survives ACROSS negotiate-effect runs — a reconnect bumps `nonce`, which
   // re-runs the whole effect, so there is no "within one run" to speak of;
-  // only a component-level ref outlives that. Not reset per-attempt: a 429
-  // (no header) must not blank out the last node a real answer named.
+  // only a component-level ref outlives that. Not reset per-attempt: our own
+  // 429 (no header) must not blank out the last node a real answer named.
   const nodeRef = useRef<string | null>(null);
   // Previous getStats sample, for computing deltas (loss %, bitrate).
   const statsPrevRef = useRef<StatsSample | null>(null);
 
   const [rendition, setRendition] = useState("source");
   const [status, setStatus] = useState<Status>("connecting");
-  // Why the last "failed" happened, when it was not the transport: a 429 from
-  // our own WHEP relay (per-address budget) is not a network the viewer can
-  // fix by retrying at once, and Compatibility mode spends the same budget.
-  // Cleared at the top of EVERY negotiation (both the WebRTC and the HLS
-  // effect), so a later attempt that fails for another reason — the watchdog's
-  // reconnect after the window expired, say — never wears the throttled copy.
-  const [failReason, setFailReason] = useState<"throttled" | null>(null);
+  // "Smoother playback (adds delay)" (settingsRegistry playerSmooth). A ref for
+  // the WebRTC receivers, so flipping it never renegotiates; the HLS effect
+  // takes the value as a dep, because hls.js reads its config at construction.
+  const smooth = useSetting("chatStyle_playerSmooth") === "1";
+  const smoothRef = useRef(smooth);
+  // A reconnect that has run past the old budget (offerChoicesWhileReconnecting)
+  // also offers Compatibility mode and the embed while it keeps trying: the
+  // viewer is never stuck, and never made to act when the network will return.
+  const [offerEscapes, setOfferEscapes] = useState(false);
   const [muted, setMuted] = useState(startMuted);
   // 0–1, applied to video.volume. Deliberately ORTHOGONAL to `muted`: startMuted
   // exists to satisfy autoplay policy, so restoring a saved volume must never
@@ -205,6 +208,13 @@ export default function StreamplaceThinPlayer({
   // mute toggle and needlessly renegotiate. Synced in an effect (not at render).
   const mutedRef = useRef(muted);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
+
+  // The smoother-playback switch, live: retarget the receivers this connection
+  // already has (a new connection's tracks read the ref as they arrive).
+  useEffect(() => {
+    smoothRef.current = smooth;
+    for (const r of pcRef.current?.getReceivers?.() ?? []) setJitterBuffer(r, smooth);
+  }, [smooth]);
 
   // Same reasoning as mutedRef: tryPlay must read the current volume without
   // taking it as a dep (that would renegotiate on every slider drag).
@@ -330,7 +340,11 @@ export default function StreamplaceThinPlayer({
     const ctrl = new AbortController();
     const pc = new RTCPeerConnection({ bundlePolicy: "max-bundle", iceServers: ICE_SERVERS });
     pcRef.current = pc;
-    endedRef.current = false;
+    // How far this attempt has got (whepEscalation.ts NegotiationPhase) and
+    // when — the watchdog judges by it, and every telemetry row names it.
+    const startedAt = Date.now();
+    let phase: NegotiationPhase = "ice";
+    let answeredAt: number | null = null;
 
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
@@ -341,36 +355,29 @@ export default function StreamplaceThinPlayer({
     // the loop catches it; if it recovers, `connected` cancels the loop.
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
     const clearStall = () => { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } };
-    // The same hold-and-recheck for a broadcast END. Separate timer: an end in
-    // progress outranks a failure — the tracks ending is WHY the connection is
-    // about to fail — so failIfStalled, scheduleReconnect AND the
-    // connection-state handler all stand down while this is pending or has
-    // fired.
+    // The same hold-and-recheck for a remote track's `ended`. Separate timer,
+    // because it ends in a reconnect rather than a stop.
     let endTimer: ReturnType<typeof setTimeout> | null = null;
     const clearEnd = () => { if (endTimer) { clearTimeout(endTimer); endTimer = null; } };
     const clearRetry = () => { if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; } };
     // A track can end while the picture keeps moving (one track of two
-    // dropped); an end hold that never resolved would gate every escalation
-    // path for the life of the negotiation. Fifteen seconds of advancing
-    // frames after a track's `ended` is not an end — stand down and let the
-    // ordinary failure paths judge whatever happens next.
+    // dropped). Fifteen seconds of advancing frames after a track's `ended` is
+    // not a stop — stand down and let the ordinary paths judge what follows.
     const MAX_END_RECHECKS = 5;
     let endRechecks = 0;
     // One sink row per decision — see playerTelemetry.ts. Runs BEFORE the
     // teardown the decision causes, while `pc` can still answer getStats;
     // a pc that cannot (closing) gives null counters, which is still a row.
-    // Declared here, above endIfStalled (its first caller below) rather than
-    // next to scheduleReconnect: both are `const` arrows in the same scope, so
-    // a caller declared above its callee is a TDZ hazard on paper even though
-    // every actual call happens later, from an event/timer callback.
+    // Declared first: every caller below is a `const` arrow in this scope.
     const reportPlayerEvent = (kind: PlayerEventKind, reason: string) => {
       const attempt = retryCountRef.current;
       const states = { connectionState: pc.connectionState, iceConnectionState: pc.iceConnectionState };
+      const at = { phase, elapsedMs: Date.now() - startedAt };
       void pc.getStats()
         .then((reports) => readInboundVideoCounters(reports.values()))
         .catch(() => null)
         .then((counters) => {
-          const ev = buildPlayerEvent({ kind, reason, ...states, attempt, node: nodeRef.current, mode: "webrtc", counters });
+          const ev = buildPlayerEvent({ kind, reason, ...states, ...at, attempt, node: nodeRef.current, mode: "webrtc", counters });
           const err = new Error(ev.message);
           err.stack = ev.stack; // describe() forwards .stack verbatim — the JSON payload rides there
           reportClientError("player", err);
@@ -381,45 +388,56 @@ export default function StreamplaceThinPlayer({
         // window listener would report right back into this same sink.
         .catch(() => {});
     };
-    // Audio and video are two separate remote tracks, and a graceful end stops
-    // both — so a second track's `ended` listener (below) calls this again
-    // after the first call already reported "ended" and flipped endedRef.
-    // Guarding on it here stops that second call from emitting a second
-    // "ended" telemetry row for one broadcast end.
-    const endIfStalled = () => {
-      if (endedRef.current) return;
-      if (aborted) return;
-      if (!playbackHealthy()) {
-        clearEnd(); clearStall(); clearRetry(); endedRef.current = true;
-        reportPlayerEvent("ended", "track-ended");
-        setStatus("ended");
-        return;
-      }
-      if (endTimer) return;
-      if (endRechecks >= MAX_END_RECHECKS) {
-        endRechecks = 0;
-        // The connection-state events the hold swallowed are gone — judge the
-        // connection as it is now, or a pc that failed during the hold leaves a
-        // frozen picture with no panel.
-        applyEscalation(escalationFor({
-          everConnected: everConnectedRef.current,
-          retryCount: retryCountRef.current,
-          maxReconnects: MAX_RECONNECTS,
-          aborted,
-          state: pc.connectionState,
-        }), `state:${pc.connectionState}`);
-        return;
-      }
-      endRechecks += 1;
-      endTimer = setTimeout(() => { endTimer = null; endIfStalled(); }, 3000);
-    };
+
     // reason: why this attempt is being judged as failed — surfaced only in
     // the player-telemetry row (playerTelemetry.ts), never shown to the viewer.
     const failIfStalled = (reason: string) => {
-      if (aborted || endedRef.current || endTimer) return;
+      if (aborted) return;
       if (!playbackHealthy()) { clearStall(); reportPlayerEvent("failed", reason); setStatus("failed"); return; }
       if (stallTimer) return;
       stallTimer = setTimeout(() => { stallTimer = null; failIfStalled(reason); }, 3000);
+    };
+
+    // reason: why this reconnect was scheduled, threaded through to the
+    // player-telemetry row before the decision's teardown. When the budget is
+    // spent no reconnect is scheduled — failIfStalled("max-reconnects") is —
+    // so the report sits past that check: one decision must not emit both a
+    // "reconnect" row (false — there is no reconnect) and the "failed" row.
+    const scheduleReconnect = (reason: string) => {
+      if (aborted || retryRef.current) return;
+      // Only a session that has never played stops here and hands the viewer
+      // the choice; one that has played keeps trying for as long as it is
+      // mounted (whepEscalation.ts, above MAX_RECONNECTS). Never a demotion —
+      // see NO AUTOMATIC DEMOTION above.
+      if (retryBudgetSpent({ everConnected: everConnectedRef.current, retryCount: retryCountRef.current })) { failIfStalled("max-reconnects"); return; }
+      reportPlayerEvent("reconnect", reason);
+      clearEnd();
+      retryCountRef.current += 1;
+      setStatus("reconnecting");
+      setOfferEscapes(offerChoicesWhileReconnecting(retryCountRef.current));
+      const delay = reconnectDelayMs(retryCountRef.current);
+      retryRef.current = setTimeout(() => {
+        retryRef.current = null;
+        if (!aborted) setNonce((n) => n + 1);
+      }, delay);
+    };
+
+    // A remote track ended. On a stream.place stream that is still live — and
+    // this player is only mounted while the site's liveness says it is — that
+    // is the node dropping us (a track swap, a node restart), not the end of
+    // the broadcast: prod 10-18 → 10-31 had ten `track-ended` rows on one
+    // viewer, stream.place live throughout, each one a "Stream has ended"
+    // panel over a live stream until a tap. So it reconnects, once the
+    // picture has really stopped; when the broadcast truly ends, liveness
+    // unmounts the player and the page says so. (The node answers a WHEP offer
+    // 200 even for an offline streamer — measured 2026-10-31 — so the
+    // exchange itself cannot tell the player the stream is over.)
+    const reconnectIfTrackStalled = () => {
+      if (aborted || endTimer) return;
+      if (!playbackHealthy()) { endRechecks = 0; scheduleReconnect("track-ended"); return; }
+      if (endRechecks >= MAX_END_RECHECKS) { endRechecks = 0; return; }
+      endRechecks += 1;
+      endTimer = setTimeout(() => { endTimer = null; reconnectIfTrackStalled(); }, 3000);
     };
 
     // A track that arrives without an `msid` has no e.streams[0]; left
@@ -429,48 +447,49 @@ export default function StreamplaceThinPlayer({
     pc.addEventListener("track", (e) => {
       let stream = e.streams[0];
       if (!stream) { synthetic.addTrack(e.track); stream = synthetic; }
+      if (smoothRef.current && e.receiver) setJitterBuffer(e.receiver, true);
       if (videoRef.current && videoRef.current.srcObject !== stream) {
         videoRef.current.srcObject = stream;
         tryPlay();
       }
-      // A graceful broadcast end stops the remote track. Like every other stop
-      // it is confirmed against the picture (endIfStalled), not declared on the
-      // event — frames can keep advancing for a few seconds after it. The abort
-      // guard suppresses this when WE tear the connection down.
-      e.track.addEventListener("ended", () => { if (!aborted) endIfStalled(); });
+      // Audio and video are two tracks, and the node stops both: the second
+      // `ended` lands on a reconnect already armed and adds nothing. The
+      // abort guard suppresses this when WE tear the connection down.
+      e.track.addEventListener("ended", () => { if (!aborted) reconnectIfTrackStalled(); });
     });
 
-    // reason: why this reconnect was scheduled, threaded through to the
-    // player-telemetry row before the decision's teardown. At the cap, no
-    // reconnect is actually scheduled — failIfStalled("max-reconnects") is —
-    // so the report moves past the cap check: one decision must not emit
-    // both a "reconnect" row (false — there is no reconnect) and the
-    // "failed" row that follows it.
-    const scheduleReconnect = (reason: string) => {
-      if (aborted || retryRef.current || endedRef.current || endTimer) return;
-      // Bounded with backoff. At the cap we STOP and hand the viewer the choice
-      // (see the "failed" overlay) rather than demoting them automatically —
-      // see NO AUTOMATIC DEMOTION above.
-      if (retryCountRef.current >= MAX_RECONNECTS) { failIfStalled("max-reconnects"); return; }
-      reportPlayerEvent("reconnect", reason);
-      retryCountRef.current += 1;
-      setStatus("reconnecting");
-      const delay = reconnectDelayMs(retryCountRef.current);
+    // Watchdog: WebRTC can hang without ever firing a failure — in the WHEP
+    // exchange (a request our own site has not answered) or in the ICE checks
+    // (GrapheneOS Vanadium blocking non-proxied UDP). whepEscalation.ts's
+    // watchdogVerdict judges by phase: it waits out our relay's own deadline
+    // on an unanswered offer, retries what is not a transport verdict, and
+    // only a never-played session whose media path never came up gets the
+    // choice panel.
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
+    const judgeWatchdog = () => {
+      watchdog = null;
+      if (aborted || pc.connectionState === "connected") return;
+      const v = watchdogVerdict({ phase, elapsedMs: Date.now() - startedAt, answeredAtMs: answeredAt, everConnected: everConnectedRef.current });
+      if (v.kind === "wait") watchdog = setTimeout(judgeWatchdog, v.ms);
+      else if (v.kind === "reconnect") scheduleReconnect("watchdog");
+      else if (v.kind === "fallback") failIfStalled("watchdog");
+    };
+    watchdog = setTimeout(judgeWatchdog, CONNECT_TIMEOUT_MS);
+
+    // The relay answered 429: busy, not broken. Wait out its Retry-After and try
+    // again by itself. No budget is spent and the watchdog stands down — neither
+    // is a verdict on the transport. Nothing is painted over a moving picture.
+    const waitWhileBusy = (retryAfter: string | null) => {
+      if (aborted || retryRef.current) return;
+      clearWatchdog();
+      reportPlayerEvent("busy", "relay:429");
+      if (!playbackHealthy()) setStatus("busy");
       retryRef.current = setTimeout(() => {
         retryRef.current = null;
         if (!aborted) setNonce((n) => n + 1);
-      }, delay);
+      }, busyRetryMs(retryAfter));
     };
-
-    // Watchdog: WebRTC can hang in "connecting" forever without ever firing a
-    // failure (e.g. Vanadium blocking non-proxied UDP). If we don't connect in
-    // time, retry (a mid-stream drop on a transport we know works) or stop and
-    // offer the choice (never connected — likely a WebRTC-hostile network).
-    const watchdog = setTimeout(() => {
-      if (aborted || pc.connectionState === "connected") return;
-      if (everConnectedRef.current) scheduleReconnect("watchdog");
-      else failIfStalled("watchdog");
-    }, CONNECT_TIMEOUT_MS);
 
     // `disconnected` is TRANSIENT and usually self-heals; escalating on it was
     // demoting viewers off a working player mid-stream. Policy lives in
@@ -478,11 +497,10 @@ export default function StreamplaceThinPlayer({
     let graceTimer: ReturnType<typeof setTimeout> | null = null;
     const clearGrace = () => { if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; } };
 
-    // The policy module still decides WHEN to stop retrying — that reasoning
-    // (disconnected is transient, failed is terminal) is unchanged and still
-    // unit-tested. Only the consequence changed: "fallback" now means stop and
-    // ask, not switch transports behind the viewer's back. `reason` is the
-    // player-telemetry reason for whichever decision this action becomes.
+    // The policy module decides what a state means (disconnected is transient,
+    // failed is terminal). "fallback" means stop and ask, never switch
+    // transports behind the viewer's back. `reason` is the player-telemetry
+    // reason for whichever decision this action becomes.
     const applyEscalation = (action: ReturnType<typeof escalationFor>, reason: string) => {
       if (action.kind === "reconnect") scheduleReconnect(reason);
       else if (action.kind === "fallback") failIfStalled(reason);
@@ -491,26 +509,20 @@ export default function StreamplaceThinPlayer({
     pc.addEventListener("connectionstatechange", () => {
       const st = pc.connectionState;
       if (st === "connected") {
-        clearTimeout(watchdog);
+        phase = "media";
+        clearWatchdog();
         clearGrace(); // recovered on its own — the viewer never needs to know
         clearStall();
-        clearEnd(); // a real end never reconnects — a connect means the tracks were not ending
+        clearEnd(); // a connect means the tracks were not ending
         clearRetry();
         retryCountRef.current = 0; // clean connect — reset the failure count
         everConnectedRef.current = true;
         setStatus("playing");
+        setOfferEscapes(false);
         revealControls(); // flash the controls once on connect, then auto-hide
         return;
       }
-      // The broadcast ended (or is being confirmed as ended) — nothing to
-      // escalate; the ended panel is the answer.
-      if (endedRef.current || endTimer) return;
-      const ctx = {
-        everConnected: everConnectedRef.current,
-        retryCount: retryCountRef.current,
-        maxReconnects: MAX_RECONNECTS,
-        aborted,
-      };
+      const ctx = { everConnected: everConnectedRef.current, aborted };
       const action = escalationFor({ ...ctx, state: st });
       if (action.kind === "wait") {
         // Hold. Only escalate if it is STILL not connected when grace expires.
@@ -518,12 +530,7 @@ export default function StreamplaceThinPlayer({
         graceTimer = setTimeout(() => {
           graceTimer = null;
           if (aborted || pc.connectionState === "connected") return;
-          applyEscalation(escalationAfterGrace({
-            everConnected: everConnectedRef.current,
-            retryCount: retryCountRef.current,
-            maxReconnects: MAX_RECONNECTS,
-            aborted,
-          }), "grace-expired");
+          applyEscalation(escalationAfterGrace({ everConnected: everConnectedRef.current, aborted }), "grace-expired");
         }, action.graceMs);
         return;
       }
@@ -533,14 +540,16 @@ export default function StreamplaceThinPlayer({
 
     (async () => {
       try {
-        setStatus("connecting");
-        setFailReason(null); // every attempt re-judges — see failReason
+        // A retry keeps saying "Reconnecting…" (or "busy"): the viewer was
+        // watching, and "Connecting…" between tries reads as a fresh start.
+        setStatus((s) => (s === "reconnecting" || s === "busy" ? s : "connecting"));
         // Transceivers already declare recvonly audio+video, so the legacy
         // offerToReceive* flags are redundant.
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         const desc = await waitForIce(pc);
         if (aborted) return;
+        phase = "signal";
         const res = await fetch(`/api/streamplace/whep?rendition=${encodeURIComponent(rendition)}`, {
           method: "POST",
           headers: { "content-type": "application/sdp" },
@@ -555,20 +564,12 @@ export default function StreamplaceThinPlayer({
         // before the relay ever forwarded to a node) carries no such header,
         // and must not blank out a real node a previous answer named.
         nodeRef.current = res.headers.get("x-playback-server") ?? nodeRef.current;
-        if (res.status === 429) {
-          // Throttled by our relay: retrying into the budget only deepens it,
-          // so the watchdog must not schedule a reconnect either. While frames
-          // still advance (a reconnect under working media) the watchdog stays
-          // and judges later; the reason is set either way so the eventual
-          // panel names the cause.
-          setFailReason("throttled");
-          if (!playbackHealthy()) { clearTimeout(watchdog); failIfStalled("relay:429"); }
-          return;
-        }
+        if (res.status === 429) { waitWhileBusy(res.headers.get("retry-after")); return; }
         if (!res.ok) { scheduleReconnect(`relay:${res.status}`); return; }
         const answer = await res.text();
         if (aborted || !answer) return;
         await pc.setRemoteDescription({ type: "answer", sdp: answer });
+        if (phase === "signal") { phase = "connect"; answeredAt = Date.now() - startedAt; }
       } catch {
         if (!aborted) scheduleReconnect("fetch-threw");
       }
@@ -576,10 +577,10 @@ export default function StreamplaceThinPlayer({
 
     return () => {
       aborted = true;
-      clearTimeout(watchdog);
+      clearWatchdog();
       clearGrace(); // a pending grace timer must not fire after teardown
       clearStall(); // likewise the stall re-check
-      clearEnd();   // and a pending end confirmation
+      clearEnd();   // and a pending track-end re-check
       ctrl.abort();
       clearRetry();
       pc.close();
@@ -648,11 +649,15 @@ export default function StreamplaceThinPlayer({
       stallTimer = setTimeout(() => { stallTimer = null; giveUp(); }, 3000);
     };
     const onError = () => { giveUp(); };
+    // The playlist ran out (its end tag, on either implementation): the element
+    // stops with no error. Unheard, the picture froze under "Paused"; judged, the
+    // probe tells an ended stream from one that is still live.
+    const onEnded = () => { giveUp(); };
     const start = async () => {
       setStatus("connecting");
-      setFailReason(null); // every attempt re-judges — see failReason
       v.srcObject = null; // release any WebRTC stream before attaching a src
       v.addEventListener("playing", onPlaying);
+      v.addEventListener("ended", onEnded);
       // THE ORDER IS THE FIX. Chromium answers canPlayType with "maybe", so
       // asking it first would send every Chromium viewer down the native branch
       // and never import hls.js. The decision lives in
@@ -679,8 +684,8 @@ export default function StreamplaceThinPlayer({
         tryPlay();
         return;
       }
-      // The config lives in app/lib/hlsConfig.ts so the test can construct it.
-      const instance = new Hls(HLS_CONFIG);
+      // The configs live in app/lib/hlsConfig.ts so the tests can construct them.
+      const instance = new Hls(hlsConfigFor(smooth));
       instance.on(Hls.Events.MANIFEST_PARSED, () => { if (!cancelled) tryPlay(); });
       instance.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal || cancelled) return;
@@ -714,10 +719,11 @@ export default function StreamplaceThinPlayer({
       v.removeEventListener("playing", onPlaying);
       v.removeEventListener("waiting", onWaiting);
       v.removeEventListener("error", onError);
+      v.removeEventListener("ended", onEnded);
       if (hls) hls.destroy();
       try { v.removeAttribute("src"); v.load(); } catch { /* ignore */ }
     };
-  }, [mode, channel, nonce, tryPlay, playbackHealthy, transportRestored]);
+  }, [mode, channel, nonce, tryPlay, playbackHealthy, transportRestored, smooth]);
 
   // Close the rendition menu on outside press or Escape. The shared hook's
   // contains() check is what lets the toggle button live on onClick: the old
@@ -876,19 +882,14 @@ export default function StreamplaceThinPlayer({
     if (document.pictureInPictureEnabled) v.requestPictureInPicture().catch(() => {});
   };
 
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
-    const el = containerRef.current;
-    if (el?.requestFullscreen) { el.requestFullscreen().catch(() => {}); return; }
-    // iOS Safari has no element fullscreen — fall back to native video fullscreen.
-    const v = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
-    v?.webkitEnterFullscreen?.();
-  };
+  // Through the helper: engines return a Promise, nothing, or only have webkit names.
+  const onFullscreen = () => { void toggleFullscreen(document, containerRef.current, videoRef.current); };
 
   // Reload the current mode (jump-to-live / reconnect button).
   const reconnect = () => {
     setNeedsTap(false);
     retryCountRef.current = 0; // manual retry — clear the bounded-reconnect count
+    setOfferEscapes(false);
     setStatus("connecting");
     setNonce((n) => n + 1);
   };
@@ -900,6 +901,7 @@ export default function StreamplaceThinPlayer({
   const retryLowLatency = () => {
     setNeedsTap(false);
     retryCountRef.current = 0;
+    setOfferEscapes(false);
     setStatus("connecting");
     setMode("webrtc");
     lsSet(TRANSPORT_KEY, "webrtc");
@@ -914,6 +916,8 @@ export default function StreamplaceThinPlayer({
   const switchToHls = () => {
     setNeedsTap(false);
     setShowStats(false); // the panel is WebRTC-only; don't bring it back unasked
+    retryCountRef.current = 0;
+    setOfferEscapes(false);
     setStatus("connecting");
     setMode("hls");
     lsSet(TRANSPORT_KEY, "hls");
@@ -980,9 +984,76 @@ export default function StreamplaceThinPlayer({
         </button>
       )}
 
-      {/* Stream ended — a remote track ended and playback stalled
-          (endIfStalled), or the HLS manifest answered 404. Sticky until the
-          viewer asks for a fresh negotiation.
+      {/* Reconnecting — the picture dropped and the player is getting it
+          back by itself (WebRTC only: HLS recovers inside hls.js). Covers the
+          frozen last frame, so the viewer can tell a dropout from a stuck
+          picture. After the old budget it also offers the two escapes, and
+          keeps trying underneath them. */}
+      {status === "reconnecting" && mode === "webrtc" && !needsTap && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-scrim-heavy px-4 text-center">
+          <span className="flex items-center gap-2 text-sm font-semibold text-body">
+            <ArrowClockwise size={15} weight="bold" className="animate-spin" /> Reconnecting…
+          </span>
+          {offerEscapes && (
+            <>
+              <span className="text-xs text-secondary max-w-[36ch]">
+                Still trying. If it doesn&apos;t come back, Compatibility mode often works on this network.
+              </span>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={switchToHls}
+                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-3 border border-edge-strong text-sm font-semibold text-strong hover:bg-surface-4 transition-colors"
+                >
+                  <Pulse size={15} weight="bold" /> Compatibility mode
+                </button>
+                <button
+                  type="button"
+                  onClick={onFallback}
+                  className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-body-dim hover:text-strong transition-colors"
+                >
+                  <MonitorPlay size={15} weight="bold" /> Use the embed
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Busy — the relay answered 429. Not a failure: the player waits out
+          its Retry-After and tries again by itself, so the viewer is told and
+          asked for nothing. Compatibility mode does not use the relay, and the
+          embed is the other way in, so both are one click while it waits. */}
+      {status === "busy" && mode === "webrtc" && !needsTap && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-scrim-heavy px-4 text-center">
+          <span className="flex items-center gap-2 text-sm font-semibold text-body">
+            <ArrowClockwise size={15} weight="bold" className="animate-spin" /> The stream is busy
+          </span>
+          <span className="text-xs text-secondary max-w-[36ch]">Trying again in a few seconds.</span>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={switchToHls}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-3 border border-edge-strong text-sm font-semibold text-strong hover:bg-surface-4 transition-colors"
+            >
+              <Pulse size={15} weight="bold" /> Compatibility mode
+            </button>
+            <button
+              type="button"
+              onClick={onFallback}
+              className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-body-dim hover:text-strong transition-colors"
+            >
+              <MonitorPlay size={15} weight="bold" /> Use the embed
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Stream ended — compatibility mode only: the HLS manifest answered 404
+          (hlsFailureKind). The WebRTC path never decides this: a track the
+          node ends is a reconnect, and the site's liveness unmounts the player
+          when the stream is really over. Sticky until the viewer asks for a
+          fresh negotiation.
           `reconnect`, NOT `retryLowLatency`: forcing WebRTC would move a
           viewer watching in compatibility mode when the stream ended off the
           only transport that works for them. */}
@@ -1006,20 +1077,15 @@ export default function StreamplaceThinPlayer({
       {status === "failed" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-scrim-heavy px-4 text-center">
           <span className="text-sm font-semibold text-body">
-            {failReason === "throttled"
-              ? "Too many connection attempts from this network"
-              : mode === "hls" ? "Can't reach the stream" : "Can't connect to the low-latency stream"}
+            {mode === "hls" ? "Can't reach the stream" : "Can't connect to the low-latency stream"}
           </span>
           <span className="text-xs text-secondary max-w-[36ch]">
-            {failReason === "throttled"
-              ? "Wait a minute, then try again."
-              : mode === "hls"
-                ? "Playback isn't reachable from this network right now."
-                : "Some networks block the low-latency transport. Compatibility mode usually works."}
+            {mode === "hls"
+              ? "Playback isn't reachable from this network right now."
+              : "Some networks block the low-latency transport. Compatibility mode usually works."}
           </span>
           <div className="flex flex-wrap items-center justify-center gap-2">
-            {/* Compatibility mode goes through the same relay budget — not an answer to a 429. */}
-            {mode === "webrtc" && failReason !== "throttled" && (
+            {mode === "webrtc" && (
               <button
                 type="button"
                 onClick={switchToHls}
@@ -1095,7 +1161,7 @@ export default function StreamplaceThinPlayer({
           <>
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             <span className="text-body">
-              {paused ? "Paused" : status === "reconnecting" ? "Reconnecting…" : status === "ended" ? "Ended" : "Connecting…"}
+              {paused ? "Paused" : status === "reconnecting" ? "Reconnecting…" : status === "busy" ? "Busy" : status === "ended" ? "Ended" : "Connecting…"}
             </span>
           </>
         )}
@@ -1234,7 +1300,7 @@ export default function StreamplaceThinPlayer({
           {!audioOnly && (
             <button
               type="button"
-              onClick={toggleFullscreen}
+              onClick={onFullscreen}
               title="Fullscreen"
               className="flex items-center justify-center w-8 h-8 rounded text-strong/90 hover:bg-surface-3 transition-colors"
             >
@@ -1264,7 +1330,7 @@ export default function StreamplaceThinPlayer({
 function waitForIce(pc: RTCPeerConnection): Promise<RTCSessionDescription | null> {
   return new Promise((resolve) => {
     if (pc.iceGatheringState === "complete") { resolve(pc.localDescription); return; }
-    const t = setTimeout(() => resolve(pc.localDescription), 2500);
+    const t = setTimeout(() => resolve(pc.localDescription), ICE_GATHER_CAP_MS);
     pc.addEventListener("icegatheringstatechange", () => {
       if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(pc.localDescription); }
     });

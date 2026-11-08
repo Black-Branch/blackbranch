@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import pool from "@/lib/db";
-import { encToken } from "@/app/lib/tokenCrypto";
+import { encToken, decToken } from "@/app/lib/tokenCrypto";
 import { safeFetch } from "@/app/lib/ssrf";
 import { checkSignupAllowed } from "@/app/lib/lockdown";
 import { authOrigin } from "@/app/lib/authOrigin";
 import { createIdentityResolver, RESOLVE_TIMEOUT_MS } from "@/app/lib/identityResolveServer";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { createSlidingWindowLimiter, ipKey } from "@/app/lib/rateLimit";
-import { completeFederatedCallback, fedStateSecret, FED_STATE_COOKIE } from "@/app/lib/federatedSignIn";
+import { completeFederatedCallback, fedStateSecret, forgetFederatedClient, FED_STATE_COOKIE } from "@/app/lib/federatedSignIn";
 import { accountDeletedForSignIn } from "@/app/lib/deletedAccounts";
-import { federatedServerAllowed } from "@/app/lib/federatedSignInSwitch";
+import { federatedServerAllowed, isOwnServer } from "@/app/lib/federatedSignInSwitch";
 import { createLoginHandoff } from "@/app/lib/loginHandoff";
+import { endReplacedSession } from "@/app/lib/matrixSessionCore";
+import { upstreamDeps, sessionRefusals } from "@/app/lib/matrixSessionUpstream";
 
 // Same origin as the MAS pair; this flow dynamically registers its
 // redirect_uris, so a localhost origin works in dev with no server config.
@@ -45,9 +47,16 @@ export async function GET(req: NextRequest) {
   cookieStore.delete(FED_STATE_COOKIE);
   const outcome = await completeFederatedCallback(
     { code, state: stateParam, cookie },
-    { fetch: (url, init) => safeFetch(url, init), secret: fedStateSecret(), now: () => Date.now(), redirectUri: REDIRECT_URI, log: console, serverAllowed: federatedServerAllowed },
+    { fetch: (url, init) => safeFetch(url, init), secret: fedStateSecret(), now: () => Date.now(), redirectUri: REDIRECT_URI, log: console, serverAllowed: federatedServerAllowed, isOwnServer },
   );
-  if (!outcome.ok) return fail(outcome.error);
+  if (!outcome.ok) {
+    // The outside server no longer knows our stored client: drop it, so the next sign-in registers.
+    // Only ever the registry entry the signed state names, after the callback vouched for its issuer.
+    if (outcome.forgetClient) {
+      await forgetFederatedClient((sql, params) => pool.query(sql, params), { ...outcome.forgetClient, redirectUri: REDIRECT_URI }).catch(() => {});
+    }
+    return fail(outcome.error);
+  }
   const { matrixId, tokens } = outcome;
 
   // A deleted account is never signed in again — checked before the first write, so its
@@ -74,20 +83,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL(`/auth/signin?error=${gate.reason}`, BASE_URL));
   }
 
-  // Profile + OIDC metadata on site.users; token chains live in
-  // site.user_sessions (one per device).
+  // Profile + homeserver on site.users. The client and endpoints these tokens belong to go on the
+  // SESSION row below (v168), never the account's: overwriting the account's one client id with
+  // this sign-in's made its other devices refresh as the wrong client. The account's oidc_* columns
+  // are left as they are — sessions from before v168 still read them.
   // xmax = 0 on the returned row means this was an INSERT (new account), not an
   // UPDATE — so a first-time signup can claim a rollover gift slot.
   const upsert = await pool.query(
     `INSERT INTO site.users
-       (matrix_id, display_name, homeserver, oidc_token_endpoint, oidc_client_id)
-     VALUES ($1, $2, $3, $4, $5)
+       (matrix_id, display_name, homeserver)
+     VALUES ($1, $2, $3)
      ON CONFLICT (matrix_id) DO UPDATE SET
-       homeserver          = EXCLUDED.homeserver,
-       oidc_token_endpoint = EXCLUDED.oidc_token_endpoint,
-       oidc_client_id      = EXCLUDED.oidc_client_id
+       homeserver = EXCLUDED.homeserver
      RETURNING (xmax = 0) AS inserted`,
-    [matrixId, displayName, outcome.homeserver, outcome.tokenEndpoint, outcome.clientId]
+    [matrixId, displayName, outcome.homeserver]
   );
   if (upsert.rows[0]?.inserted) {
     const { claimPendingGift } = await import("@/app/lib/giftServer");
@@ -100,21 +109,35 @@ export async function GET(req: NextRequest) {
 
   // Non-empty by construction: the verified state requires one, and deviceMismatch checked it.
   const deviceId = outcome.deviceId;
+
+  // Re-auth of the same device replaces its chain: revoke the old refresh token at ITS issuer
+  // first, so the outside server is not left holding a live session no row points at. Revoke only,
+  // never /logout — the new session keeps this device id (matrixSessionCore.ts endReplacedSession).
+  // Best-effort — it never fails the sign-in.
+  // An old chain that cannot be revoked is logged and counted toward the burst alarm.
+  await endReplacedSession({
+    ...upstreamDeps(decToken), query: (sql, params) => pool.query(sql, params), onUnconfirmed: (m, side) => sessionRefusals.record(m, side),
+  }, matrixId, deviceId, tokens.refresh_token ?? null);
   // A re-sign-in on the same device gets a NEW session id: the cookie from before it is dead
   // (siteSession.ts), not carried over with the device.
   const { rows: sessionRows } = await pool.query(
     `INSERT INTO site.user_sessions
-       (matrix_id, mx_device_id, mx_access_token, mx_refresh_token, mx_token_expires)
-     VALUES ($1, $2, $3, $4, $5)
+       (matrix_id, mx_device_id, mx_access_token, mx_refresh_token, mx_token_expires,
+        oidc_token_endpoint, oidc_client_id, oidc_revocation_endpoint)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (matrix_id, mx_device_id) DO UPDATE SET
        session_id       = gen_random_uuid(),
        mx_access_token  = EXCLUDED.mx_access_token,
        mx_refresh_token = EXCLUDED.mx_refresh_token,
        mx_token_expires = EXCLUDED.mx_token_expires,
+       oidc_token_endpoint      = EXCLUDED.oidc_token_endpoint,
+       oidc_client_id           = EXCLUDED.oidc_client_id,
+       oidc_revocation_endpoint = EXCLUDED.oidc_revocation_endpoint,
        last_seen        = now(),
        signed_in_at     = now()
      RETURNING session_id`,
-    [matrixId, deviceId, encToken(tokens.access_token), encToken(tokens.refresh_token ?? null), expiresAt]
+    [matrixId, deviceId, encToken(tokens.access_token), encToken(tokens.refresh_token ?? null), expiresAt,
+      outcome.tokenEndpoint, outcome.clientId, outcome.revocationEndpoint]
   );
 
   // Create a short-lived one-time token for the Credentials provider to consume.

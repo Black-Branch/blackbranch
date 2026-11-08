@@ -5,8 +5,8 @@
 // differs is the anchor, the entry /
 // exit motion, the room kept free at the bottom, and the gesture: the grabber
 // moves the window's BOTTOM edge. A top window must be freely positionable:
-// it is SIZED by the drag, stays wherever it is let go, snaps to its own
-// size or the full size near either, and closes only when pushed almost shut.
+// it is SIZED by the drag and released by the bottom window's own rule
+// (slideBothWays.render.test.ts — #234: the same travel, landing and close).
 //
 // Run: node --test app/lib/chrome/windowFromTop.render.test.ts
 import test from "node:test";
@@ -18,30 +18,11 @@ import { stripComments, stripCssComments } from "../testSource.ts";
 
 installResizeObserverStub();
 const { Window } = await import("@/app/components/chrome/Window");
-const { topCap, topRelease, MIN_VISIBLE_PX } = await import("./panelGesture.ts");
+
 const { createRoot } = await import("react-dom/client");
 const { registerPaneTarget, setActivePane, _resetWindowLayerForTests } = await import("./windowLayer.ts");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-test("the full size is the pane minus the clear strip — the CSS's --top-room, in px", () => {
-  assert.equal(topCap(500, 0), 350, "30% of 500 = 150 kept clear");
-  assert.equal(topCap(200, 0), 104, "never under 96 kept clear");
-  assert.equal(topCap(1000, 0), 760, "never over 240 kept clear");
-  assert.equal(topCap(600, 100), 350, "the ceiling is not visible pane");
-});
-
-test("a release stays where it is let go; snaps near its own size or the full size; closes only almost shut", () => {
-  const at = (h: number, vy = 0, h0 = 300) => topRelease({ h, h0, fitH: 300, capH: 350, vy });
-  assert.deepEqual(at(200), { kind: "free", h: 200 }, "smaller, and it STAYS (it must not slide back up)");
-  assert.deepEqual(at(310), { kind: "fit" }, "near its own size");
-  assert.deepEqual(at(340), { kind: "cap" }, "near the full size");
-  assert.deepEqual(at(MIN_VISIBLE_PX - 1), { kind: "dismiss" }, "pushed almost shut");
-  assert.deepEqual(at(MIN_VISIBLE_PX + 20), { kind: "free", h: MIN_VISIBLE_PX + 20 });
-  assert.deepEqual(at(250, -1.2), { kind: "free", h: 250 }, "a quick size-down is not a close");
-  assert.deepEqual(at(120, -1.2), { kind: "dismiss" }, "a hard flick up from well above closes");
-  assert.deepEqual(at(200, 1.2), { kind: "cap" }, "a flick down opens it fully");
-});
 
 function fixture(from: "top" | null, onClose: () => void = () => {}, kind: "peek" | "task" = "peek") {
   resetStorage();
@@ -63,7 +44,7 @@ function fixture(from: "top" | null, onClose: () => void = () => {}, kind: "peek
     React.createElement(Window, { presentation: "panel", kind, name: "bram", onClose, children: React.createElement("div") }),
   ));
   const panel = layer.querySelector('[role="dialog"]') as HTMLElement;
-  Object.defineProperty(panel, "offsetHeight", { configurable: true, get: () => parseFloat(panel.style.height) || 300 });
+  Object.defineProperty(panel, "offsetHeight", { configurable: true, get: () => parseFloat(panel.style.height) || (panel.dataset.size === "cap" ? 500 : 300) }); // the stylesheet's answer: the full-pane rule, or its own size
   return { panel, layer, chat, unmount: () => act(() => { root.unmount(); pane.remove(); host.remove(); }) };
 }
 
@@ -108,16 +89,17 @@ test("Top: the grabber sizes the window, and it stays where it is let go", async
   const pointer = (type: string, clientY: number) =>
     act(() => { foot.dispatchEvent(new dom.window.PointerEvent(type, { pointerId: 1, button: 0, clientY, clientX: 100, bubbles: true })); });
   const slowTo = async (y: number) => { await sleep(120); pointer("pointermove", y); pointer("pointerup", y); };
-  // Down: taller, never past the full size (500px pane → 350).
+  // Down: taller, never past the whole pane (500px) — the clear strip is where it opens, not a limit (#234).
   pointer("pointerdown", 300);
   pointer("pointermove", 330);
   assert.equal(f.panel.style.height, "330px", "the bottom edge follows the finger");
-  pointer("pointermove", 500);
-  assert.equal(f.panel.style.height, "350px", "stops at the clear strip");
-  await slowTo(500);
-  assert.equal(f.panel.style.height, "350px");
-  // Up: smaller, and it STAYS — no close, no spring back.
-  pointer("pointerdown", 350);
+  pointer("pointermove", 700);
+  assert.equal(f.panel.style.height, "500px", "stops at the composer");
+  await slowTo(700);
+  assert.equal(f.panel.dataset.size, "cap");
+  await sleep(500); // the height tween's backstop
+  // Up: smaller, and it STAYS under its own size — no close, no spring back.
+  pointer("pointerdown", 500);
   pointer("pointermove", 300);
   pointer("pointermove", 200);
   await slowTo(200);
@@ -159,8 +141,7 @@ test("Top keeps room at the bottom for the newest messages, a task included", ()
   assert.match(top, /--top-room: clamp\(96px, calc\(\(100% - var\(--pane-ceiling\)\) \* 0\.3\), 240px\);/);
   assert.match(top, /max-height: calc\(100% - var\(--pane-ceiling\) - var\(--top-room\)\);/);
   assert.match(top, /animation-name: panel-drop-in;/);
-  // A task opens at half its full size; the pull (topCap, unchanged) still
-  // takes it to the full size.
+  // A task opens at half its full size; the pull takes it to the whole pane.
   assert.match(css, /\.chrome-window-panel\[data-from="top"\]\[data-kind="task"\] \{ height: calc\(\(100% - var\(--pane-ceiling\) - var\(--top-room\)\) \/ 2\); \}/);
   assert.match(css, /\.chrome-window-panel\[data-from="top"\]\[data-closing\] \{ animation-name: panel-drop-out; \}/);
 });
@@ -240,10 +221,7 @@ function fillFixture() {
 
 test("filled (the chat TUI has the window): the cap is the whole pane, a pulled size is let go, and the CSS takes it to the bottom", async () => {
   // In chat mode the slide-down window can be pulled all the way down and replaces the typing
-  // bar. Outside chat mode the strip stays.
-  assert.equal(topCap(500, 0), 350, "control: the usual cap keeps the clear strip");
-  assert.equal(topCap(500, 0, true), 500, "filled: the pane");
-  assert.equal(topCap(500, 40, true), 460, "…under the keyboard's ceiling");
+  // bar (every top window's pull reaches the whole pane since #234).
   const f = fillFixture();
   assert.equal(f.panel.dataset.fillable, "", "a window that CAN fill eases its height (the CSS below)");
   assert.equal(f.panel.dataset.fill, undefined);
@@ -272,9 +250,6 @@ test("filled (the chat TUI has the window): the cap is the whole pane, a pulled 
   assert.match(css, /\.chrome-window-panel\[data-from="top"\]\[data-fill\] \{ max-height: calc\(100% - var\(--pane-ceiling\)\); \}/);
   assert.match(css, /\.chrome-window-panel\[data-from="top"\]\[data-kind="task"\]\[data-fill\] \{ height: calc\(100% - var\(--pane-ceiling\)\); \}/);
   assert.match(css, /\.chrome-window-panel\[data-from="top"\]\[data-fillable\] \{ transition: height var\(--anim-default\) var\(--anim-ease\), translate var\(--anim-default\) var\(--anim-ease\); \}/);
-  // The pull reads the same answer: the cap is the pane while the panel is filled.
-  // …and while the window owns the phone's keyboard.
-  assert.match(stripComments(readFileSync("app/lib/chrome/usePanelPull.ts", "utf8")), /return topCap\(layer\.getBoundingClientRect\(\)\.height, ceiling, panel\?\.dataset\.fill !== undefined \|\| ownsKeyboard\(panel\)\);/);
 });
 
 test("the top task you are typing in takes the whole visible pane while the keyboard is up", () => {

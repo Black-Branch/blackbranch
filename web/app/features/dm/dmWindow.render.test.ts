@@ -1,17 +1,17 @@
 // The DM window and the announcement, RENDERED: the picker, Accept, the red encryption line, the
-// loading placeholder, the conversation's lines, and the announcement sliding up and closing
-// itself.
+// loading placeholder, and the announcement sliding up and closing itself. The conversation's
+// lines (the Community row since client polish Task 11) are dmWindowRows.render.test.ts's.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
 import { dom, React, act } from "../../lib/testDom.ts";
 import { installResizeObserverStub } from "../../lib/testTsx.ts";
 
 installResizeObserverStub();
+// jsdom reports "prerender"; a person reading the window has the tab in front of them.
+Object.defineProperty(dom.window.document, "visibilityState", { value: "visible", configurable: true });
 const { default: DmWindow } = await import("./DmWindow.tsx");
 const { default: AnnounceHost } = await import("./AnnounceHost.tsx");
 const { publishAnnouncement } = await import("../../lib/dm/bus.ts");
-const { setMatrixHandle } = await import("../../lib/matrixHandle.ts");
 const { registerPaneTarget, setActivePane, _resetWindowLayerForTests } = await import("../../lib/chrome/windowLayer.ts");
 const { createRoot } = await import("react-dom/client");
 
@@ -32,16 +32,29 @@ function mount(el: React.ReactElement) {
   return { q, unmount: () => { act(() => root.unmount()); layer.remove(); host.remove(); } };
 }
 
-function win(convo: Partial<Convo>, cb: { accept?: () => void; pick?: (p: typeof casey) => void; close?: () => void } = {}) {
+type Callbacks = {
+  accept?: () => void; pick?: (p: typeof casey) => void; close?: () => void;
+  retry?: (id: string) => void; drop?: (id: string) => void; decline?: () => void; block?: () => void; request?: () => void; startPrivate?: () => void;
+};
+function win(convo: Partial<Convo>, cb: Callbacks = {}) {
   return React.createElement(DmWindow, {
     convo: { seq: 1, person: casey, phase: "open", incoming: false, accepted: true, ...convo } as Convo,
-    me: "@me:site.test",
+    onReply: () => {},
+    onCancelReply: () => {},
     closeRef: { current: null },
     onAccept: cb.accept ?? (() => {}),
     onPick: cb.pick ?? (() => {}),
     onClose: cb.close ?? (() => {}),
+    onRetry: cb.retry ?? (() => {}),
+    onDrop: cb.drop ?? (() => {}),
+    onDecline: cb.decline ?? (() => {}),
+    onRequest: cb.request ?? (() => {}),
+    onStartPrivate: cb.startPrivate ?? (() => {}),
+    onBlock: cb.block ?? (() => {}),
   });
 }
+const buttons = (m: { q: (s: string) => HTMLElement | null }) => [...m.q('[role="dialog"]')!.querySelectorAll("button")].map((b) => b.textContent ?? "").filter((t) => t);
+const click = (el: Element) => act(() => { el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
 
 test("an incoming invite: '<name> wants to send you messages' and Accept; the title is the username", () => {
   let accepted = 0;
@@ -87,27 +100,95 @@ test("while the room is being prepared the window shows the loading placeholder,
   m.unmount();
 });
 
-test("an open conversation shows its lines from the room — 'you' for mine, the username for theirs, and an unreadable line said plainly", () => {
-  const em = new EventEmitter();
-  const line = (sender: string, ts: number, body: string, broken = false) => ({
-    getType: () => "m.room.message", getSender: () => sender, getTs: () => ts, isRedacted: () => false,
-    isDecryptionFailure: () => broken, getContent: () => ({ msgtype: "m.text", body }), getRoomId: () => "!dm",
-  });
-  const events = [line("@me:site.test", 1, "hi casey"), line("@casey:site.test", 2, "hey!"), line("@casey:site.test", 3, "", true)];
-  const room = { roomId: "!dm", getLiveTimeline: () => ({ getEvents: () => events }) };
-  const client = { getRoom: () => room, on: (n: string, f: () => void) => em.on(n, f), off: (n: string, f: () => void) => em.off(n, f) };
-  setMatrixHandle({ client: client as never, status: "ready", startClient: async () => {} });
-  const m = mount(win({ roomId: "!dm", encrypted: true, caution: null }));
-  assert.equal(m.q("ol")!.querySelectorAll("li").length, 3);
-  const text = m.q("ol")!.textContent ?? "";
-  assert.match(text, /you hi casey/);
-  assert.match(text, /casey hey!/);
-  assert.match(text, /can't be read on this device/);
-  events.push(line("@casey:site.test", 4, "new one"));
-  act(() => { em.emit("Room.timeline", events[3], room); });
-  assert.match(m.q("ol")!.textContent ?? "", /new one/, "a new line follows");
+test("a draft shows the start line and composer, and 'Send message request' asks to confirm", () => {
+  let requested = 0;
+  const m = mount(win({ draft: true }, { request: () => { requested += 1; } }));
+  const body = m.q("[data-dm-draft]")!;
+  assert.ok(body, "the draft body renders");
+  assert.match(body.textContent ?? "", /This is the start of your conversation with casey\./);
+  assert.doesNotMatch(m.q('[role="dialog"]')!.textContent ?? "", /wants to send you messages/);
+  const named = (t: string) => [...body.querySelectorAll("button")].find((b) => b.textContent === t);
+  click(named("Send message request")!);
+  assert.equal(requested, 0, "nothing goes to them on the first press");
+  assert.match(body.textContent ?? "", /Send casey a message request\?/);
+  click(named("Cancel")!);
+  assert.equal(requested, 0);
+  click(named("Send message request")!);
+  click(named("Send")!);
+  assert.equal(requested, 1, "the confirmed request goes once");
   m.unmount();
-  setMatrixHandle({ client: null, status: "idle", startClient: async () => {} });
+});
+
+test("a room that is not private says so and offers a private conversation instead", () => {
+  let started = 0;
+  const m = mount(win({ roomId: "!group", accepted: true, notPrivate: true }, { startPrivate: () => { started += 1; } }));
+  const note = m.q("[data-dm-not-private]")!;
+  assert.ok(note, "the window says what it is");
+  assert.match(note.textContent ?? "", /isn't a private conversation/);
+  click([...note.querySelectorAll("button")].find((b) => b.textContent === "Start a private conversation")!);
+  assert.equal(started, 1);
+  m.unmount();
+});
+
+test("a kept line (a refused /dm name text, or text the box let go of) shows in the window beside the real sentence", () => {
+  const m = mount(win({ roomId: "!group", accepted: true, notPrivate: true, kept: "sure", error: "Not sent — this conversation isn't private any more." }));
+  assert.match(m.q("[data-dm-kept]")?.textContent ?? "", /“sure”/);
+  assert.ok(m.q("[data-dm-not-private]"), "the note and its button show with it");
+  assert.match(m.q("[role=alert]")?.textContent ?? "", /isn't private any more/);
+  m.unmount();
+  // Their request holding my kept line: it stays (DmHost turns the auto-close off), so no "Closes in a minute".
+  const r = mount(win({ roomId: "!theirs", invite: true, incoming: true, accepted: false, kept: "hi" }));
+  assert.ok(r.q("[data-dm-kept]"));
+  assert.doesNotMatch(r.q('[data-dm-window]')?.textContent ?? "", /Closes in a minute/);
+  r.unmount();
+});
+
+test("a draft whose person wrote first shows their request: Accept · Decline · Block", () => {
+  const m = mount(win({ roomId: "!theirs", invite: true, incoming: true, accepted: false, draft: false }));
+  assert.deepEqual(buttons(m).filter((t) => /^(Accept|Decline|Block)$/.test(t)), ["Accept", "Decline", "Block"]);
+  m.unmount();
+});
+
+test("partner left shows the caution", () => {
+  const m = mount(win({ roomId: "!dm", partnerCaution: "casey isn't in this conversation" }));
+  const note = m.q("[data-dm-partner-caution]")!;
+  assert.ok(note, "the line renders");
+  assert.equal(note.textContent, "casey isn't in this conversation");
+  assert.ok(note.className.includes("text-red-400"));
+  m.unmount();
+});
+
+test("invite: Accept · Decline · Block", () => {
+  let declined = 0;
+  let blocked = 0;
+  const m = mount(win({ incoming: true, accepted: false, invite: true, roomId: "!inv" }, { decline: () => { declined += 1; }, block: () => { blocked += 1; } }));
+  assert.deepEqual(buttons(m).filter((t) => /^(Accept|Decline|Block|Reply)$/.test(t)), ["Accept", "Decline", "Block"]);
+  const dialog = m.q('[role="dialog"]')!;
+  click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Decline")!);
+  click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Block")!);
+  assert.equal(declined, 1);
+  assert.equal(blocked, 1);
+  m.unmount();
+});
+
+test("joined: Reply only", () => {
+  // The conversation's own lines are dmWindowRows.render.test.ts's; with no client here none load.
+  const m = mount(win({ incoming: true, accepted: false, invite: false, roomId: "!dm" }));
+  assert.deepEqual(buttons(m).filter((t) => /^(Accept|Decline|Block|Reply)$/.test(t)), ["Reply"]);
+  m.unmount();
+});
+
+test("no person (personOfMessage null) → no Block button; Decline stays", () => {
+  const m = mount(win({ incoming: true, accepted: false, invite: true, roomId: "!inv", person: { matrixId: "", username: "casey", displayName: null } }));
+  assert.deepEqual(buttons(m).filter((t) => /^(Accept|Decline|Block)$/.test(t)), ["Accept", "Decline"]);
+  m.unmount();
+});
+
+test("a Block result line replaces the request's buttons", () => {
+  const m = mount(win({ incoming: true, accepted: false, invite: true, roomId: "!inv", notice: "Blocked — undo in Settings › Behavior", blocked: true }));
+  assert.match(m.q('[role="dialog"]')!.textContent ?? "", /Blocked — undo in Settings › Behavior/);
+  assert.deepEqual(buttons(m).filter((t) => /^(Accept|Decline|Block)$/.test(t)), []);
+  m.unmount();
 });
 
 test("an announcement slides up for everyone with its text and who sent it, then closes itself (20 s — shortened here)", async () => {

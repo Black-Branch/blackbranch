@@ -52,6 +52,43 @@ test("the view is status only: a planted secret in the process env appears nowhe
   }
 });
 
+test("an install-tier switch shows as a switch: the community keeper's value, true or false, never a word", () => {
+  const prior = process.env.INSTALL_VALUES;
+  const seeded = JSON.parse(prior ?? "{}") as Record<string, string>;
+  try {
+    for (const [raw, want] of [["true", true], ["false", false]] as const) {
+      process.env.INSTALL_VALUES = JSON.stringify({ ...seeded, "community.reconciler": raw, "community.serviceLocalpart": "blackbranch" });
+      const view = buildInstanceView(null);
+      const keeper = view.keys.find((k) => k.key === "community.reconciler")!;
+      assert.equal(keeper.packages[0]!.display, want, raw);
+      assert.equal(view.keys.find((k) => k.key === "community.serviceLocalpart")!.packages[0]!.display, "blackbranch");
+    }
+  } finally {
+    if (prior === undefined) delete process.env.INSTALL_VALUES; else process.env.INSTALL_VALUES = prior;
+  }
+});
+
+test("each fixed sign-in provider's switch carries the redirect URL to paste at the provider; the OpenID slot's waits for its address", () => {
+  const prior = process.env.INSTALL_VALUES;
+  const seeded = JSON.parse(prior ?? "{}") as Record<string, string>;
+  try {
+    process.env.INSTALL_VALUES = JSON.stringify({ ...seeded, "matrix.oauth.issuer": "https://matrix.site.test/auth/" });
+    const pastes = buildInstanceView(null).keys.filter((k) => k.paste).map((k) => [k.key, k.paste!.value]);
+    assert.deepEqual(pastes, [
+      ["signin.google.enabled", "https://matrix.site.test/auth/upstream/callback/01M6W7E48RDHCVFV08SQ68SZTB"],
+      ["signin.discord.enabled", "https://matrix.site.test/auth/upstream/callback/01M6W7E48SQRP7WM6CF3PM0QQH"],
+      ["signin.twitch.enabled", "https://matrix.site.test/auth/upstream/callback/01M6W7E48SP2C7JKD41P73GKF0"],
+    ], "no OpenID address saved: no URL yet (its id is derived from the address — install/signin.test.mjs)");
+    // An issuer without its trailing slash gets one; none at all: no URL rather than a broken one.
+    process.env.INSTALL_VALUES = JSON.stringify({ ...seeded, "matrix.oauth.issuer": "https://auth.site.test" });
+    assert.equal(buildInstanceView(null).keys.find((k) => k.key === "signin.google.enabled")!.paste!.value, "https://auth.site.test/upstream/callback/01M6W7E48RDHCVFV08SQ68SZTB");
+    process.env.INSTALL_VALUES = JSON.stringify({ ...seeded, "matrix.oauth.issuer": "" });
+    assert.deepEqual(buildInstanceView(null).keys.filter((k) => k.paste), []);
+  } finally {
+    if (prior === undefined) delete process.env.INSTALL_VALUES; else process.env.INSTALL_VALUES = prior;
+  }
+});
+
 test("stream-api unreachable: its half and stream-ingest's are shown as NOT reporting, not as unset", () => {
   const view = buildInstanceView(null);
   const p = view.processes.find((x) => x.package === "stream-api")!;

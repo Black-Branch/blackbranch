@@ -1,6 +1,8 @@
 import { requireAdmin } from "@/app/lib/admin";
 import { streamApiFetch } from "@/app/lib/streamApi";
 import { NextRequest } from "next/server";
+import { spotlightOff } from "@/app/lib/spotlightServer";
+import { spotlightToForward } from "@/app/lib/spotlightSwitch";
 
 // The broadcaster's highlighted message (chatSpotlight.ts): the one message
 // being answered on stream, shown to everyone with the highlight-card look.
@@ -33,6 +35,8 @@ export async function POST(req: NextRequest) {
     }
     spotlight = { platform, messageId: messageId as string | number };
   }
+  // The streamer's switch (#250), read at every click: switched off, a click forwards a clear.
+  spotlight = spotlightToForward(spotlight, spotlightOff());
 
   const r = await streamApiFetch("/chat/spotlight", {
     method: "POST",

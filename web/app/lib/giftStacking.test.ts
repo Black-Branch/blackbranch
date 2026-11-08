@@ -22,10 +22,10 @@ const src = readFileSync(join(import.meta.dirname, "giftServer.ts"), "utf8");
 test("giftServer reads the records' fragment for both questions, and never the legacy row", () => {
   assert.match(src, /setInterval\(\(\) => void run\(\), 60 \* 60 \* 1000\); \/\/ hourly\s*\}\s*$/, "END of giftServer.ts not read");
   const s = stripComments(src);
-  assert.match(s, /GREATEST\(\s*now\(\),\s*COALESCE\(\(SELECT MAX\(expires_at\) FROM site\.gift_subscriptions WHERE recipient_matrix_id = \$3\), now\(\)\),\s*COALESCE\(\$\{paidThroughSql\("\$3", "\$7"\)\}, now\(\)\)\s*\) \+ make_interval\(months => \$4\)/,
+  assert.match(s, /s\.start, s\.start \+ make_interval\(months => \$4\)\s*FROM \(SELECT GREATEST\(\s*now\(\),\s*COALESCE\(\(SELECT MAX\(expires_at\) FROM site\.gift_subscriptions WHERE recipient_matrix_id = \$3\), now\(\)\),\s*COALESCE\(\$\{paidThroughSql\("\$3", "\$7"\)\}, now\(\)\)\s*\) AS start\) s/,
     "the gift clock starts at the LATEST of now, the last gift's end and the paid period's end");
   assert.match(s, /AND NOT \$\{columnEntitledSql\("u\.matrix_id", "\$5"\)\}/, "a community gift skips anyone a record entitles");
-  assert.equal([...s.matchAll(/subscriptionSources\(\)/g)].length, 2, "both queries pass the sources that count");
+  assert.equal([...s.matchAll(/subscriptionSources\(\)/g)].length, 4, "both queries, the queued-gift sweep and a restored gift's re-dating pass the sources that count");
   assert.doesNotMatch(s, /site\.subscriptions\b/, "the legacy one-row table is not read for a gift");
 });
 

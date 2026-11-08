@@ -6,7 +6,7 @@
 // fresh install never shows a broken image. Changing it is changing one of those two pictures —
 // no setting of its own.
 
-import { useState } from "react";
+import { useImgFallback } from "@/app/lib/useImgFallback";
 import { siteIcon } from "@/app/lib/siteIcons";
 import type { InstanceView } from "@/app/lib/instanceAdminView";
 import { card, h2 } from "./parts";
@@ -26,13 +26,20 @@ export default function HelpdeskPicture({ botId }: {
   botId: string | null;
 }) {
   // The bot account answered with no picture (or there is no bot account): the site icon shows.
-  const [fallback, setFallback] = useState(!botId);
+  // useImgFallback also catches a 404 that landed before React listened (a server-rendered page).
+  const { ok: botOk, ref: botRef, onError: onBotError } = useImgFallback(botId);
+  const fallback = !botId || !botOk;
   const src = fallback ? siteIcon("icon-192.png") : BOT_PICTURE;
   return (
     <section className={card} aria-label="Help desk picture" data-helpdesk-picture={fallback ? "site-icon" : "bot"}>
       <h2 className={h2}>Picture</h2>
       <div className="mt-2 flex items-start gap-3">
-        <img src={src} alt="" className="size-10 shrink-0 rounded-full object-cover bg-surface-2" onError={() => setFallback(true)} />
+        <img
+          // keyed: the site icon is a fresh element, never the failed bot picture re-pointed
+          key={fallback ? "site-icon" : "bot"}
+          src={src} alt="" className="size-10 shrink-0 rounded-full object-cover bg-surface-2"
+          ref={fallback ? undefined : botRef} onError={fallback ? undefined : onBotError}
+        />
         <div className="min-w-0 space-y-1 text-xs text-secondary">
           <p>
             {fallback

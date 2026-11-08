@@ -22,7 +22,7 @@ test("the overlay list leaves out everything that paints nothing there", () => {
   assert.ok(keys.length > 30, `parsed only ${keys.length}`);
   for (const k of ["panelTint", "barStrength", "bodyStrength", "bgStart", "shellFont", "tabSize", "sendToBtnOn", "toolsBtnOn", "emoteBtnOn", "donateColor", "giftColor", "frameColor", "hideTabBar", "lowPower", "transparencyOn", "glassOn"])
     assert.ok(!keys.includes(k), `${k} does nothing on /chat or the overlay`);
-  assert.deepEqual(list("WINDOW_ONLY_KEYS"), ["chatFade", "voteColor", "histLength"]);
+  assert.deepEqual(list("WINDOW_ONLY_KEYS"), ["chatFade", "voteColor", "histLength", "mentionColor", "highlightColor"]);
 });
 
 test("both pages use the one shared panel, and the gear is hover/tap only", () => {

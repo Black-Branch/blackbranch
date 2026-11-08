@@ -22,7 +22,7 @@ const html = renderToStaticMarkup(createElement(StreamModeMenu, {
 
 test("menu semantics: one menuitemradio per option, the current one checked", () => {
   assert.match(html, /role="menu"/);
-  assert.equal((html.match(/role="menuitemradio"/g) ?? []).length, 4);
+  assert.equal((html.match(/role="menuitemradio"/g) ?? []).length, 5, "the five live sources, Kick's embed among them");
   assert.equal((html.match(/aria-checked="true"/g) ?? []).length, 1);
   // `[\s\S]` instead of a dotAll `.`: this repo's tsc target (ES2017) predates
   // the `/s` flag, and `[\s\S]` matches identically (any char, newlines
@@ -31,7 +31,7 @@ test("menu semantics: one menuitemradio per option, the current one checked", ()
 });
 
 test("plain names only — no header, no descriptions", () => {
-  for (const label of [`${siteName()} player`, "Streamplace", "YouTube", "Twitch"]) assert.match(html, new RegExp(label));
+  for (const label of [`${siteName()} player`, "Streamplace", "YouTube", "Twitch", "Kick"]) assert.match(html, new RegExp(label));
   assert.doesNotMatch(html, /Watch \S+ on|delay|ads|behind/i);
 });
 

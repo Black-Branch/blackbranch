@@ -14,7 +14,7 @@ import {
 } from "@/app/features/support";
 import { pointsForCents } from "@/app/lib/coins";
 import { currencyOnItsWay } from "@/app/lib/currency";
-import { subscriptionStatusLine, giftSubscribeNotes, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView } from "@/app/lib/supportStatus";
+import { subscriptionStatusLine, queuedGiftLine, giftSubscribeNotes, giftPurchaseLine, giftReceivedLine, type GiftPurchaseView, type GiftReceivedView } from "@/app/lib/supportStatus";
 import type { SubscriptionView } from "@/app/lib/supportStatus";
 import { usePaymentResult } from "@/app/lib/usePaymentResult";
 
@@ -258,6 +258,8 @@ export default function SupportContent({
   // One sentence about where the viewer stands: renews / renewal off / via a
   // gift / ended — or nothing (supportStatus.test.ts pins the wording).
   const status = me ? subscriptionStatusLine(me) : null;
+  // A gift queued behind the viewer's own subscription: when it starts (A1-03).
+  const queuedGift = me ? queuedGiftLine(me) : null;
   // While a gift runs: when a card subscription would start billing, and that PayPal bills at once.
   const giftNotes = me ? giftSubscribeNotes(me) : { card: null, paypal: null };
   // Subscription sources: every live record, and the PayPal ones this panel manages.
@@ -421,7 +423,10 @@ export default function SupportContent({
     try {
       const res = await postJson("/api/billing/portal");
       if (!res.ok) {
-        setErr("Couldn’t open the billing portal.");
+        const j = (await res.json().catch(() => null)) as { error?: string } | null;
+        setErr(j?.error === "portal_not_set_up"
+          ? "Managing subscriptions isn’t set up on this site yet. Let the streamer know: one step in Stripe is left to finish."
+          : "Couldn’t open the billing portal.");
         return;
       }
       const { url } = (await res.json()) as { url?: string };
@@ -539,6 +544,7 @@ export default function SupportContent({
         ) : subscribedHere ? (
           <div className="mt-3">
             {subActive && status && <p className={`text-xs ${TONE_CLASS[status.tone]}`}>{status.text}</p>}
+            {queuedGift && <p className={`mt-1 text-xs ${TONE_CLASS.gift}`}>🎁 {queuedGift}</p>}
             {/* One line per PayPal subscription, with the on-site Cancel (spec §10.2). */}
             {paypalRecords.map((r, i) => {
               const line = recordLine(r);

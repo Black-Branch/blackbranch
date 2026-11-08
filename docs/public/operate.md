@@ -37,7 +37,8 @@ sends no message, email or push about it. The same goes for a payment that faile
 disputed: it is listed in **Admin Panel → Payments → Payment history**, and nothing else tells you.
 Look at both now and then, and after any change at Stripe or PayPal.
 
-When you ask for help, attach `sudo blackbranch doctor --report`: it writes a report next to `.env` with
+Stuck? The Doctor page (and the end of the install) says where to ask: the guides and the project's
+Discord. When you ask for help, attach `sudo blackbranch doctor --report`: it writes a report next to `.env` with
 the release, the module switches and every check, and no secret, no chat text, no viewer id and no
 domain. Before it keeps the file it searches it for every value in `.env` and refuses if it finds one.
 
@@ -58,7 +59,7 @@ the **backup passphrase** from your recovery sheet.
 
 **When:** every night at the quiet hour, and before every update. Every Sunday, half an hour after the
 backup, the server checks that the newest backup really restores. Both results are on the doctor.
-Kept: 7 daily and 4 weekly snapshots (Admin Panel → Site → Backups).
+Kept: 7 daily and 4 weekly snapshots (Admin Panel → Site → Site, card Backups).
 
 **Where:** set on setup's last page, changed in the Admin Panel: this server
 (`/opt/blackbranch/backups/`), an S3-compatible bucket, or an SFTP server (put the key
@@ -164,10 +165,20 @@ tries it again by hand.
 `sudo blackbranch update --channel beta`. Every release so far is a preview on `beta`, and `stable` has
 none yet; a server installed with the one-line form already follows `beta`.
 
-## Password resets
+## Mail and password resets
 
-The site does not send email yet, so a forgotten password is reset on the server, through the chat
-server's sign-in service:
+Mail is optional. Without a mail server (a new install) the sign-in service sends nothing: a forgotten
+password is reset on the server (below), and sign-up asks for no address. Set a mail server in **Admin
+Panel → Site → Site, card Mail** (or `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT`, `MAIL_SMTP_MODE`, `MAIL_SMTP_USERNAME`,
+`MAIL_SMTP_PASSWORD` and `MAIL_FROM` in `/opt/blackbranch/.env`, then `sudo blackbranch render`) and
+the sign-in page offers "Forgot password?", and a new account confirms its address by mail. Your mail
+provider gives you the server, port and user name; most use STARTTLS on port 587. Try it with
+`sudo blackbranch mail test you@example.com`: the Doctor's **Mail** row is green once a test message
+was sent and red when the last one failed, with the reason. Accounts made before you set mail have no
+address yet; they add one on the sign-in service's account page before they can use "Forgot password?".
+
+Without mail, or for an account with no address, a forgotten password is reset on the server, through
+the chat server's sign-in service:
 
 ```bash
 read -rs NEWPW && sudo docker compose --project-directory /opt/blackbranch exec mas mas-cli manage set-password <username> "$NEWPW"; unset NEWPW
@@ -175,6 +186,43 @@ read -rs NEWPW && sudo docker compose --project-directory /opt/blackbranch exec 
 
 (`read -rs` keeps the password out of your shell history.) A `sudo blackbranch user reset-password`
 command comes in a later release.
+
+## Sign in with Google, Discord, Twitch or your own server
+
+Optional. Each provider you switch on adds a "Continue with …" button to the sign-in page, beside the
+username and password. Switch them on in **Admin Panel → Site → Site, card Sign-in providers** (or the
+`SIGNIN_*` lines in `/opt/blackbranch/.env`, then `sudo blackbranch render`):
+
+1. Make an app at the provider: Google Cloud console (APIs & Services → Credentials → OAuth client ID,
+   type Web application), the Discord Developer Portal (Applications → OAuth2), the Twitch developer
+   console (Register Your Application), or a confidential OpenID Connect client on your own server
+   (Authentik, Keycloak, Zitadel, Authelia…).
+2. Paste the **redirect URL** the card shows under the provider's switch into that app. For Google,
+   Discord and Twitch it never changes. For your own server it appears once its address (`https://…`,
+   exactly as the server names itself) is saved, and belongs to that address.
+3. Copy the app's client id and secret into the card. Saving re-renders the sign-in service and restarts it.
+
+The Doctor has a row per provider: green once the sign-in service offers it and the provider answers;
+red with the reason when a field is missing, the provider does not answer, or (your own server) it
+names a different address for itself. A user name the provider offers is only suggested, never forced
+onto an existing account. With **Let people make accounts** off, a provider still signs in the people
+it is linked to but makes no new account. No e-mail address is taken from a provider:
+the person adds one on their account page, where it is checked. Switching a provider off removes its button; the people who signed in with it
+keep their link and use it again when you switch it back on. Your own server's link belongs to its
+address: a different address is a different server (a new redirect URL to paste), and nobody's link
+carries over to it; switch back to the old address and the old links work again. Do not run
+`mas-cli config sync --prune`: it deletes those links for good.
+
+## When a viewer deletes their account
+
+**Settings → Delete my account** erases the person's site data at once and then deactivates their
+Matrix account through the chat server's sign-in service. When the sign-in service cannot do that at
+that moment (it is down, or the site's sign-in client lacks its admin grant), the site tries again every
+hour until it lands, and the Doctor's row **Deleted accounts: their Matrix accounts are removed** is red
+with the count until then. If it stays red, the site's client cannot deactivate accounts: the bundle
+gives it that grant, so on a bundle install check `sudo blackbranch doctor` for the sign-in rows; on a
+homeserver you run yourself, list the client in MAS's `policy.data.admin_clients`, or deactivate the
+account there by hand. The site marks it done on its next try either way.
 
 ## Changing the site's name and other display values
 
@@ -191,10 +239,14 @@ folder is yours: it is not in the backups, so keep your own copy of what you put
 
 ## Who can do what: viewers, moderators and the admin
 
-The admin is the account made on setup's first page. The admin makes and removes moderators (the
-`/mod <name>` and `/unmod <name>` chat commands); the site has no way to make a second admin. Every line
-below is checked by the server, not only hidden from the page. A moderator cannot ban, time out,
-clear or merge the admin.
+The first admin is the account made on setup's first page. Any admin can make another account an
+admin, or remove one, in **Admin Panel → Site → Moderators, card Admins**; the site always keeps at least one
+(removing the last admin is refused, and so is the last admin's "Delete my account"). On the server,
+`sudo blackbranch user admin <name> on|off` does the same, which is how you get an admin back when
+nobody can sign in as one. Every change is in the moderation log. A second admin is the simplest
+insurance against a lost admin account. Admins make and remove moderators (the `/mod <name>` and
+`/unmod <name>` chat commands). Every line below is checked by the server, not only hidden from the
+page. A moderator cannot ban, time out, clear or merge an admin.
 
 | | Viewer | Moderator | Admin |
 |---|---|---|---|
@@ -211,10 +263,77 @@ clear or merge the admin.
 | Highlight a message on stream, pin forum posts, define badges, house looks, store and style prices, force-rebuilding the emotes | no | no | yes |
 | Payment history; forgetting a person's AI memory | no | no | yes |
 | Make or remove moderators; the list of moderators | no | no | yes |
+| Make or remove admins (never the last one) | no | no | yes |
 | The Admin Panel: every setting and credential, module switches, AI settings, the Doctor, Updates, restarting services, the OBS rig page, points, the Stream tab | no | no | yes |
 
 `/mod` also gives the person moderator power in the community rooms, and `/unmod` takes it away
-again (the rooms are updated the next time the admin opens the community).
+again: the site asks the server to bring the rooms up to date at once, and the server checks them
+every 10 minutes as well (see below). To see what it would change, without changing anything, run
+`sudo blackbranch community reconcile --mode report`. On an install where the server does not keep
+the rooms yet (switched off, below), the rooms are updated the next time the admin opens the
+community instead.
+
+## The community's rooms, kept by the server
+
+The server can keep the community's rooms the way the Admin Panel sets them: every 10 minutes, and
+right after a change in the panel, it makes any room that is missing and lets each person into the
+rooms their role or support allows. It does this as the install's own community account, never as
+yours.
+
+A name or setting changed somewhere else (in Element, say) follows the panel's setting
+**Keep changes made in Element** (Admin Panel → Site → Site, card Channels). Off (the default): the server puts it back the way the panel has it. On: the
+change stays, and the server only reports it. While it is on, changes made in the panel to a channel that
+already exists are not applied either (they are listed as differences); new channels, who is in which
+channel and who is a moderator still are.
+
+Whatever that setting says, the server always applies three things: each person's role in every
+room (admin, Staff, mod, bot, supporter), who is in a channel only some people can see (an invite
+when someone gains the right, removed when they lose it), and site bans and timeouts (a ban becomes a
+room ban carrying the site's reason; a timed-out person stays in the rooms, read-only until it ends).
+A room ban someone made by hand is never lifted by the server. A supporter enters a channel for
+supporters by accepting the invite the community account sends them. A ban or timeout given while a
+run is going waits for the next run, at most 10 minutes later.
+
+The Doctor shows how it went. **The community's rooms are as the Community page sets them** is green
+when the last run had nothing to put back, amber when it put something back, left a difference as it
+is, or could not look after a room (the row says which, and Admin Panel → Site → Community lists
+them under **Last applied**), and red when the last run failed: one change the chat server refused
+fails only its own room, and the other rooms are still kept. **The community's rooms were checked in
+the last 30 minutes** turns amber when runs stop. When a run fails after one that worked, the server
+sends one alert (to the same place as a failed backup's), and one more when a run works again.
+
+A new install has this on. An install set up before it existed has it off, and its rooms stay as they
+are until you turn it on:
+
+```
+sudo blackbranch community on      # keep the rooms as the panel sets them (a first run starts now)
+sudo blackbranch community off     # stop; the rooms stay as they are now
+```
+
+Either one restarts the site, which takes a few seconds.
+
+To see what the server would change, without changing anything:
+
+```
+sudo blackbranch community reconcile --mode report
+```
+
+It prints one line per change, then one last line holding the whole result for scripts (it starts
+with `{"mode":"report"`). It exits with 0 when it finished, whether or not something would change
+(what would change is in that last line), with 2 when it could not run, and with 75 when another run
+(or an update) is going or the site is still being set up; wait a minute, then run it again.
+
+The community account joins only the community's own rooms: an invite to any other room stays
+pending and is not listed, and a room linked into the community that the account is not in is listed
+under **Last applied** on the Admin Panel's Community page. A room is the community's own when you
+or an admin of the main space linked it into the main space, or into a category or space you linked
+there, at any depth, and invited the account.
+
+If a chat bridge you run yourself already serves some of the rooms, list its bot's account in
+Admin Panel → Site → Community, card Bridge accounts, before you switch this on. The server leaves
+a listed account's power alone and never removes it; a room that only says it is bridged, by an
+account that is not listed, gets no such exception: the Doctor turns amber, and the Community page
+names the room and the account.
 
 ## Payments: what each provider does
 
@@ -227,8 +346,8 @@ again (the rooms are updated the next time the admin opens the community).
 | How it reaches the site | the site's own checkout | the site's own button | Ko-fi's webhook | Patreon's webhook | Streamlabs' live feed |
 
 - **The Supporter subscription is sold through Stripe, PayPal, or both.** Stripe needs the price
-  (Admin Panel → Payments → Connections → Stripe, **Supporter subscription price**, a `price_…` id);
-  PayPal needs a billing plan (→ PayPal, **Subscription plans**, `{"supporter":"P-…"}`). The price and currency shown on the site are
+  (Admin Panel → Payments → Connections, card Stripe, **Supporter subscription price**, a `price_…` id);
+  PayPal needs a billing plan (card PayPal, **Subscription plans**, `{"supporter":"P-…"}`). The price and currency shown on the site are
   read from Stripe or PayPal. A PayPal plan must bill monthly at a fixed price and have a payment
   failure threshold set. Without either, no subscribe button is offered.
 - **Gifts are card payments (Stripe) only**, and charge what the subscription costs.
@@ -240,7 +359,7 @@ again (the rooms are updated the next time the admin opens the community).
   becomes an alert on stream, moves the support bar and is listed in Payment history. Ko-fi sends
   each tip and each membership payment; Patreon sends a new pledge only (not renewals or
   cancellations); Streamlabs sends tips. A Ko-fi or Patreon member is not a supporter on the site.
-- No subscription on the site? **Admin Panel → Payments → Connections → Links → Outside subscribe link** sends the
+- No subscription on the site? **Admin Panel → Payments → Connections, card Links, Outside subscribe link** sends the
   Subscribe button to a page of your choice (your Patreon, say). It is only a link: nothing comes back
   from it. **Donate link** does the same for the Donate button and `!dono` when no payment provider is
   on.
@@ -288,7 +407,7 @@ it. Everything comes back on its own.
 
 <!-- restart-settings: generated by install/restart-settings.mjs; edit the schema, then run it with --write -->
 
-These 34 settings are read once, when the service that uses them starts. Changing one does
+These 32 settings are read once, when the service that uses them starts. Changing one does
 nothing until that service restarts. The Admin Panel says "applies at restart" beside each of its own;
 this is the whole list in one place. `sudo blackbranch help` prints it too, and `sudo blackbranch status`
 names any that were changed in the Admin Panel after their service last started.
@@ -298,13 +417,10 @@ names any that were changed in the Admin Panel after their service last started.
 
 | Setting | Restart | What it is |
 |---|---|---|
-| `matrix.federation` | `web` | Federation |
-| `matrix.registration` | `web` | Let people make accounts |
 | `modules.lights` | `stream-api` | Room lights |
 | `modules.meter` | `stream-api` | Support meter |
 | `modules.obs` | `stream-api` | OBS control |
-| `modules.radio` | `web`, `stream-api` | Radio |
-| `modules.youtube` | `web`, `stream-ingest` | YouTube |
+| `modules.radio` | `stream-api` | Radio |
 | `obs.password` | `stream-api` | OBS WebSocket password |
 | `streamlabs.socketToken` | `stream-api` | Streamlabs socket token |
 | `tts.enabled` | `stream-api` | Speak alerts and paid messages |
@@ -338,6 +454,7 @@ addresses can never change. They are listed so you know not to.
 
 | Key in `.env` | Restart | What it is |
 |---|---|---|
+| `COMMUNITY_LOCALPART` | `web` | Community account name |
 | `MATRIX_HOMESERVER_URL` | `web` | Matrix homeserver address |
 | `MATRIX_OAUTH_CLIENT_ID` | `web` | Matrix sign-in client id |
 | `MATRIX_OAUTH_ISSUER` | `web` | Matrix sign-in issuer |
@@ -364,13 +481,15 @@ find them. It sends an alert when:
 Each alert says what happened and which command shows why. It never holds a password, a key or a
 program's own error text.
 
-**Choose where alerts go.** Set one or both of these in `/opt/blackbranch/.env`. The server never
-prints them.
+**Choose where alerts go.** The alerts topic you set in **Admin Panel → Site → Site, card Alerts to
+your phone** carries these alerts too: every problem to the urgent topic, the test alert and "working
+again" notes to the quiet one (one topic takes both). If the database is down when an alert goes out, the server uses the
+topic it read last. To send them somewhere else, set one or both of these in `/opt/blackbranch/.env`
+(a topic here replaces the site's for these alerts). The server never prints them.
 
 - `BB_ALERT_NTFY_URL` is an [ntfy](https://ntfy.sh) topic address, such as
   `https://ntfy.sh/<a long private topic name>`. Install the ntfy app and subscribe to the same
-  topic. Anyone who knows the topic name can read it, so pick a name nobody can guess. You can use
-  the same topic as the site's own alerts (Admin Panel → Site → Health).
+  topic. Anyone who knows the topic name can read it, so pick a name nobody can guess.
 - `BB_ALERT_EMAIL_COMMAND` is a command on the server that sends an email. The server gives it the
   whole message on its input, headers first. For example:
   `BB_ALERT_EMAIL_COMMAND='sendmail you@example.com'`. This needs a mail program on the server, such
@@ -378,10 +497,9 @@ prints them.
 
 **Test it.** Run `sudo blackbranch alerts test`. It sends a test alert and says whether it went out.
 
-If you set neither, alerts only go to the server's log. Read it with `journalctl -u
+With no topic in the Admin Panel and neither of these set, alerts only go to the server's log. Read it with `journalctl -u
 blackbranch-backup` or `journalctl -u blackbranch-check`. If the server cannot reach your topic or
 run your command, it says so in the log. A failed alert never stops a backup or an update.
 
-The site's own alerts are separate. They cover what the site itself notices, they need the site to
-be running, and you set them in **Admin Panel → Site → Health**.
+The site's own alerts (what the site itself notices while it runs) go to the same Admin Panel topic.
 

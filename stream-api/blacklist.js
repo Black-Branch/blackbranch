@@ -237,9 +237,13 @@ function termRegex(term, flags) {
   // singular-only boundary would let the plural followed by another word through.
   const sep = '[\\s._*\\-]*';
   const interleave = (s) => s.split('').map(escapeRegex).join(sep);
+  // English adds "es" only after s, x, z, ch, sh or o (boxes, churches,
+  // heroes); every other stem takes a bare "s". Allowing "es" everywhere made
+  // "spic" match "Spices" (prod, 2026-10-29).
+  const tail = /(?:[sxzo]|ch|sh)$/i.test(letters) ? `${sep}e?${sep}s` : `${sep}s`;
   const body = letters.endsWith('y')
     ? `${interleave(letters.slice(0, -1))}${sep}(?:y(?:${sep}s)?|i${sep}e${sep}s)`
-    : `${interleave(letters)}(?:${sep}e?${sep}s)?`;
+    : `${interleave(letters)}(?:${tail})?`;
   return new RegExp(`(?<![a-zA-Z])${body}(?![a-zA-Z])`, flags);
 }
 

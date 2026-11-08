@@ -14,7 +14,8 @@ import { useChatNoticeText } from "@/app/lib/useChatNoticeText";
 import { ScrollBottomBeforeHydration } from "@/app/components/ScrollBottomBeforeHydration";
 import { cardReplyContext, type ChatMsg } from "@/app/lib/chatMsg";
 import { localpart } from "@/app/lib/matrixDisplay";
-import { requestDm } from "@/app/lib/dm/bus";
+import { NATIVE_PLATFORM } from "@/app/lib/nativePlatform";
+import { onOpenRoomRequest, requestDm } from "@/app/lib/dm/bus";
 import { AnnounceHost, DmHost } from "@/app/features/dm";
 import { userCardPopoutUrl } from "@/app/lib/avatarSrc";
 import { useNarrowViewport, narrowViewportNow } from "@/app/lib/useNarrowViewport";
@@ -65,6 +66,7 @@ import { useBanStatus } from "@/app/lib/useBanStatus";
 import { postJson, postJsonOrThrow, getJson } from "@/app/lib/http";
 import { noticeOnFailure } from "@/app/lib/chatNotice";
 import { lsGet, lsSet } from "@/app/lib/safeLocalStorage";
+import { useNudgeSlot } from "@/app/lib/nudgeSlot";
 import { USER_CARD_H, USER_CARD_W } from "@/app/lib/userCardLayout";
 import { userCardDataWithin, USER_CARD_OPEN_CAP_MS, type UserCardData } from "@/app/lib/userCardData";
 import { centeredBox, type Box } from "@/app/lib/chrome/useDragResize";
@@ -85,7 +87,7 @@ import { useHiddenIgnoreSync } from "@/app/lib/useHiddenIgnoreSync";
 import { useSendChatMessage } from "@/app/lib/useSendChatMessage";
 import { useHeldLines } from "@/app/lib/useHeldLines";
 import HeldLine from "./HeldLine";
-import { useSpotlightToggle } from "@/app/lib/useChatSpotlight";
+import { useSpotlightSwitch, useSpotlightToggle } from "@/app/lib/useChatSpotlight";
 import { chatKey } from "@/app/lib/chatSeed";
 import { useChatBgContrastRef } from "@/app/lib/useChatBgContrastRef";
 import { ChatTabBar, type ChatTabKey } from "./ChatTabBar";
@@ -119,12 +121,15 @@ function formatRemaining(ms: number): string {
   return `${sec}s`;
 }
 
-export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, isAdmin = false, isPopout, onToggleFull, isFull, fullKind, onFoldChat, compact, narrow, onToggleCompact, vods = [], homeInitial = null, selectedVodId = null, onPickVod, onWatchCommunity, initialMessages, initialEmotes }: { isSignedIn: boolean; userId?: string | null; canonicalId?: string | null; isMod: boolean;
+export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, isAdmin = false, isPopout, onToggleFull, isFull, fullKind, onFoldChat, compact, narrow, onToggleCompact, vods = [], homeInitial = null, selectedVodId = null, onPickVod, onWatchCommunity, communityKey = null, initialMessages, initialEmotes }: { isSignedIn: boolean; userId?: string | null; canonicalId?: string | null; isMod: boolean;
   /** The owner (site.users.is_admin, from the server render): the one account
    *  whose click sets the highlighted message (chatSpotlight.ts). */
   isAdmin?: boolean; isPopout?: boolean; onToggleFull?: () => void; isFull?: boolean; fullKind?: "community" | "fold"; onFoldChat?: () => void; compact?: boolean; narrow?: boolean; onToggleCompact?: () => void; vods?: Vod[]; homeInitial?: HomePayload | null; selectedVodId?: string | null; onPickVod?: (v: Vod) => void;
   /** Home's "<name> is live → Watch": the host switches the player to Community. */
   onWatchCommunity?: () => void;
+  /** The community entry the host's player shows (its key): a cross-post goes to the streamer the
+   *  viewer watches, which the server resolves against its own list. */
+  communityKey?: string | null;
   /** The newest page of history, read by the server page so the rows are in
    *  the HTML before hydration (useChatMessages seeds from it). */
   initialMessages?: ChatMsg[];
@@ -533,6 +538,8 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
     window.addEventListener(SUGGEST_EVENT, onSuggest);
     return () => window.removeEventListener(SUGGEST_EVENT, onSuggest);
   }, [setTab, setMatrixOpened]);
+  // The DM window's "Open in Community": the Matrix tab, where MatrixView takes the room (lib/dm/bus.ts).
+  useEffect(() => onOpenRoomRequest(() => { setContentTab(null); setTab("matrix"); setMatrixOpened(true); }), [setTab, setMatrixOpened]);
 
   // The visit rule and the live edge reach the phone pane by event (StreamView
   // owns the stream state; this component owns the pane). Both are no-ops on
@@ -572,11 +579,6 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
     };
   }, []);
 
-  // Tell the contextual Matrix-apps hint when the user first opens the Matrix tab.
-  useEffect(() => {
-    if (matrixOpened) window.dispatchEvent(new Event("bb:matrix-opened"));
-  }, [matrixOpened]);
-
   // Own username color — localStorage-backed store (SSR null; same-tab writers
   // notify through the shared setter, cross-tab via the storage event).
   const [ownColor, setOwnColorLs] = useLocalStorageString("chatUsernameColor");
@@ -587,6 +589,8 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
   const supportCtl = useRef<{ enter: () => void; leave: () => void } | null>(null);
   const badgeState = useBadges(); // own badges for the panel's user rows
   const [supportActive, setSupportActive] = useState(false);
+  // What the load-time opener (below) will say once it holds the first-run slot.
+  const [greeting, setGreeting] = useState<{ kind: "link"; offerNever: boolean } | { kind: "first" } | null>(null);
   // One-time close hint. localStorage so it never nags twice.
   const [supportHinted, setSupportHinted] = useLocalStorageString("support_hinted");
   const [supportHint, setSupportHint] = useState(false);
@@ -625,6 +629,7 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
   const { open: convoOpen, sendText: convoSendText, reset: convoReset, pick: convoPick } = supportConvo;
   const handleSupportModeChange = useCallback((active: boolean) => {
     setSupportActive(active);
+    if (!active) setGreeting(null);
     if (active) convoOpen(); // no-op if a thread is already going
   }, [convoOpen]);
   const registerSupportControls = useCallback((c: { enter: () => void; leave: () => void }) => {
@@ -652,6 +657,7 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
   const closeSupport = useCallback(() => {
     supportCtl.current?.leave();
     setSupportActive(false);
+    setGreeting(null);
     if (nudgeShowing.current) postNudgeDismiss(false);
     // Exiting clears the history — a reopened panel greets
     // fresh rather than resuming a stale thread.
@@ -760,6 +766,7 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
   }, [pinHeight, pin?.id, dismissedPinId, reassertBottom]);
   // The broadcaster's highlighted message (chatSpotlight.ts) — the click is the broadcaster's only.
   const handleSpotlight = useSpotlightToggle(spotlightKey);
+  const canSpotlight = useSpotlightSwitch(isAdmin);
 
   // ── Ban / timeout state for the input (see useBanStatus) ──
   const { banExpiry, setBanExpiry, nowTick } = useBanStatus(isSignedIn);
@@ -783,25 +790,34 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
       .then((d) => {
         settled = true;
         if (cancelled) return;
-        if (d.link_account?.show) {
-          nudgeShowing.current = true;
-          convoOpen(LINK_NUDGE_LINE, linkNudgeOptions(d.link_account.offerNever));
-        } else if (!lsGet("support_greeted")) {
-          lsSet("support_greeted", "1");
-          convoOpen(FIRST_VISIT);
-        } else {
-          return;
-        }
-        supportCtl.current?.enter();
-        setSupportActive(true);
-        setGreetPending(true);
+        if (d.link_account?.show) setGreeting({ kind: "link", offerNever: d.link_account.offerNever });
+        else if (!lsGet("support_greeted")) setGreeting({ kind: "first" });
       })
       // A failed fetch shows nothing — a reminder is never worth an error state.
       .catch(() => { settled = true; });
     // A run torn down before its answer arrived (a re-render, React's dev double-mount) did not
     // greet anyone, so it must not use up the one check — the next run asks again.
     return () => { cancelled = true; if (!settled) nudgeChecked.current = false; };
-  }, [isPopout, isSignedIn, convoOpen]);
+  }, [isPopout, isSignedIn]);
+  // The greeting is a first-run prompt like the bottom ones: it opens only while it holds the one
+  // slot (nudgeSlot.ts), and closing the help desk is its dismissal. Marked greeted only once it
+  // shows, so a greeting that never got the slot is offered again on a later load.
+  const greetHolds = useNudgeSlot("help-desk", greeting !== null);
+  const greeted = useRef(false);
+  useEffect(() => {
+    if (!greetHolds || !greeting || greeted.current) return;
+    greeted.current = true;
+    if (greeting.kind === "link") {
+      nudgeShowing.current = true;
+      convoOpen(LINK_NUDGE_LINE, linkNudgeOptions(greeting.offerNever));
+    } else {
+      lsSet("support_greeted", "1");
+      convoOpen(FIRST_VISIT);
+    }
+    supportCtl.current?.enter();
+    setSupportActive(true);
+    setGreetPending(true);
+  }, [greetHolds, greeting, convoOpen]);
 
   // Per-row derivations (own-color override, continuation grouping, reply-to-me
   // highlight) + @mention candidates — see useChatRowDerivations.
@@ -885,13 +901,18 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
       if (openSeqRef.current === seq) setCard({ msg, box, data });
     });
   }, [setCard, asideRef]);
+  // The DM window's name opens the person's card: the minimal ChatMsg the card needs (as the
+  // automod row below does); the card resolves the rest from the Matrix id.
+  const openDmCard = useCallback((who: { matrixId: string; username: string }) => {
+    openUserCard({ id: `dm:${who.matrixId}`, platform: NATIVE_PLATFORM, username: who.username, message: "", matrixId: who.matrixId } as ChatMsg);
+  }, [openUserCard]);
 
   // No outside-click close on the user card, deliberately. It sits ALONGSIDE
   // the page rather than over it — same rule as the account card — and closing
   // it on any stray click is the same class of surprise as closing it on
   // scroll. Close, Escape and popout are the ways out.
 
-  const handleSendMessage = useSendChatMessage(setBanExpiry);
+  const handleSendMessage = useSendChatMessage(setBanExpiry, communityKey);
 
   // ── Pager panes ─────────────────────────────────────────────────────────────
   // Every pane body is built ONCE and handed to whichever skin the middle is
@@ -1043,12 +1064,13 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
                   }
                   selected={!!replyTo && replyTo.id === msg.id && replyTo.platform === msg.platform}
                   highlight={row.highlight}
+                  wordHighlight={row.wordHighlight}
                   own={row.isOwn || row.isOwnStream}
                   maskSwears={maskSwears}
                   quoteHidden={!!row.msg.reply_to_username && hiddenNames.has(row.msg.reply_to_username.toLowerCase())}
                   directory={directory}
                   spotlight={spotlightKey !== null && spotlightKey === chatKey(msg)}
-                  onSpotlight={isAdmin ? handleSpotlight : undefined}
+                  onSpotlight={canSpotlight ? handleSpotlight : undefined}
                 />
                 {heldAfter.map((h) => <HeldLine key={`held-${h.rowId}`} line={h} onDismiss={dismissHeld} />)}
                 </Fragment>
@@ -1510,7 +1532,7 @@ export default function ChatSidebar({ isSignedIn, userId, canonicalId, isMod, is
 
       {/* Direct messages and announcements slide up in the chat column. Each
           host renders nothing until it has something to show. */}
-      <DmHost />
+      <DmHost onOpenCard={openDmCard} />
       <AnnounceHost />
 
       {/* User card — the SAME shell the account card uses, opened centred over

@@ -104,3 +104,68 @@ test('a send-to-all echo is suppressed by platform id and by sender, and past 20
   assert.equal(r.body?.suppressed, true, "past 20 s the sender's own late echo is still suppressed");
   assert.equal(inserted.length, before);
 });
+
+test('a staff line YouTube got in parts: each part\'s echo is suppressed there, and only there', async (t) => {
+  const quiet = console.log;
+  console.log = () => {};
+  t.after(() => { console.log = quiet; });
+  const inserted = [];
+  const pool = {
+    query: async (sql) => {
+      if (/INSERT INTO site\.chat_messages/.test(sql)) return { rows: [{ id: 4343 }] };
+      if (/INSERT INTO stream\.chat_log/.test(sql)) { inserted.push(sql); return { rows: [{ id: 78, user_id: 'u1' }] }; }
+      return { rows: [] };
+    },
+  };
+  const chat = createChat({
+    pool,
+    resolveOrCreate: async (_platform, userId) => `canon-${userId}`,
+    resolveCanonical: async () => 'canon-casey',
+    pollEngine: { active: () => false },
+    msgBuffer: [],
+    broadcast: () => {},
+    bufferPush: () => {},
+  });
+  const app = express();
+  app.use(express.json());
+  chat.registerChatRoutes(app, {
+    requireInternal: (_req, _res, next) => next(),
+    wrap: (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next),
+  });
+  const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (p, b) => fetch(base + p, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Connection: 'close' }, body: JSON.stringify(b),
+  }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+
+  const parts = ['first part of a long announcement', 'second part of it', 'and the third'];
+  await post('/chat/native', {
+    matrixId: '@casey:site.test', username: 'Casey', message: parts.join(' '),
+    allSend: true, canonicalId: 'canon-casey',
+    expectedEchoes: 2, expectedPlatforms: ['twitch', 'youtube'],
+    platformParts: { youtube: parts, kick: ['never fanned out to kick'] },
+  });
+
+  // No sender id for YouTube here: the text of each part is what is armed.
+  for (const p of parts) {
+    const before = inserted.length;
+    const r = await post('/chat', { platform: 'youtube', userId: 'UChost', username: 'hostchannel', message: p, platformMsgId: `yt-${p}` });
+    assert.equal(r.body?.suppressed, true, `the part "${p}" came back as a new line`);
+    assert.equal(r.body?.id, 4343, 'a part echo answers with the one native row');
+    assert.equal(inserted.length, before);
+  }
+  // Twitch got the whole line; a part's text there is someone's own message.
+  let before = inserted.length;
+  let r = await post('/chat', { platform: 'twitch', userId: '999', username: 'someone', message: parts[1], platformMsgId: 'tw-1' });
+  assert.ok(!r.body?.suppressed, 'a part is armed for YouTube only');
+  assert.equal(inserted.length, before + 1);
+  // A platform not fanned out to is never armed.
+  before = inserted.length;
+  r = await post('/chat', { platform: 'kick', userId: '5', username: 'k5', message: 'never fanned out to kick', platformMsgId: 'k-1' });
+  assert.ok(!r.body?.suppressed);
+  assert.equal(inserted.length, before + 1);
+  // The whole line still suppresses Twitch's echo.
+  r = await post('/chat', { platform: 'twitch', userId: '55512345', username: 'HostChannel', message: parts.join(' '), platformMsgId: 'tw-2' });
+  assert.equal(r.body?.suppressed, true);
+});

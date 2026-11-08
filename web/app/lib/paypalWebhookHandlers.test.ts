@@ -84,9 +84,9 @@ function stubFetch(impl: (call: FetchCall) => Promise<Response>): FetchCall[] {
   return calls;
 }
 const ok200 = () => Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } }));
-// broadcastChatEvent never sleeps between retries in these tests because every
-// success path below delivers on the first attempt — no test here exercises
-// the retry loop (that belongs to chatEventDelivery.test.ts).
+// Every success path below delivers on the first attempt; the one retry test
+// (a plain tip card resent) waits out one real backoff step. The retry loop
+// itself belongs to chatEventDelivery.test.ts.
 
 async function withCapturedConsole<T>(fn: () => Promise<T>): Promise<{ result: T; warnings: unknown[][]; errors: unknown[][] }> {
   const warnings: unknown[][] = [];
@@ -178,7 +178,10 @@ test("a fresh completion: the UPDATE carries customId/captureId/cents, and exact
   assert.equal(body.kind, "donation");
   assert.equal(body.spendId, "donation:paypal:42311647XV020574X");
   assert.equal(body.donor, "Donor Name");
-  assert.equal(body.donorMatrixId, "@donor:site.test");
+  // "Donor Name" is not the account's own name ("unused"): a plain card, the payer apart (ADR 0145).
+  assert.equal(body.donorMatrixId, null);
+  assert.equal(body.payerMatrixId, "@donor:site.test");
+  assert.equal(body.tipIdentity, "plain");
   assert.equal(body.anonymous, false);
   assert.equal(body.amount, 5700);
   assert.equal(body.currency, "usd", "currency must be lowercased");
@@ -279,30 +282,72 @@ test("an anonymous donor never calls getChatIdentity, even with a blank display_
   assert.equal(body.donorMatrixId, null);
 });
 
-// A stored name must not skip the lookup: every signed-in PayPal tipper's row
-// carries their site name, so skipping it would celebrate them with a PLAIN
-// name — no colour, no equipped style. Stripe's route looks the identity up for
-// every signed-in, non-anonymous donor and lets the stored name win only the
-// LABEL (route.ts `donor = donor || identity.username`).
-test("a stored non-blank display_name wins the label, but the donor's colour and style still come from getChatIdentity", async () => {
-  const { pool } = fakePool([[CAPTURE_UPDATE, () => ({
-    rows: [{ id: 1, matrix_id: "@donor:site.test", display_name: "Already Named", message: null, anonymous: false, ordered_cents: 5700 }],
-    rowCount: 1,
-  })]]);
-  const fetchCalls = stubFetch(ok200);
-  const identityCalls: string[] = [];
-  const getChatIdentity = async (matrixId: string) => {
-    identityCalls.push(matrixId);
-    return { username: "Chat Name", usernameColor: "#00ff00", usernameStyle: { font: "arcade" } };
-  };
-  const { onCaptureCompleted } = createPaypalWebhookHandlers({ pool, getChatIdentity, credits: fakeCredits() as never });
-  await onCaptureCompleted(completedFixture);
+// ADR 0145: the card wears the account (colour, style, badges key) only under the account's own
+// name. The lookup still runs for every signed-in, non-anonymous donor — it is what tells the two
+// apart — but a typed name that differs sends a plain card, its payer apart for the ledger.
+const chatName = async () => ({ username: "Chat Name", usernameColor: "#00ff00", usernameStyle: { font: "arcade" } });
+const rowNamed = (display_name: string, anonymous = false) => fakePool([[CAPTURE_UPDATE, () => ({
+  rows: [{ id: 1, matrix_id: "@donor:site.test", display_name, message: null, anonymous, ordered_cents: 5700 }],
+  rowCount: 1,
+})]]).pool;
 
-  assert.deepEqual(identityCalls, ["@donor:site.test"], "a signed-in donor's style must be looked up even when the row has a name");
+test("own name: a stored name equal to the account's wears the account's colour and style", async () => {
+  const fetchCalls = stubFetch(ok200);
+  const { onCaptureCompleted } = createPaypalWebhookHandlers({ pool: rowNamed("Chat Name"), getChatIdentity: chatName, credits: fakeCredits() as never });
+  await onCaptureCompleted(completedFixture);
   const body = fetchCalls[0]!.body as Record<string, unknown>;
-  assert.equal(body.donor, "Already Named", "the stored label still wins over the chat username");
+  assert.equal(body.donor, "Chat Name");
+  assert.equal(body.donorMatrixId, "@donor:site.test");
+  assert.equal(body.tipIdentity, "account");
   assert.equal(body.usernameColor, "#00ff00");
   assert.deepEqual(body.usernameStyle, { font: "arcade" });
+  assert.equal(body.payerMatrixId, null);
+});
+
+test("typed name: a stored name that differs from the account's is a plain card — no account, colour or style", async () => {
+  const fetchCalls = stubFetch(ok200);
+  const identityCalls: string[] = [];
+  const getChatIdentity = async (m: string) => { identityCalls.push(m); return chatName(); };
+  const { onCaptureCompleted } = createPaypalWebhookHandlers({ pool: rowNamed("Already Named"), getChatIdentity, credits: fakeCredits() as never });
+  await onCaptureCompleted(completedFixture);
+  assert.deepEqual(identityCalls, ["@donor:site.test"], "the lookup decides whether the name is the account's");
+  const body = fetchCalls[0]!.body as Record<string, unknown>;
+  assert.equal(body.donor, "Already Named", "the typed name is shown as typed");
+  assert.equal(body.donorMatrixId, null);
+  assert.equal(body.usernameColor, null);
+  assert.equal(body.usernameStyle, null);
+  assert.equal(body.tipIdentity, "plain");
+  assert.equal(body.payerMatrixId, "@donor:site.test", "the money record still knows who paid");
+  assert.ok(!JSON.stringify(body).includes("#00ff00"), "the account's colour leaked onto a plain card");
+});
+
+test("anonymous: no account, no payer, no look on the card — as before", async () => {
+  const fetchCalls = stubFetch(ok200);
+  const { onCaptureCompleted } = createPaypalWebhookHandlers({ pool: rowNamed("Already Named", true), getChatIdentity: chatName, credits: fakeCredits() as never });
+  await onCaptureCompleted(completedFixture);
+  const body = fetchCalls[0]!.body as Record<string, unknown>;
+  assert.equal(body.donor, "Anonymous");
+  assert.equal(body.donorMatrixId, null);
+  assert.equal(body.payerMatrixId, null);
+  assert.equal(body.usernameColor, null);
+});
+
+test("retry: a delivery retried after the ledger_unavailable 503 resends the SAME plain card — never the account", async () => {
+  let n = 0;
+  const calls: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_url: string, init: { body: string }) => {
+    calls.push(JSON.parse(init.body));
+    n += 1;
+    return n === 1 ? new Response(JSON.stringify({ ok: false, error: "ledger_unavailable" }), { status: 503 }) : new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const { onCaptureCompleted } = createPaypalWebhookHandlers({ pool: rowNamed("Already Named"), getChatIdentity: chatName, credits: fakeCredits() as never });
+  await onCaptureCompleted(completedFixture);
+  assert.ok(calls.length >= 2, `expected a retry, got ${calls.length} delivery`);
+  for (const c of calls) {
+    assert.equal(c.donorMatrixId, null);
+    assert.equal(c.tipIdentity, "plain");
+    assert.equal(c.spendId, "donation:paypal:42311647XV020574X");
+  }
 });
 
 test("captured amount differing from the ordered amount logs a loud warning naming both numbers and the capture id", async () => {

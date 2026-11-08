@@ -56,6 +56,7 @@ function world({ helix, token }) {
       if (path === '/content') return json({ content: {} });
       if (method === 'GET' && path === '/stream/current') return json({ live: w.api.live, streamId: w.api.streamId });
       if (method === 'POST' && path === '/stream/start') { w.api.live = true; w.api.streamId = body.streamId; w.api.starts.push(body.streamId); return json({ ok: true }); }
+      if (method === 'POST' && path === '/stream/platforms') return json({ ok: true }); // the per-tick publish (pollerPublish.test.js)
       if (method === 'POST' && path === '/viewer-snapshot') { w.api.snapshots.push(body); return json({ ok: true }); }
     }
     if (u === 'https://id.twitch.tv/oauth2/token') {
@@ -88,10 +89,10 @@ test('setup: the schema lets this process read the Twitch app pair', () => {
 // Order matters below: the app token is cached across tests, as it is across ticks.
 
 test('no bot token, the wizard\'s app pair: live, from a client-credentials app token', async () => {
-  const w = world({ token: mint, helix: () => json({ data: [{ viewer_count: 9 }] }) });
+  const w = world({ token: mint, helix: () => json({ data: [{ id: '50009', type: 'live', viewer_count: 9 }] }) });
   try {
     assert.equal(await instanceConfig.load(), true, 'the settings arrive from stream-api');
-    assert.deepEqual(await twitchStatus(), { state: 'live', viewers: 9 });
+    assert.deepEqual(await twitchStatus(), { state: 'live', viewers: 9, key: '50009', evidence: 'helix-live' });
     assert.equal(w.tokenCalls, 1);
     assert.deepEqual(w.helixCalls[0], { clientId: APP_ID, auth: 'Bearer app-token-1' }, 'Helix is asked with the app\'s own client id and token');
   } finally { global.fetch = realFetch; }
@@ -100,8 +101,8 @@ test('no bot token, the wizard\'s app pair: live, from a client-credentials app 
 test('a confirmed offline, and the app token is reused, not minted per tick', async () => {
   const w = world({ token: mint, helix: () => json({ data: [] }) });
   try {
-    assert.deepEqual(await twitchStatus(), { state: 'offline', viewers: 0 });
-    assert.deepEqual(await twitchStatus(), { state: 'offline', viewers: 0 });
+    assert.deepEqual(await twitchStatus(), { state: 'offline', viewers: 0, key: '', evidence: 'helix-empty' });
+    assert.deepEqual(await twitchStatus(), { state: 'offline', viewers: 0, key: '', evidence: 'helix-empty' });
     assert.equal(w.tokenCalls, 0, 'the cached token from the last test is still good');
     assert.equal(w.helixCalls.at(-1).auth, 'Bearer app-token-1');
   } finally { global.fetch = realFetch; }
@@ -110,10 +111,10 @@ test('a confirmed offline, and the app token is reused, not minted per tick', as
 test('an expired app token: a 401 mints a new one and asks again, once', async () => {
   const w = world({
     token: (n) => mint(n + 1), // the second token this process has seen
-    helix: (n, h) => (h.Authorization === 'Bearer app-token-1' ? json({ status: 401, message: 'Invalid OAuth token' }, 401) : json({ data: [{ viewer_count: 3 }] })),
+    helix: (n, h) => (h.Authorization === 'Bearer app-token-1' ? json({ status: 401, message: 'Invalid OAuth token' }, 401) : json({ data: [{ id: '50003', type: 'live', viewer_count: 3 }] })),
   });
   try {
-    assert.deepEqual(await twitchStatus(), { state: 'live', viewers: 3 });
+    assert.deepEqual(await twitchStatus(), { state: 'live', viewers: 3, key: '50003', evidence: 'helix-live' });
     assert.equal(w.tokenCalls, 1, 'one re-mint');
     assert.deepEqual(w.helixCalls.map((c) => c.auth), ['Bearer app-token-1', 'Bearer app-token-2']);
   } finally { global.fetch = realFetch; }
@@ -122,7 +123,7 @@ test('an expired app token: a 401 mints a new one and asks again, once', async (
 test('a 401 that survives the re-mint is unknown, never offline', async () => {
   const w = world({ token: (n) => mint(n + 10), helix: () => json({ status: 401, message: 'Invalid OAuth token' }, 401) });
   try {
-    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.deepEqual(await twitchStatus(), { state: 'unknown', viewers: 0, key: '', evidence: 'helix-error' });
     assert.equal(w.helixCalls.length, 2, 'one retry, not a loop');
   } finally { global.fetch = realFetch; }
 });
@@ -130,29 +131,29 @@ test('a 401 that survives the re-mint is unknown, never offline', async () => {
 test('Twitch unavailable: an HTTP 5xx, a network error, or a token endpoint that fails is unknown', async () => {
   let w = world({ token: mint, helix: () => json({ message: 'unavailable' }, 503) });
   try {
-    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.equal((await twitchStatus()).evidence, 'helix-error');
     assert.ok(w.helixCalls.length >= 1, 'Twitch was asked, and its 503 is the answer');
   } finally { global.fetch = realFetch; }
   w = world({ token: mint, helix: () => { throw new Error('ETIMEDOUT'); } });
   try {
-    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.equal((await twitchStatus()).evidence, 'helix-error');
     assert.ok(w.helixCalls.length >= 1, 'Twitch was asked, and the network error is the answer');
   } finally { global.fetch = realFetch; }
   // Force a re-mint (a 401), then have the token endpoint fail.
   w = world({ token: () => json({ message: 'down' }, 500), helix: () => json({ status: 401 }, 401) });
   try {
-    assert.equal((await twitchStatus()).state, 'unknown');
+    assert.deepEqual(await twitchStatus(), { state: 'unknown', viewers: 0, key: '', evidence: 'no-token' }, 'a failed re-mint is no token, not an answer');
     assert.equal(w.tokenCalls, 1);
   } finally { global.fetch = realFetch; }
   w = world({ token: () => json({ message: 'down' }, 500), helix: () => json({ data: [] }) });
   try {
-    assert.equal((await twitchStatus()).state, 'unknown', 'no token to ask with is not an answer');
+    assert.deepEqual(await twitchStatus(), { state: 'unknown', viewers: 0, key: '', evidence: 'no-token' }, 'no token to ask with is not an answer');
     assert.equal(w.helixCalls.length, 0);
   } finally { global.fetch = realFetch; }
 });
 
 test('the real poller opens a session from the app pair alone', async () => {
-  const w = world({ token: mint, helix: () => json({ data: [{ viewer_count: 5 }] }) });
+  const w = world({ token: mint, helix: () => json({ data: [{ id: '50005', type: 'live', viewer_count: 5 }] }) });
   const poller = startPoller({ getStreamplaceViewers: () => null, getYtVideoId: () => '' });
   try {
     const t0 = Date.now();

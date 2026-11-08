@@ -17,9 +17,11 @@ const row = stripComments(readFileSync(path.join(here, "..", "features", "chat",
 
 test("the ring colour is a registered custom property the ring reads", () => {
   assert.match(css, /@property --ring-c \{ syntax: "<color>"; inherits: false; initial-value: transparent; \}/);
-  const uses = row.match(/boxShadow: "0 0 0 var\(--chat-pfp-ring, 0px\) var\(--ring-c\)"/g) ?? [];
+  // The ring rule paints --ring-c (avatarRing.test.ts pins its geometry); each element sets it.
+  assert.match(css, /\.chat-pfp-ring-on \.chat-pfp-ring-el \{[^}]*outline: var\(--avatar-ring-w\) solid var\(--ring-c\);/);
+  const uses = row.match(/\["--ring-c" as string\]: platformColor/g) ?? [];
   assert.equal(uses.length, 2, "both the photo and the initial-letter fallback");
-  const cls = row.match(/className=\{`chat-pfp-ring-el[^`]*\$\{cycleClass\}`\}/g) ?? [];
+  const cls = row.match(/className=\{`avatar chat-pfp-ring-el[^`]*\$\{cycleClass\}`\}/g) ?? [];
   assert.equal(cls.length, 2, "both ring elements carry the row's cycle class");
 });
 

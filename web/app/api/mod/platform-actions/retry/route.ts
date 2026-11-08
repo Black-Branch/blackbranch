@@ -4,6 +4,7 @@ import { banOnTwitch, unbanOnTwitch, setSlowModeOnTwitch } from "@/app/lib/platf
 import { banOnKick, unbanOnKick } from "@/app/lib/platformMod/kick";
 import { banOnYouTube, unbanOnYouTube } from "@/app/lib/platformMod/youtube";
 import { NextRequest } from "next/server";
+import { newestActions, standingOf } from "@/app/lib/platformRetry";
 
 // POST { id } — re-run a failed platform fan-out from the mod panel's
 // propagation view or the status line after an action (e.g. the target had no
@@ -11,6 +12,8 @@ import { NextRequest } from "next/server";
 // CURRENT mod and records a NEW audit row in the SAME batch — the original row stays
 // as history, and the batch's newest row per platform is the answer the status line shows. Only state-shaped actions are retryable: a stale single-message
 // delete or purge batch isn't meaningfully re-runnable from a row id.
+// A ban / timeout / unban row is retried only while its batch is still the target's newest such
+// action, and a timeout only for what it has left (platformRetry.ts) — else 409 "superseded".
 // A retry is a new action by the current mod, so it passes the same privilege
 // ceiling as the original: a mod cannot re-run a row against the owner (403),
 // and a target the ceiling cannot decide on is refused (503).
@@ -47,8 +50,15 @@ export async function POST(req: NextRequest) {
   const denied = await assertCanModerate(mod, row.target_id);
   if (denied) return denied;
 
+  // Only while this batch is still the target's newest ban / timeout / unban (app/lib/platformRetry.ts):
+  // an old row must not re-ban someone since unbanned, restart an ended timeout, or lift a newer ban.
+  const newest = await newestActions([row.target_id], (sql, params) => pool.query(sql, params));
+  const standing = standingOf(row, newest.get(row.target_id));
+  if (!standing.ok) return Response.json({ error: "superseded", supersededBy: standing.supersededBy }, { status: 409 });
+
   if (row.action === "ban" || row.action === "timeout") {
-    const dur = row.action === "timeout" ? row.duration_seconds : null;
+    // A timeout for the time it has left, never its full length again.
+    const dur = standing.durationSeconds;
     if (platform === "twitch") await banOnTwitch(mod, row.target_id, dur, null, row.batch_id);
     else if (platform === "kick") await banOnKick(mod, row.target_id, dur, null, row.batch_id);
     else if (platform === "youtube") await banOnYouTube(mod, row.target_id, dur, row.batch_id);

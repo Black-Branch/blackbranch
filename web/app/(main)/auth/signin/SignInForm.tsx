@@ -8,6 +8,8 @@ import { runSignOutHooks } from "@/app/lib/plugins/session";
 import { useEffect, useState } from "react";
 import { siteName } from "@/app/lib/siteName";
 import { federatedLine, signupLine, type SignInOptions } from "./signInOptions";
+import { OWN_SERVER_SIGN_IN } from "@/app/lib/signInCodes";
+import type { SignupDecision } from "@/app/lib/lockdown";
 
 // The sign-in page's form. The page (page.tsx) reads the install's settings and passes what this
 // shows: whether the "another server" box is offered, and what can be said about new accounts.
@@ -15,10 +17,21 @@ import { federatedLine, signupLine, type SignInOptions } from "./signInOptions";
 // What the federated routes answer (and the callback sends back as ?error=) when the site's
 // sign-in policy does not admit the server (federatedSignInSwitch.ts).
 const SERVER_NOT_ENABLED = "Sign-in from this server isn't enabled on this site.";
+// An account on this site's own server typed into the "another server" box.
+const OWN_SERVER_LINE = "That is this server — sign in with the main button.";
 const CALLBACK_ERRORS: Record<string, string> = {
   federated_signin_disabled: SERVER_NOT_ENABLED,
+  [OWN_SERVER_SIGN_IN]: OWN_SERVER_LINE,
   server_mismatch: "That sign-in finished as an account on a different server. Try again with the account you entered.",
 };
+// What both callbacks send when a NEW account is refused (lib/lockdown.ts). They are about the site's
+// own sign-in, so they show under the main button whatever the federated setting; typed by the
+// gate's own reasons, so a new reason there fails the build here.
+const SIGNUP_REFUSED: Record<Extract<SignupDecision, { allowed: false }>["reason"], string> = {
+  signups_disabled: "New accounts are paused on this site right now.",
+  unavailable: "Sign-in is unavailable right now — try again in a few minutes.",
+};
+const isSignupRefusal = (code: string): code is keyof typeof SIGNUP_REFUSED => Object.hasOwn(SIGNUP_REFUSED, code);
 
 export default function SignInForm({ options }: { options: SignInOptions }) {
   const fedLine = federatedLine(options.federated);
@@ -28,9 +41,14 @@ export default function SignInForm({ options }: { options: SignInOptions }) {
   const [federatedError, setFederatedError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
 
-  // A federated sign-in that the callback refused comes back here as ?error=<code>.
+  // A sign-in that a callback refused comes back here as ?error=<code>.
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("error");
+    if (code && isSignupRefusal(code)) {
+      const refused = SIGNUP_REFUSED[code];
+      Promise.resolve().then(() => setSigninError(refused));
+      return;
+    }
     const msg = code ? CALLBACK_ERRORS[code] : undefined;
     if (msg) Promise.resolve().then(() => setFederatedError(msg));
   }, []);
@@ -82,6 +100,7 @@ export default function SignInForm({ options }: { options: SignInOptions }) {
       if (!discoverRes.ok) {
         const msgs: Record<string, string> = {
           federated_signin_disabled: SERVER_NOT_ENABLED,
+          [OWN_SERVER_SIGN_IN]: OWN_SERVER_LINE,
           no_oidc: "That server doesn't support OIDC login yet.",
           well_known_unreachable: "Couldn't reach that Matrix server.",
           well_known_failed: "That server's .well-known returned an error.",
@@ -120,7 +139,11 @@ export default function SignInForm({ options }: { options: SignInOptions }) {
       const initiated = await initiateRes.json();
 
       if (!initiateRes.ok) {
-        setFederatedError(initiated?.error === "federated_signin_disabled" ? SERVER_NOT_ENABLED : "Failed to start login with that server. Try again.");
+        setFederatedError(
+          initiated?.error === "federated_signin_disabled" ? SERVER_NOT_ENABLED
+            : initiated?.error === OWN_SERVER_SIGN_IN ? OWN_SERVER_LINE
+              : "Failed to start login with that server. Try again.",
+        );
         return;
       }
 

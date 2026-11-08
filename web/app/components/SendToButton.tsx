@@ -12,6 +12,8 @@ import PlatformIcon, { PLATFORM_COLORS } from "./PlatformIcon";
 import { ComposerPopover } from "./ComposerPopover";
 import { keepFocus } from "@/app/lib/keepFocus";
 import { useBotName } from "@/app/lib/useBotName";
+import { useImgFallback } from "@/app/lib/useImgFallback";
+import { LetterCircle } from "./Avatar";
 import type { BindingFace } from "@/app/lib/composerBinding";
 
 type SendToButtonProps = {
@@ -193,7 +195,9 @@ function destLabel(d: string | null): string {
  * second visual state anyone can get wrong.
  */
 export function SupportButton({ onLeave }: { onLeave: () => void }) {
-  const label = `Talking to ${useBotName("Help")} — click to go back to chat`;
+  const botName = useBotName("Help");
+  const label = `Talking to ${botName} — click to go back to chat`;
+  const { ok: picOk, ref: picRef, onError: onPicError } = useImgFallback();
   return (
     <button
       type="button"
@@ -209,13 +213,26 @@ export function SupportButton({ onLeave }: { onLeave: () => void }) {
       {/* The bot's pfp IS the signal — deliberately not a token. The PUBLIC avatar
           route, not the per-viewer one: this button renders for signed-out
           visitors too, and /api/avatar/user needs the VIEWER's Matrix token, so
-          it served everyone a letter circle. 404 here keeps the letter fallback. */}
-      <img
-        src="/api/avatar/public/bot"
-        alt="" aria-hidden
-        className="rounded-full object-cover"
-        style={{ width: "1.1em", height: "1.1em" }}
-      />
+          it served everyone a letter circle. A 404 (a bot with no picture) shows
+          the bot's letter in the shared letter circle. */}
+      {picOk ? (
+        <img
+          src="/api/avatar/public/bot"
+          alt="" aria-hidden
+          ref={picRef}
+          onError={onPicError}
+          className="rounded-full object-cover"
+          style={{ width: "1.1em", height: "1.1em" }}
+        />
+      ) : (
+        <LetterCircle
+          name={botName}
+          className="font-bold text-strong"
+          style={{ width: "1.1em", height: "1.1em" }}
+          // nested so the smaller letter doesn't shrink the em box basis
+          wrapLetter={(l) => <span className="text-[0.7em] leading-none">{l}</span>}
+        />
+      )}
     </button>
   );
 }

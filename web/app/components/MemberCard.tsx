@@ -1,12 +1,19 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Room, RoomMember } from "matrix-js-sdk";
+import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
+import { ShieldCheck } from "@phosphor-icons/react/dist/ssr";
 import { Avatar } from "@/app/components/Avatar";
 import PlatformIcon from "@/app/components/PlatformIcon";
 import { PresenceDot } from "@/app/components/PresenceDot";
-import { memberName as displayName } from "@/app/lib/matrixDisplay";
+import { memberName as displayName, memberAvatar } from "@/app/lib/matrixDisplay";
+import {
+  HISTORY_WINDOWS, banConfirmText, deleteConfirmText, deleteHistoryAfterBan, refusalOf,
+  type HistoryRunDeps, type HistoryWindow,
+} from "@/app/lib/banHistory";
+import { redactHistory, type RedactClient } from "@/app/lib/matrixRedactHistory";
 import { senderLabel } from "@/app/lib/discordSender";
 import { clampToViewport } from "@/app/lib/userCardLayout";
 import { useOutsideClick } from "@/app/lib/useOutsideClick";
@@ -16,6 +23,10 @@ import { deriveState, presenceLine } from "@/app/lib/presenceState";
 import { powerTier, canKick, canBan, isBannedIn, moderationSummary, type RoomOutcome, type SiteOutcome } from "@/app/lib/matrixModeration";
 import { moderateEverywhere, type ModAction } from "@/app/lib/matrixModerate";
 import { useSiteMod } from "@/app/lib/useSiteMod";
+import { TimeoutAction } from "@/app/components/TimeoutAction";
+import { findDmRoom, roomForSending, NOT_PRIVATE } from "@/app/lib/matrixDm";
+import { useMatrixClient } from "@/app/lib/MatrixClientContext";
+import { getDmRoomIds } from "@/app/lib/matrixRooms";
 
 // The one member card: opened from the members list AND from any
 // message row / reply quote. It also carries kick/ban/unban.
@@ -68,14 +79,85 @@ export function MemberCard({ member, room, x, y, side, color, canMessage, onMess
   // safe above the early return below.
   const isSiteMod = useSiteMod();
   const ghost = fromDiscord(member);
-  const mayKick = canKick(room, myUserId) && member.userId !== myUserId;
+  // A direct conversation is not moderated from its card (client polish Task 11, ruling 2): both
+  // members hold power there, so Kick/Ban would let either one throw the other out of a 1:1 (and
+  // a site mod's Ban would fan a site ban out from a DM row). Discord's DM profile offers Block,
+  // which the DM window has; site mods ban from the Community card or the mod tools. The DM test
+  // is Timeline's (matrixRooms.dmPartner): filed in m.direct, or a DM invite.
+  const inDm = getDmRoomIds(room.client).has(room.roomId) || !!room.getDMInviter();
+  const mayKick = !inDm && canKick(room, myUserId) && member.userId !== myUserId;
   const banned = isBannedIn(room, member.userId);
-  const mayBan = canBan(room, myUserId) && member.userId !== myUserId;
-  const [pending, setPending] = useState<ModAction | null>(null);
+  const mayBan = !inDm && canBan(room, myUserId) && member.userId !== myUserId;
+  // "history" = deleting the message history of someone already banned (the retry a ban made
+  // outside the community points at).
+  const [pending, setPending] = useState<ModAction | "history" | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string[] | null>(null);
+  // Ban's two message choices (banHistory.ts): the community history (default none, ADR 0116) and
+  // the site-chat purge every ban runs (ticket #228, on unless turned off for this one).
+  const [historyWindow, setHistoryWindow] = useState<HistoryWindow>("none");
+  const [sitePurge, setSitePurge] = useState(true);
+  const [progress, setProgress] = useState<string | null>(null);
+  const siteBanApplies = !ghost && isSiteMod;
+  // The card's real height, so it is placed wholly on screen: the Ban choices make it taller than
+  // a phone has room for below the row that opened it.
+  const [cardH, setCardH] = useState(240);
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setCardH(el.offsetHeight || 240));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
-  async function siteBan(action: ModAction): Promise<SiteOutcome> {
+  // Person-to-person verification: "Verify <name>" while they are not verified, a shield once they
+  // are. Only for someone with encryption set up (a request to anyone else is never answered), never
+  // for yourself or a bridged Discord member. The request goes in a direct conversation; when there
+  // is none, the card asks before one is opened. The prompt (UserVerificationPrompt) runs the emoji.
+  const { offerVerification } = useMatrixClient();
+  const [trust, setTrust] = useState<"verified" | "unverified" | null>(null);
+  const [askDm, setAskDm] = useState(false);
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const verifiable = member.userId !== myUserId && !ghost;
+  useEffect(() => {
+    const crypto = verifiable ? room.client.getCrypto?.() : undefined;
+    if (!crypto) return;
+    let live = true;
+    const read = async () => {
+      const has = await crypto.userHasCrossSigningKeys(member.userId, true).catch(() => false);
+      const verified = has && (await crypto.getUserVerificationStatus(member.userId).catch(() => null))?.isCrossSigningVerified();
+      if (live) setTrust(!has ? null : verified ? "verified" : "unverified");
+    };
+    const onTrust = (userId: string) => { if (userId === member.userId) void read(); };
+    void read();
+    room.client.on(CryptoEvent.UserTrustStatusChanged, onTrust);
+    return () => { live = false; room.client.off(CryptoEvent.UserTrustStatusChanged, onTrust); };
+  }, [verifiable, room.client, member.userId]);
+
+  async function verify() {
+    const crypto = room.client.getCrypto?.();
+    if (!crypto || verifyBusy) return;
+    setPending(null);
+    setVerifyError(null);
+    setVerifyBusy(true);
+    try {
+      // Members loaded first, so an existing conversation is found (and no needless question asked).
+      const existing = await findDmRoom(room.client, member.userId);
+      if (!existing && !askDm) { setAskDm(true); return; }
+      // The DM gate every line goes through: that room or a new one, private, checked right before use.
+      const dm = await roomForSending(room.client, member.userId, existing?.roomId);
+      offerVerification(await crypto.requestVerificationDM(member.userId, dm.roomId));
+      onClose();
+    } catch (e) {
+      setVerifyError(e instanceof Error && e.message === NOT_PRIVATE ? NOT_PRIVATE : "Couldn't start verification. Try again.");
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
+  /** The site half, and what a ban's own site-chat purge removed (null when it did not run). */
+  async function siteBan(action: ModAction): Promise<SiteOutcome & { purged?: number | null; batchId?: string | null }> {
     // A kick has no site half at all — checked FIRST, because a bridged
     // (Discord) member is always a ghost too, and checking ghost first made
     // kicking one print "No site ban — they have no account here.", which
@@ -90,9 +172,16 @@ export function MemberCard({ member, room, x, y, side, color, canMessage, onMess
       const res = await fetch("/api/mod/ban", {
         method: action === "ban" ? "POST" : "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ targetId: member.userId }),
+        body: JSON.stringify(action === "ban" ? { targetId: member.userId, purge: sitePurge } : { targetId: member.userId }),
       });
-      if (res.ok) return { attempted: true, ok: true };
+      if (res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { purged?: unknown; batchId?: unknown };
+        return {
+          attempted: true, ok: true,
+          purged: typeof d.purged === "number" ? d.purged : null,
+          batchId: typeof d.batchId === "string" ? d.batchId : null,
+        };
+      }
       const text = (await res.text().catch(() => "")).trim();
       return { attempted: true, ok: false, reason: text && text.length < 120 ? text : undefined };
     } catch {
@@ -100,16 +189,55 @@ export function MemberCard({ member, room, x, y, side, color, canMessage, onMess
     }
   }
 
-  async function run(action: ModAction) {
+  const scope = () => scopeRooms.map((r) => ({ roomId: r.roomId, name: r.name || r.roomId }));
+
+  // The community part of "Delete message history", in this card's own client and scope.
+  const historyDeps = (): HistoryRunDeps => ({
+    // The site's ceiling first: Matrix lets a power-50 mod redact anyone's lines, Staff and admins too.
+    check: async (targetId) => refusalOf(await fetch(`/api/mod/ban-history?targetId=${encodeURIComponent(targetId)}`).catch(() => null)),
+    redact: (since) => redactHistory(room.client as unknown as RedactClient, scope(), member.userId, since, undefined,
+      (done, total) => setProgress(`Removing messages… ${done}/${total}`)),
+    post: async (body) => {
+      const res = await fetch("/api/mod/ban-history", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      }).catch(() => null);
+      return !!res?.ok;
+    },
+  });
+
+  async function deleteHistory(window: HistoryWindow, siteRemoved: number | null, batchId: string | null): Promise<string | null> {
+    try {
+      return await deleteHistoryAfterBan(historyDeps(), { targetId: member.userId, window, now: Date.now(), siteRemoved, batchId });
+    } catch {
+      return "Community messages weren't removed — try again from their member card.";
+    } finally {
+      setProgress(null);
+    }
+  }
+
+  async function run(action: ModAction | "history") {
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setPending(null);
     try {
-      const scope = scopeRooms.map((r) => ({ roomId: r.roomId, name: r.name || r.roomId }));
-      const rooms: RoomOutcome[] = await moderateEverywhere(room.client, action, scope, member.userId);
+      if (action === "history") {
+        const line = await deleteHistory(historyWindow, null, null);
+        setResult(line ? [line] : null);
+        return;
+      }
+      const rooms: RoomOutcome[] = await moderateEverywhere(room.client, action, scope(), member.userId);
       const site = await siteBan(action);
-      setResult(moderationSummary(action, rooms, site));
+      const lines = moderationSummary(action, rooms, site);
+      setResult(lines);
+      // The ban first (no new lines while their history goes), then their community lines — only when
+      // the ban took effect: the site ban for a site account (its ceiling said yes), the room bans
+      // for a bridged member, who has no site half. A refused ban deletes nothing.
+      const tookEffect = site.attempted ? site.ok : rooms.some((r) => r.status !== "failed");
+      if (action === "ban" && historyWindow !== "none" && tookEffect) {
+        const line = await deleteHistory(historyWindow, site.ok ? site.purged ?? null : null, site.ok ? site.batchId ?? null : null);
+        if (line) setResult([...lines, line]);
+      }
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -124,20 +252,26 @@ export function MemberCard({ member, room, x, y, side, color, canMessage, onMess
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const left = clampToViewport(side === "left" ? x - W - 8 : x + 8, W, vw);
-  const top = Math.max(8, Math.min(y, vh - 240));
+  const top = Math.max(8, Math.min(y, vh - cardH - 8));
 
   return createPortal(
-    <div ref={cardRef} className="fixed z-(--z-menu) glass rounded-xl overflow-hidden p-3" style={{ left, top, width: W }}>
+    <div ref={cardRef} className="fixed z-(--z-menu) glass rounded-xl overflow-x-hidden overflow-y-auto overscroll-contain p-3"
+      style={{ left, top, width: W, maxHeight: "calc(100dvh - 16px)" }}>
       <div className="flex items-center gap-3">
         <div className="relative shrink-0">
-          <Avatar mxcUrl={member.getMxcAvatarUrl()} name={memberName(member)} size={44} />
+          <Avatar mxcUrl={memberAvatar(member)} name={memberName(member)} size="xl" />
           <span className="absolute -bottom-0.5 -right-0.5"><PresenceDot state={state} size={14} /></span>
         </div>
         <div className="min-w-0">
-          <p className="truncate text-shadow-chat" style={{ fontSize: "var(--text-chat-lg)", ...usernameStyle, color }}>
-            {memberName(member)}
+          {/* The name truncates on its own; the marks sit beside it, so a long name's ellipsis
+              never cuts them off. */}
+          <p className="flex items-baseline min-w-0 text-shadow-chat" style={{ fontSize: "var(--text-chat-lg)", ...usernameStyle, color }}>
+            <span className="truncate">{memberName(member)}</span>
             {fromDiscord(member) && (
-              <PlatformIcon platform="discord" size="0.85em" className="ml-1 inline-block align-baseline opacity-70" />
+              <PlatformIcon platform="discord" size="0.85em" className="ml-1 shrink-0 inline-block align-baseline opacity-70" />
+            )}
+            {trust === "verified" && (
+              <ShieldCheck aria-label="Verified" role="img" weight="fill" size="0.85em" className="ml-1 shrink-0 inline-block self-center text-green-400" />
             )}
           </p>
           <p className="truncate text-muted" style={{ fontSize: "var(--chat-ts-size, 0.72rem)" }}>{member.userId}</p>
@@ -166,11 +300,37 @@ export function MemberCard({ member, room, x, y, side, color, canMessage, onMess
             Message
           </button>
         )}
+        {trust === "unverified" && !askDm && (
+          <button type="button" disabled={verifyBusy} onClick={() => void verify()}
+            className="w-full text-sm px-3 py-1.5 rounded-md text-body-dim hover:bg-surface-2 transition-colors">
+            Verify {memberName(member)}
+          </button>
+        )}
+        {trust === "unverified" && askDm && (
+          <div className="rounded-md bg-surface-2 p-2 text-xs text-body-dim">
+            <p>Verifying opens a direct conversation with {memberName(member)}. Continue?</p>
+            <div className="mt-1.5 flex gap-1.5">
+              <button type="button" disabled={verifyBusy} onClick={() => void verify()}
+                className="flex-1 px-2 py-1 rounded-md text-on-accent font-semibold" style={{ backgroundColor: "var(--accent)" }}>
+                Continue
+              </button>
+              <button type="button" onClick={() => setAskDm(false)}
+                className="flex-1 px-2 py-1 rounded-md hover:bg-surface-3 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {verifyError && <p role="status" className="text-2xs text-red-300">{verifyError}</p>}
         <button type="button"
-          onClick={() => { setPending(null); void copyText(member.userId); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+          onClick={() => { setPending(null); setAskDm(false); void copyText(member.userId); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
           className="w-full text-sm px-3 py-1.5 rounded-md text-body-dim hover:bg-surface-2 transition-colors">
           {copied ? "Copied!" : "Copy user ID"}
         </button>
+        {/* The site's own timeout: a site mod's, whatever their power in this channel. */}
+        {isSiteMod && !ghost && member.userId !== myUserId && (
+          <TimeoutAction userId={member.userId} onOpen={() => setPending(null)} />
+        )}
         {(mayKick || mayBan) && (
           <>
             <div className="mt-1 pt-2 border-t border-edge" />
@@ -185,6 +345,28 @@ export function MemberCard({ member, room, x, y, side, color, canMessage, onMess
                 className="w-full text-sm px-3 py-1.5 rounded-md text-body-dim hover:bg-surface-2 transition-colors">
                 {pending === "kick" ? `Confirm kick from ${channels}?` : "Kick"}
               </button>
+            )}
+            {mayBan && !banned && pending === "ban" && (
+              <div className="flex flex-col gap-1 rounded-md bg-surface-2 p-2 text-2xs text-body-dim">
+                {/* A site moderator's tool: the site's ceiling decides whose history they may delete. */}
+                {isSiteMod && (
+                  <label className="flex flex-col gap-0.5">
+                    <span>Delete message history</span>
+                    <select aria-label="Delete message history" value={historyWindow}
+                      onChange={(e) => setHistoryWindow(e.target.value as HistoryWindow)}
+                      className="rounded-md bg-surface-1 border border-edge px-1.5 py-1 text-xs text-body outline-none">
+                      {HISTORY_WINDOWS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+                    </select>
+                  </label>
+                )}
+                {siteBanApplies && (
+                  <label className="flex items-center gap-1.5 select-none">
+                    <input type="checkbox" data-site-purge="" checked={sitePurge} onChange={(e) => setSitePurge(e.target.checked)} />
+                    Also remove their site chat from the last 24 hours
+                  </label>
+                )}
+                <p data-ban-confirm-text="">{banConfirmText(memberName(member), historyWindow, siteBanApplies && sitePurge)}</p>
+              </div>
             )}
             {mayBan && !banned && (
               <button type="button" disabled={busy}
@@ -209,6 +391,29 @@ export function MemberCard({ member, room, x, y, side, color, canMessage, onMess
                 {pending === "unban" ? `Confirm unban in ${channels}?` : "Unban"}
               </button>
             )}
+            {mayBan && banned && isSiteMod && pending === "history" && (
+              <div className="flex flex-col gap-1 rounded-md bg-surface-2 p-2 text-2xs text-body-dim">
+                <select aria-label="Delete message history" value={historyWindow}
+                  onChange={(e) => setHistoryWindow(e.target.value as HistoryWindow)}
+                  className="rounded-md bg-surface-1 border border-edge px-1.5 py-1 text-xs text-body outline-none">
+                  {HISTORY_WINDOWS.filter((w) => w.value !== "none").map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+                </select>
+                <p data-ban-confirm-text="">{deleteConfirmText(memberName(member), historyWindow === "7d" ? "7d" : "1h")}</p>
+              </div>
+            )}
+            {mayBan && banned && isSiteMod && (
+              <button type="button" disabled={busy}
+                onClick={() => {
+                  if (pending === "history") { void run("history"); return; }
+                  // Here the action IS the deletion: it opens on the shorter window.
+                  if (historyWindow === "none") setHistoryWindow("1h");
+                  setPending("history");
+                }}
+                className="w-full text-sm px-3 py-1.5 rounded-md text-red-300 hover:bg-red-500/15 transition-colors">
+                {pending === "history" ? "Confirm delete" : "Delete message history"}
+              </button>
+            )}
+            {progress && <p role="status" className="mt-1 text-2xs text-body-dim">{progress}</p>}
             {result && (
               <div role="status" className="mt-1 text-2xs text-body-dim space-y-0.5">
                 {result.map((line) => <p key={line}>{line}</p>)}

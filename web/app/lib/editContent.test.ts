@@ -122,7 +122,12 @@ for (const f of ["Timeline.tsx", "ThreadPanel.tsx"]) {
   test(`${f} imports the shared eventKey rather than redefining it`, () => {
     const s = read(f);
     assert.doesNotMatch(s, /const eventKey = \(ev: MatrixEvent\)/, "eventKey was redefined locally");
-    assert.match(s, /import \{ useRoomActions, eventKey \}/, "eventKey is no longer imported");
+    // Timeline's scroll engine lives in the shared room engine since client polish Task 11.
+    const owner = f === "Timeline.tsx" ? readFileSync(join(process.cwd(), "app", "lib", "useRoomTimeline.ts"), "utf8") : s;
+    if (f === "Timeline.tsx") assert.match(s, /useRoomTimeline\(client, room,/, "Timeline runs on the shared room engine");
+    assert.doesNotMatch(owner, /const eventKey = \(ev: MatrixEvent\)/, "eventKey was redefined in the engine");
+    // MATRIX_ROWS (the scroll engine's row selector, #240) travels with eventKey.
+    assert.match(owner, /import \{ (useRoomActions, )?eventKey(, MATRIX_ROWS)? \} from "(\.\/|@\/app\/lib\/)useRoomActions"/, "eventKey is no longer imported");
   });
 }
 

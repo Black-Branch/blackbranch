@@ -1,4 +1,4 @@
-import { getMatrixSession, RevokedSessionError } from "@/app/lib/matrixSession";
+import { getMatrixSession, endedSessionResponse } from "@/app/lib/matrixSession";
 import { homeserverFetch } from "@/app/lib/homeserverFetch";
 import { readJsonCapped } from "@/app/lib/boundedBody";
 // homeserverFetch, never a raw fetch: `mx.homeserver` is per-user stored state, so for an
@@ -22,9 +22,8 @@ export async function GET() {
     if (!data) return Response.json({ error: "homeserver_error" }, { status: 502 });
     return Response.json({ devices: data.devices ?? [], accountUrl: mx.accountUrl, homeserver: mx.homeserver });
   } catch (e) {
-    if (e instanceof RevokedSessionError) {
-      return Response.json({ error: "session_expired", reason: "revoked" }, { status: 401 });
-    }
+    const ended = endedSessionResponse(e);
+    if (ended) return ended;
     console.error("[matrix/devices]", e);
     return Response.json({ error: "server_error" }, { status: 500 });
   }

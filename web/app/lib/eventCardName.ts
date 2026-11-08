@@ -12,6 +12,7 @@
 //
 // Every other kind is the account's action, not a named gift, and keeps the live name
 // (a person who renames shows the new name on their old subs, like on their chat lines).
+import { persistedTipWearsAccount } from "./tipCardIdentity.ts";
 
 /** True for a card whose shown name is the one stored on the card. */
 function cardKeepsItsName(kind: string | null | undefined): boolean {
@@ -35,17 +36,43 @@ export function eventCardName(kind: string | null | undefined, stored: unknown, 
  *  card with none — an anonymous or guest tip, a platform alert) and its live name/look. */
 type CardRow = { matrix_id: string | null; username: string | null; username_color?: string | null; username_style?: unknown };
 
+/** What a tip card that wears no account reads back with: nulls, so an older card's stored
+ *  account id, colour and style (cards from before ADR 0145 carried them) are overwritten. */
+type CardActor = { matrixId?: string | null; donorMatrixId?: null; username?: string; usernameColor?: string | null; usernameStyle?: unknown };
+const PLAIN_ACTOR: CardActor = { matrixId: null, donorMatrixId: null, usernameColor: null, usernameStyle: null };
+
 /**
  * The identity fields a card read back from history wears. A card with an account
  * wears its live badges key, colour and style; its NAME follows eventCardName (a tip
- * keeps its own). A card with no account keeps everything its payload carries.
+ * keeps its own). A tip that does not wear its account (tipCardIdentity.ts — a typed
+ * name) reads back plain, though its row keeps the account for the money record.
+ * A card with no account keeps everything its payload carries.
+ * @test-only exported so eventCardName.test.ts can read the actor alone; the history route
+ * reaches it through historyCardFields.
  */
-export function liveCardActor(kind: string | null | undefined, card: Record<string, unknown>, r: CardRow) {
+export function liveCardActor(kind: string | null | undefined, card: Record<string, unknown>, r: CardRow): CardActor {
   if (r.matrix_id == null) return {};
+  if (kind === "donation" && !persistedTipWearsAccount(card, { matrixId: r.matrix_id, accountName: r.username ?? r.matrix_id })) {
+    return PLAIN_ACTOR;
+  }
   return {
     matrixId: r.matrix_id,
     username: eventCardName(kind, card.username, r.username),
     usernameColor: r.username_color ?? null,
     usernameStyle: r.username_style ?? null,
+  };
+}
+
+/**
+ * A persisted card as chat history returns it (the row is public): the stored payload, minus
+ * any canonical id a producer put in it unless the reader is a moderator, with the live identity
+ * on top. The route adds the row's own id, platform, reply and vote fields.
+ */
+export function historyCardFields(kind: string | null | undefined, card: Record<string, unknown>, r: CardRow, isMod: boolean): Record<string, unknown> {
+  const { canonicalId: storedCanonical, ...shown } = card;
+  return {
+    ...shown,
+    ...(isMod && typeof storedCanonical === "string" ? { canonicalId: storedCanonical } : {}),
+    ...liveCardActor(kind, card, r),
   };
 }

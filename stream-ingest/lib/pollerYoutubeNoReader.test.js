@@ -19,7 +19,7 @@ for (const k of ['TWITCH_OAUTH_TOKEN', 'TWITCH_REFRESH_TOKEN', 'TWITCH_BROADCAST
   'YOUTUBE_API_KEY', 'YOUTUBE_VIDEO_ID', 'KICK_CHANNEL_SLUG', 'KICK_CHANNEL', 'KICK_CLIENT_ID', 'KICK_CLIENT_SECRET', 'YT_INNERTUBE_VIEWERS']) delete process.env[k];
 process.env.TWITCH_TOKEN_STATE_PATH = '/nonexistent/twitch-token.json';
 
-const { startPoller, youtubeReading } = await import('./poller.js');
+const { startPoller, youtubeReading, youtubeObservation } = await import('./poller.js');
 
 const CH = 'UCcaseytestchannel00000';
 const VID = 'abcdefghijk';
@@ -59,6 +59,7 @@ test('no reader + YouTube chosen: the poller\'s own lookup opens the session, sn
       const body = init.body ? JSON.parse(init.body) : null;
       if (method === 'GET' && path === '/stream/current') { api.reads = (api.reads || 0) + 1; return json({ live: api.live, streamId: api.streamId }); }
       if (method === 'POST' && path === '/stream/start') { api.live = true; api.streamId = body.streamId; api.starts.push(body.streamId); return json({ ok: true }); }
+      if (method === 'POST' && path === '/stream/platforms') return json({ ok: true }); // the per-tick publish (pollerPublish.test.js)
       if (method === 'POST' && path === '/viewer-snapshot') { api.snapshots.push(body); return json({ ok: true }); }
       if (method === 'POST' && path === '/stream/end') { api.live = false; api.ends.push(body.streamId); return json({ ok: true }); }
     }
@@ -66,7 +67,7 @@ test('no reader + YouTube chosen: the poller\'s own lookup opens the session, sn
   };
   const realWarn = console.warn;
   console.warn = () => {};
-  const poller = startPoller({ getStreamplaceViewers: () => null, getStreamplaceState: () => null, getYtVideoId: () => null, ytWanted: () => true });
+  const poller = startPoller({ getStreamplaceViewers: () => null, getStreamplaceObservation: () => null, getYtVideoId: () => null, ytWanted: () => true });
   try {
     await until(() => api.snapshots.length >= 3, 'snapshots while YouTube is live');
     assert.equal(api.starts.length, 1);
@@ -88,11 +89,45 @@ test('no reader + YouTube chosen: the poller\'s own lookup opens the session, sn
   }
 });
 
-test('youtubeReading: the reader\'s id when one runs; nothing at all when YouTube is not chosen', async () => {
+// Task 4: the reader's state (platforms/youtube.js getLiveState: an Observation plus the verified
+// live id, '' unless live — the handle strips an ended or scheduled broadcast's id, pinned in
+// lib/ytWaitingRoom.test.js) is passed through as-is.
+const obs = (raw, o = {}) => ({ raw, certain: false, key: '', evidence: 'yt-reader', scheduledStart: null, videoId: '', ...o });
+
+test('youtubeReading: the reader\'s state, as-is, when one runs; nothing at all when YouTube is not chosen', async () => {
   const lookup = async () => { throw new Error('must not be asked'); };
-  assert.deepEqual(await youtubeReading({ watcher: VID, wanted: true, channelId: CH, lookup }), { raw: 'live', videoId: VID });
-  assert.deepEqual(await youtubeReading({ watcher: '', wanted: true, channelId: CH, lookup }), { raw: 'offline', videoId: '' });
+  for (const w of [
+    obs('live', { key: VID, videoId: VID, evidence: 'is-live' }),
+    // ADR 0133: an answered end is offline while the tail is read; Task 4: a certain one says so.
+    obs('offline', { certain: true, evidence: 'not-live' }),
+    obs('upcoming', { key: VID, evidence: 'upcoming', scheduledStart: Date.parse('2026-10-24T20:00:00Z') }),
+    obs('live', { evidence: 'held-by-chat', videoId: VID }),
+  ]) {
+    assert.deepEqual(await youtubeReading({ watcher: w, wanted: true, channelId: CH, lookup }), w, w.raw);
+  }
   assert.equal(await youtubeReading({ watcher: null, wanted: false, channelId: CH, lookup }), null, 'not chosen: no vote');
   assert.equal(await youtubeReading({ watcher: null, wanted: true, channelId: '', lookup }), null, 'no channel: no vote');
-  assert.deepEqual(await youtubeReading({ watcher: null, wanted: true, channelId: CH, lookup: async () => ({ state: 'unknown', videoId: '' }) }), { raw: 'unknown', videoId: '' });
+});
+
+test('re-pin: a reader reporting unknown yields unknown, never offline (it used to hand over \'\' → offline)', async () => {
+  const lookup = async () => { throw new Error('must not be asked'); };
+  const w = obs('unknown', { evidence: 'sticky-check-failed' });
+  const r = await youtubeReading({ watcher: w, wanted: true, channelId: CH, lookup });
+  assert.equal(r.raw, 'unknown');
+  assert.deepEqual(r, w);
+  // And through the observation the state model reads: still unknown, with the reader's reason.
+  assert.deepEqual(youtubeObservation(r, 'reader'), { raw: 'unknown', certain: false, key: '', evidence: 'sticky-check-failed', scheduledStart: null });
+});
+
+test('youtubeReading with no reader: the poller\'s own lookup, carried as an observation (certain, evidence, start), the id only while live', async () => {
+  const ans = (state, o = {}) => async () => ({ state, videoId: '', certain: false, evidence: 'channel-canonical', scheduledStart: null, ...o });
+  assert.deepEqual(await youtubeReading({ watcher: null, wanted: true, channelId: CH, lookup: ans('unknown', { evidence: 'no-player-response' }) }),
+    obs('unknown', { evidence: 'no-player-response' }), 'a failed lookup is unknown, never offline');
+  assert.deepEqual(await youtubeReading({ watcher: null, wanted: true, channelId: CH, lookup: ans('live', { videoId: VID, evidence: 'is-live' }) }),
+    obs('live', { key: VID, videoId: VID, evidence: 'is-live' }));
+  assert.deepEqual(await youtubeReading({ watcher: null, wanted: true, channelId: CH, lookup: ans('offline', { certain: true, evidence: 'not-live' }) }),
+    obs('offline', { certain: true, evidence: 'not-live' }));
+  const START = Date.parse('2026-10-24T20:00:00Z');
+  assert.deepEqual(await youtubeReading({ watcher: null, wanted: true, channelId: CH, lookup: ans('upcoming', { videoId: VID, evidence: 'upcoming', scheduledStart: START }) }),
+    obs('upcoming', { key: VID, evidence: 'upcoming', scheduledStart: START }), 'a scheduled broadcast\'s id never rides a snapshot');
 });

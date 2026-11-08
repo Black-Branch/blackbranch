@@ -76,5 +76,5 @@ test("every purge caller goes through the shared request type", () => {
     assert.ok(at > 0, `${rel} posts to the purge route`);
     assert.match(src.slice(at, at + 160), /purgeRequest\(/, `${rel} builds its body with purgeRequest()`);
   }
-  assert.match(route, /return Response\.json\(\{ ok: true, batchId, purged: items\.length \}\);\s*\}\s*$/, "vacuity anchor: the route was read to its end");
+  assert.match(route, /return Response\.json\(\{ ok: true, batchId, purged \}\);\s*\}\s*$/, "vacuity anchor: the route was read to its end");
 });

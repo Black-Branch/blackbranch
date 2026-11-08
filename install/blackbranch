@@ -17,6 +17,19 @@
 #                                      to repeat); --recreate: replace a recorded room that is gone
 #   blackbranch matrix ensure          check the community rooms are in place and make what is
 #                                      missing (every start and every boot run it)
+#   blackbranch community token-check  whether the community service account's registration is as
+#                                      rendered and its token answers as the account
+#   blackbranch community reconcile [--mode report|adopt|apply]
+#                                      the community's rooms against the Admin Panel. report (the
+#                                      default): what would change, nothing changed (exit 0 either way;
+#                                      what it found is its last line and in the run log); adopt: rooms
+#                                      made outside the panel go into it; apply: the rooms made to
+#                                      match (the timer runs it every 10 minutes). Exit 75: another
+#                                      run or an update is going
+#   blackbranch community on|off       whether the server keeps the rooms as the Admin Panel sets
+#                                      them (COMMUNITY_RECONCILER); restarts the site with it
+#   blackbranch discord on|off         switch the Discord bridge on (its bot token is pasted on the Admin
+#                                      Panel's Discord page first) or off; brings the bundle to that state
 #   blackbranch federation [on|off]    show or switch federation (re-renders, restarts Synapse)
 #   blackbranch setup-link [--new]     print the setup link again while no admin exists (--new:
 #                                      a fresh token; the old link stops working)
@@ -50,9 +63,14 @@
 #   blackbranch alerts check|test      check: the daily check (low disk, certificates, a backup gone
 #                                      quiet) that alerts on a problem; test: send a test alert. The
 #                                      channel is BB_ALERT_NTFY_URL and/or BB_ALERT_EMAIL_COMMAND in
-#                                      .env; with neither, alerts are logged only
+#                                      .env, else the site's alerts topic (Admin Panel → Site → Site,
+#                                      card Alerts to your phone); with none, alerts are logged only
 #   blackbranch install-files          put the release's host files in place (the installer's step)
-#   blackbranch user                   not in this release yet
+#   blackbranch mail test <address>    send one test message through the mail server (MAIL_SMTP_* in
+#                                      .env, or Admin Panel → Site → Site, card Mail); the doctor shows the answer
+#   blackbranch user admin <name> on|off   make an account an admin, or remove one (never the last;
+#                                      a mod-log row). How the site gets an admin back when nobody can
+#                                      sign in as one. <name>: a username here or @user:server
 #
 # Everything an install is lives in $BB_HOME (default /opt/blackbranch): .env (the one place for
 # its values and secrets, mode 600), compose.yaml, releases/<release>/ (each release's source; the
@@ -87,6 +105,31 @@ SETUP_TOKEN_FILE="$STATE/setup-token"
 FEDERATION_PORT=8448
 SYNAPSE_UID=991
 MAS_UID=65532
+# The community service account's registration, beside homeserver.yaml in rendered/synapse/.
+COMMUNITY_REGISTRATION=appservice-community.yaml
+# The Discord bridge's registration: Synapse's copy beside homeserver.yaml, the bridge's own (with its
+# bot token) in rendered/ooye/, for the uid its image runs as (node). Its accounts for the site's
+# reconciler feed: results/$BRIDGE_ACCOUNTS_RESULT.
+OOYE_REGISTRATION=appservice-ooye.yaml
+OOYE_UID=1000
+# Where the bridge's first process says what it is doing, inside its container (install/ooye/entrypoint.js).
+OOYE_STATE_FILE=/tmp/bridge-state
+BRIDGE_ACCOUNTS_RESULT=discord-bridge.json
+# What the bridge has linked, for the panel's Discord page (install/ooye/links.js, run in the bridge).
+# The answers to its two requests are results/discord-links.json, so the data has a name of its own.
+DISCORD_LINKS_RESULT=discord-bridge-links.json
+DISCORD_GUILD_RE='^[0-9]{17,20}$'
+# The panel's link calls answer under one name; a room id as Matrix writes one (v12: no server part).
+DISCORD_CALL_RESULT=discord-call
+MX_ROOM_ID_RE='^![A-Za-z0-9._~+/=:-]{1,255}$'
+# The panel's Discord reads (install/ooye/discord-read.js, run in the bridge: the bot token stays there),
+# each answered under its own name; the data goes to results/ under these names.
+DISCORD_BOT_RESULT=discord-bot-info.json
+DISCORD_GUILD_RESULT=discord-guild.json
+# The Bot step's token, dropped by the site beside its requests; a Discord bot token is three
+# base64url parts with dots between.
+DISCORD_TOKEN_DROP=discord-token.value
+DISCORD_TOKEN_RE='^[A-Za-z0-9_-]{20,40}[.][A-Za-z0-9_-]{4,10}[.][A-Za-z0-9_-]{20,80}$'
 
 # The homeserver generator (install/matrix/render.sh): beside this script in a checkout, in the
 # installed release on a box.
@@ -95,13 +138,15 @@ MATRIX_LIB="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/matrix/render.sh"
 # The settings that apply only at a restart (generated from the schema; `help` and `status` read it).
 RESTART_SETTINGS="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/restart-settings.tsv"
 [ -f "$RESTART_SETTINGS" ] || RESTART_SETTINGS="$BB_HOME/release/install/restart-settings.tsv"
+# The settings schema (a default the host needs is read from it, never repeated here).
+INSTANCE_SCHEMA="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../config/instance-schema.mjs"
+[ -f "$INSTANCE_SCHEMA" ] || INSTANCE_SCHEMA="$BB_HOME/release/config/instance-schema.mjs"
 # shellcheck source-path=SCRIPTDIR source=matrix/render.sh
 . "$MATRIX_LIB"
 
 say()  { printf '\033[1m==\033[0m %s\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
 die()  { printf '\033[31mblackbranch: %s\033[0m\n' "$*" >&2; exit 1; }
-not_yet() { printf 'blackbranch %s: not in this release yet.\n' "$1" >&2; exit 3; }
 
 need_root() {
   if [ "$(id -u)" != 0 ] && [ ! -w "$BB_HOME" ]; then die "run as root (sudo blackbranch $*)"; fi
@@ -225,6 +270,7 @@ docker_step() {
 }
 images_present() {
   local i
+  if discord_on; then docker image inspect "blackbranch/ooye:$(release_tag)" >/dev/null 2>&1 || return 1; fi
   for i in "${APP_IMAGES[@]}"; do
     if [ "$i" = web ] && ! web_from_source; then continue; fi
     docker image inspect "blackbranch/$i:$(release_tag)" >/dev/null 2>&1 || return 1
@@ -245,16 +291,39 @@ build_images() {
     docker_step "the site's image could not be fetched" compose pull -q web
     say "Building the images of release $(release_tag) from its source (first time: a few minutes)"
   fi
+  # The Discord bridge's image only where it runs (built from OOYE's pinned upstream source).
+  if discord_on; then targets+=(ooye); fi
   docker_step "the images of release $(release_tag) did not build" compose --profile backup build "${targets[@]}"
   rstamp_set images "$want"
 }
 
 # ── render: the ONE routing table ───────────────────────────────────────────────────────────
 render_caddyfile() {
-  local domain mode email global scheme="" cfip routes
+  local domain mode email global scheme="" cfip routes site
   domain=$(env_get BB_DOMAIN); mode=$(env_get BB_TLS_MODE); email=$(env_get BB_ACME_EMAIL)
   [ -n "$domain" ] || die ".env has no BB_DOMAIN"
   routes=$(matrix_inputs && mx_caddy_routes) || { echo "cannot render the homeserver routes" >&2; return 1; }
+  site=$'\timport upstream web:3000'
+  # The Discord bridge's page under the site's own host, while it is switched on: the block spike 0.2
+  # ran over public HTTPS (vault briefs/community-1023/spikes.md §0.2), with the site in its last handle.
+  if discord_on; then
+    site=$(cat <<'EOF'
+	# OOYE's pages link relatively; at /bridge (no slash) they would resolve against the site root.
+	redir /bridge /bridge/ 308
+	handle_path /bridge/* {
+		reverse_proxy ooye:6693 {
+			# Four OOYE responses redirect to a root-absolute path ("/guild?…", "/ok?…", HX-Redirect "/")
+			# and would land on the site. Put the prefix back on them.
+			header_down Location "^/" "/bridge/"
+			header_down HX-Redirect "^/" "/bridge/"
+		}
+	}
+	handle {
+		import upstream web:3000
+	}
+EOF
+)
+  fi
   case "$mode" in
     tunnel)
       # cloudflared hands caddy plain HTTP; TLS ended at Cloudflare. Only cloudflared's own
@@ -290,7 +359,7 @@ $global
 
 # The site, and the Matrix discovery files it serves itself (/.well-known/matrix/*).
 $scheme$domain {
-	import upstream web:3000
+$site
 }
 
 # The platform API and its WebSocket.
@@ -336,6 +405,18 @@ config_set() { # config_set <key> <json value> — with its history row, like th
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now();" \
     "COMMIT;" \
     | compose exec -T postgres psql -U postgres -d stream -q -v ON_ERROR_STOP=1 -v k="$1" -v v="$2" >/dev/null
+  config_reload "$1"
+}
+# stream-api re-reads its settings only after its own writes: a write by SQL here is asked for
+# (POST /config/reload on the secret, from inside its container), so the Admin Panel shows it at once.
+# A stream-api that is not running reads them when it starts; a call that fails is a warning only.
+CONFIG_RELOAD_JS='fetch("http://127.0.0.1:3001/config/reload",{method:"POST",headers:{authorization:"Bearer "+(process.env.STREAM_API_SECRET||""),"content-type":"application/json"},body:JSON.stringify({keys:process.argv.slice(1)}),signal:AbortSignal.timeout(15000)}).then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))'
+config_reload() { # config_reload <key>...
+  case "$(service_health stream-api)" in healthy|running|starting|unhealthy) ;; *) return 0 ;; esac
+  if ! compose exec -T stream-api node -e "$CONFIG_RELOAD_JS" "$@" >/dev/null 2>&1; then
+    printf '   ⚠ stream-api did not re-read the settings: the Admin Panel shows the old value until it restarts (sudo blackbranch restart stream-api)\n' >&2
+  fi
+  return 0
 }
 
 # The federation switch: instance config `matrix.federation`, written by the Admin Panel
@@ -350,6 +431,23 @@ federation_state() { # federation_state [ro] — ro: never record what it read (
     s=$(stamp_get federation)
   fi
   echo "${s:-off}"
+}
+
+# The retention cap (community.retentionCapDays: whole days, 0 = no limit), set on the Admin Panel's
+# Channels card. Read from the database when it runs; otherwise the cap the last render saw; unset
+# (or never read) = the schema's default. The homeserver's retention block is rendered from it, so a
+# change applies at the next render — every `up` and every start of the box.
+retention_cap_state() { # retention_cap_state [ro] — ro: never record what it read (the doctor writes nothing)
+  local v s=""
+  if postgres_up && v=$(config_get community.retentionCapDays 2>/dev/null); then
+    if [[ "$v" =~ ^(0|[1-9][0-9]{0,3})$ ]] && [ "$v" -le 3650 ]; then s="$v"; fi
+    [ -n "$s" ] || s=$(mx_retention_cap_default "$INSTANCE_SCHEMA") || return 1
+    [ "${1:-}" = ro ] || stamp_set retention-cap "$s" || true
+  else
+    s=$(stamp_get retention-cap)
+    [[ "$s" =~ ^(0|[1-9][0-9]{0,3})$ ]] || s=$(mx_retention_cap_default "$INSTANCE_SCHEMA") || return 1
+  fi
+  echo "$s"
 }
 
 # The generator's inputs, from .env alone (+ the federation switch). Sets MX_* for render.sh.
@@ -383,24 +481,139 @@ matrix_secrets() {
   MX_ENCRYPTION_SECRET=$(env_get MAS_ENCRYPTION_SECRET)
   MX_MAS_KEYS_FILE="$BB_HOME/matrix/mas-keys.yaml"
   MX_TRUSTED_PROXIES=$(env_get BB_SUBNET); MX_TRUSTED_PROXIES="${MX_TRUSTED_PROXIES:-172.29.83.0/24}"
+  # The community service account: an appservice registration beside homeserver.yaml (/config),
+  # none while its name is a person's (community_name_check).
+  MX_COMMUNITY_LOCALPART=""; MX_COMMUNITY_AS_TOKEN=""; MX_COMMUNITY_HS_TOKEN=""; MX_COMMUNITY_REGISTRATION=""
+  if community_registered; then
+    MX_COMMUNITY_LOCALPART=$(community_localpart)
+    MX_COMMUNITY_AS_TOKEN=$(env_get COMMUNITY_AS_TOKEN); MX_COMMUNITY_HS_TOKEN=$(env_get COMMUNITY_HS_TOKEN)
+    MX_COMMUNITY_REGISTRATION="/config/$COMMUNITY_REGISTRATION"
+  fi
+  # The Discord bridge's registration, while it is switched on (render.sh mx_render_appservice_ooye).
+  MX_OOYE_REGISTRATION=""; MX_OOYE_AS_TOKEN=""; MX_OOYE_HS_TOKEN=""; MX_OOYE_BRIDGE_ORIGIN=""; MX_OOYE_DISCORD_TOKEN=""; MX_OOYE_CLIENT_SECRET=""
+  if discord_on; then
+    MX_OOYE_REGISTRATION="/config/$OOYE_REGISTRATION"
+    MX_OOYE_AS_TOKEN=$(env_get OOYE_AS_TOKEN); MX_OOYE_HS_TOKEN=$(env_get OOYE_HS_TOKEN)
+    MX_OOYE_BRIDGE_ORIGIN="$(env_get SITE_ORIGIN)/bridge"
+    MX_OOYE_DISCORD_TOKEN=$(env_get DISCORD_BOT_TOKEN); MX_OOYE_CLIENT_SECRET=$(env_get DISCORD_CLIENT_SECRET)
+  fi
 }
 image_of() { grep -m1 -oE "$1:[^ \"]+" "$BB_HOME/compose.yaml"; }
 
-# Every file rendered in full into caddy_txt hs_txt log_txt mas_txt (the caller declares them
+# ── settings the host renders into the sign-in service (mail, sign-in providers) ─────────────
+# Each is read inside the stream-api image like the backup target (install/matrix/host-settings.cjs:
+# secrets decrypted with stream-api's own key), as KEY=value lines the render reads. The last lines
+# read are kept root-only, so a render with the database down keeps what it had.
+# host_lines <reader> <test hook var> → 0 lines, 1 the database is not running, 2 the settings cannot be read
+host_lines() {
+  local hook="$2"
+  if [ -n "${!hook:-}" ]; then cat "${!hook}"; return; fi   # test hook
+  postgres_up || return 1
+  compose run --rm --no-deps -T -v "$BB_HOME/release/install/matrix:/bb-matrix:ro" \
+    --entrypoint node stream-api "/bb-matrix/$1" 2> >(grep -v '^ *Container ' >&2) || return 2
+}
+# host_state <reader> <cache> <words> <test hook var> "<NAMES…>" [ro] [strict] — sets each of NAMES from
+# the reader's lines. Settings that cannot be read keep the last ones read (a render goes on with what
+# it had, and says so); strict refuses instead.
+host_state() {
+  local script="$1" cache="$2" words="$3" hook="$4" names=" $5 " lines="" rc=0 line k v from=settings a ro=0 strict=0
+  shift 5
+  for a in "$@"; do case "$a" in ro) ro=1 ;; strict) strict=1 ;; esac; done
+  for k in $names; do printf -v "$k" '%s' ""; done
+  lines=$(host_lines "$script" "$hook") || rc=$?
+  if [ "$rc" = 2 ]; then
+    echo "the $words cannot be read (see above)" >&2
+    [ "$strict" = 0 ] || return 1
+    echo "keeping the $words read last" >&2
+  fi
+  if [ "$rc" != 0 ]; then from=cache; lines=$(cat "$cache" 2>/dev/null || true); fi
+  while IFS= read -r line; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$names" in *" $k "*) printf -v "$k" '%s' "$v" ;; esac
+  done <<< "$lines"
+  # Kept only when it changed; a write that fails (a full disk) leaves the last copy and no half file.
+  if [ "$from" = settings ] && [ "$ro" = 0 ] && [ -z "${!hook:-}" ] && [ "$(cat "$cache" 2>/dev/null || true)" != "$lines" ]; then
+    mkdir -p "$STATE"
+    { ( umask 077; printf '%s\n' "$lines" > "$cache.new" ) && mv -f "$cache.new" "$cache"; } 2>/dev/null || rm -f "$cache.new"
+  fi
+}
+
+# Outgoing mail (optional): the mail.* settings (Admin Panel → Site → Site, card Mail, or MAIL_* in .env)
+# as the render's MX_SMTP_* lines (install/matrix/mail.cjs). Unset host = no mail (MAS's mail is dropped).
+MAIL_CACHE="$STATE/mail.env"
+MAIL_TEST_LAST="mail-test.json"
+# mail_state [ro] [strict] — sets MX_SMTP_HOST MX_SMTP_PORT MX_SMTP_MODE MX_SMTP_USERNAME MX_SMTP_PASSWORD
+# MX_MAIL_FROM_SET; strict (`mail test`) refuses settings that cannot be read.
+mail_state() {
+  host_state mail.cjs "$MAIL_CACHE" "mail settings" BB_MAIL_LINES_FILE \
+    "MX_SMTP_HOST MX_SMTP_PORT MX_SMTP_MODE MX_SMTP_USERNAME MX_SMTP_PASSWORD MX_MAIL_FROM_SET" "$@"
+}
+
+# Sign-in providers (optional, ADR 0154): the signin.* settings (Admin Panel → Site → Site,
+# card Sign-in providers, or SIGNIN_* in .env) as the render's MX_SIGNIN_* lines (install/matrix/signin.cjs).
+SIGNIN_CACHE="$STATE/signin.env"
+signin_vars() {
+  local s f
+  for s in $MX_SIGNIN_SLOTS; do
+    for f in ON ID UUID CLIENT_ID CLIENT_SECRET; do printf 'MX_SIGNIN_%s_%s ' "$s" "$f"; done
+  done
+  printf 'MX_SIGNIN_OIDC_ISSUER MX_SIGNIN_OIDC_NAME'
+}
+# signin_state [ro] — sets every MX_SIGNIN_* the render reads.
+signin_state() { host_state signin.cjs "$SIGNIN_CACHE" "sign-in providers" BB_SIGNIN_LINES_FILE "$(signin_vars)" "$@"; }
+# `blackbranch mail test <address>`: one message through the mail server, recorded for the doctor
+# (results/mail-test.json: when, whether it was sent, the fixed code — no address, no password).
+cmd_mail() {
+  need_root mail; need_install
+  [ "${1:-}" = test ] && [ "$#" -eq 2 ] || die "usage: blackbranch mail test <address>"
+  [[ "$2" =~ ^[A-Za-z0-9._%+=-]{1,64}@[A-Za-z0-9.-]{1,253}$ ]] || die "not an address: $2"
+  mail_state strict || die "the mail settings could not be read"
+  [ -n "$MX_SMTP_HOST" ] || die "no mail server is set (Admin Panel → Site → Site, card Mail, or MAIL_SMTP_HOST in .env)"
+  local code rc=0 sender
+  sender="${MX_MAIL_FROM_SET:-noreply@$(env_get BB_DOMAIN)}"
+  # The settings travel in the environment (-e NAME, no value on the command line).
+  code=$(MX_SMTP_HOST="$MX_SMTP_HOST" MX_SMTP_PORT="$MX_SMTP_PORT" MX_SMTP_MODE="$MX_SMTP_MODE" MX_SMTP_USERNAME="$MX_SMTP_USERNAME" \
+         MX_SMTP_PASSWORD="$MX_SMTP_PASSWORD" MX_MAIL_FROM="$sender" \
+         compose run --rm --no-deps -T -v "$BB_HOME/release/install/matrix:/bb-matrix:ro" \
+           -e MX_SMTP_HOST -e MX_SMTP_PORT -e MX_SMTP_MODE -e MX_SMTP_USERNAME -e MX_SMTP_PASSWORD -e MX_MAIL_FROM \
+           --entrypoint node stream-api /bb-matrix/mail-send.cjs "$2" 2> >(grep -v '^ *Container ' >&2)) || rc=$?
+  code=$(printf '%s' "$code" | tail -n 1 | tr -cd 'a-z_' | cut -c1-40); code="${code:-protocol_error}"
+  printf '{"v":1,"at":"%s","ok":%s,"code":"%s"}\n' "$(now_utc)" "$([ "$rc" = 0 ] && [ "$code" = sent ] && echo true || echo false)" "$code" \
+    | results_put "$MAIL_TEST_LAST"
+  if [ "$rc" = 0 ] && [ "$code" = sent ]; then info "a test message was sent to $2 (check its inbox, and its spam folder)"
+  else die "the test message was not sent: $code"; fi
+}
+
+# Every file rendered in full into caddy_txt hs_txt log_txt mas_txt as_txt ooye_txt ooye_as_txt (the caller declares them
 # local); nothing is written. Shared by `render` and the doctor's "matches a fresh render" check.
 render_all() { # render_all [ro]
   BB_FEDERATION=$(federation_state "${1:-}")
   caddy_txt=$(render_caddyfile) || { echo "the router config did not render" >&2; return 1; }
   matrix_inputs || { echo "cannot render the homeserver config" >&2; return 1; }
   matrix_secrets
+  mail_state "${1:-}" || { echo "the mail settings could not be read" >&2; return 1; }
+  signin_state "${1:-}" || { echo "the sign-in providers could not be read" >&2; return 1; }
+  MX_RETENTION_CAP_DAYS=$(retention_cap_state "${1:-}") || { echo "the retention cap could not be read" >&2; return 1; }
+  # The service account's name is refused here whether or not it is registered this time.
+  [[ "$(community_localpart)" =~ ^[a-z0-9._=-]{1,64}$ ]] || { echo "COMMUNITY_LOCALPART must be a Matrix user name: 1-64 of a-z 0-9 . _ = -" >&2; return 1; }
   hs_txt=$(mx_render_homeserver) || { echo "Synapse's config did not render" >&2; return 1; }
   log_txt=$(mx_render_log_config)
   mas_txt=$(mx_render_mas) || { echo "MAS's config did not render" >&2; return 1; }
+  as_txt=""
+  if [ -n "$MX_COMMUNITY_REGISTRATION" ]; then
+    as_txt=$(mx_render_appservice_community) || { echo "the community service account's registration did not render" >&2; return 1; }
+  fi
+  ooye_txt=""; ooye_as_txt=""
+  if [ -n "$MX_OOYE_REGISTRATION" ]; then
+    if ! ooye_txt=$(mx_render_appservice_ooye) || ! ooye_as_txt=$(mx_render_appservice_ooye synapse); then
+      echo "the Discord bridge's registration did not render" >&2; return 1
+    fi
+  fi
 }
 
 cmd_render() {
   need_root render; need_install
-  local r hs log mas caddy_txt hs_txt log_txt mas_txt
+  local r hs log mas as oo ooas caddy_txt hs_txt log_txt mas_txt as_txt ooye_txt ooye_as_txt
   # --check: render everything and write nothing (an update tries the next release's templates
   # against the migrated .env before the site goes down).
   if [ "${1:-}" = --check ]; then render_all ro || die "the config does not render (see above)"; info "renders"; return 0; fi
@@ -410,6 +623,8 @@ cmd_render() {
       || die "could not generate MAS's signing keys"
     info "generated MAS's signing keys (matrix/mas-keys.yaml)"
   fi
+  # Whether the community service account's name is still nobody's, before anything renders it.
+  community_name_check
   # Every file is rendered in full before any is written: a failed render replaces nothing.
   render_all || die "nothing was rendered (see the message above)"
 
@@ -429,6 +644,40 @@ cmd_render() {
   # The homeserver: each file holding a secret is readable only by the user its service runs as.
   private_dir "$BB_HOME/rendered/synapse" "$SYNAPSE_UID"
   private_dir "$BB_HOME/rendered/mas" "$MAS_UID"
+  # Before homeserver.yaml, which names it: Synapse never starts on a list naming a missing file.
+  if [ -n "$as_txt" ]; then
+    as=$(printf '%s\n' "$as_txt" | write_if_changed "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION" 600 "$SYNAPSE_UID") \
+      || die "could not write rendered/synapse/$COMMUNITY_REGISTRATION (see above)"
+  elif [ -e "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION" ]; then
+    # Its name is a person's: the registration goes (homeserver.yaml below stops listing it).
+    rm -f "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION"; as=removed
+  else as=unchanged; fi
+  info "rendered/synapse/$COMMUNITY_REGISTRATION: $as"
+  # The Discord bridge: its own copy (the bot token in it) readable by its uid alone, Synapse's copy
+  # beside homeserver.yaml. Switched off, both go (homeserver.yaml below stops listing it).
+  if [ -n "$ooye_txt" ]; then
+    private_dir "$BB_HOME/rendered/ooye" "$OOYE_UID"
+    oo=$(printf '%s\n' "$ooye_txt" | write_if_changed "$BB_HOME/rendered/ooye/registration.yaml" 600 "$OOYE_UID") \
+      || die "could not write rendered/ooye/registration.yaml (see above)"
+    ooas=$(printf '%s\n' "$ooye_as_txt" | write_if_changed "$BB_HOME/rendered/synapse/$OOYE_REGISTRATION" 600 "$SYNAPSE_UID") \
+      || die "could not write rendered/synapse/$OOYE_REGISTRATION (see above)"
+  else
+    oo=unchanged; ooas=unchanged
+    if [ -e "$BB_HOME/rendered/ooye/registration.yaml" ]; then rm -f "$BB_HOME/rendered/ooye/registration.yaml"; oo=removed; fi
+    if [ -e "$BB_HOME/rendered/synapse/$OOYE_REGISTRATION" ]; then rm -f "$BB_HOME/rendered/synapse/$OOYE_REGISTRATION"; ooas=removed; fi
+  fi
+  info "rendered/ooye/registration.yaml: $oo · rendered/synapse/$OOYE_REGISTRATION: $ooas"
+  # The bridge's accounts for the site's reconciler feed (its bot, and its user namespace copied from
+  # the registration), only while the registration is rendered. No results folder: skipped.
+  if [ -d "$BB_HOME/results" ]; then
+    if [ -n "$ooye_txt" ]; then
+      printf '{"v":1,"bot":"%s","userPatterns":["%s"]}\n' "$(mx_ooye_sender)" "$(mx_json_bs "$(mx_ooye_user_regex)")" \
+        | (results_put "$BRIDGE_ACCOUNTS_RESULT") || info "could not record the Discord bridge's accounts for the site (results/$BRIDGE_ACCOUNTS_RESULT)"
+    else
+      # Off: no accounts and no links for the site to read (the bridge's own database keeps its links).
+      rm -f "$BB_HOME/results/$BRIDGE_ACCOUNTS_RESULT" "$BB_HOME/results/$DISCORD_LINKS_RESULT"
+    fi
+  fi
   hs=$(printf '%s\n' "$hs_txt" | write_if_changed "$BB_HOME/rendered/synapse/homeserver.yaml" 600 "$SYNAPSE_UID") \
     || die "could not write rendered/synapse/homeserver.yaml (see above)"
   log=$(printf '%s\n' "$log_txt" | write_if_changed "$BB_HOME/rendered/synapse/log.config" 644 "$SYNAPSE_UID") \
@@ -436,11 +685,20 @@ cmd_render() {
   mas=$(printf '%s\n' "$mas_txt" | write_if_changed "$BB_HOME/rendered/mas/config.yaml" 600 "$MAS_UID") \
     || die "could not write rendered/mas/config.yaml (see above)"
   info "rendered/synapse/homeserver.yaml: $hs (federation $BB_FEDERATION) · log.config: $log · rendered/mas/config.yaml: $mas"
+  # The cap this render gave the homeserver, for the site (the privacy page states what the server
+  # applies, not a saved change it has not taken yet). No results folder (the site cannot read one
+  # then): skipped, never a failed render.
+  if [ -d "$BB_HOME/results" ]; then
+    printf '{"v":1,"capDays":%s,"at":"%s"}\n' "$MX_RETENTION_CAP_DAYS" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      | (results_put retention-cap.json) || info "could not record the retention cap for the site (results/retention-cap.json)"
+  fi
   if [ "$mas" = written ] && [ "$(service_health mas)" = running ]; then compose restart mas >/dev/null 2>&1 && info "mas restarted"; fi
-  if [ "$hs$log" != unchangedunchanged ] && [ -n "$(compose ps -q synapse 2>/dev/null)" ]; then
+  if [ "$hs$log$as$ooas" != unchangedunchangedunchangedunchanged ] && [ -n "$(compose ps -q synapse 2>/dev/null)" ]; then
     compose restart synapse >/dev/null 2>&1 && info "synapse restarted"
     wait_healthy 180 synapse || die "synapse did not come back healthy after the new config — blackbranch logs synapse"
   fi
+  # The bridge reads its file when it starts (a waiting bridge picks a new one up by itself).
+  if [ "$oo" = written ] && [ "$(service_health ooye)" != missing ]; then compose restart ooye >/dev/null 2>&1 && info "the Discord bridge restarted"; fi
   backup_timers || die "could not write the timers (see above)"
 }
 
@@ -466,7 +724,13 @@ wait_mas() {
 expected_services() {
   printf '%s\n' "${LONG_RUNNING[@]}"
   [ "$(env_get BB_TLS_MODE)" = tunnel ] && echo cloudflared
+  discord_on && echo ooye
   return 0
+}
+# The Discord bridge runs when .env's COMPOSE_PROFILES names `discord` (Compose reads the same line).
+discord_on() { # discord_on [env file]
+  local p; p=$(if [ -n "${1:-}" ]; then env_file_get "$1" COMPOSE_PROFILES; else env_get COMPOSE_PROFILES; fi)
+  [[ ",${p// /}," == *,discord,* ]]
 }
 service_health() { # → healthy | running | starting | unhealthy | exited | missing
   local id state health
@@ -506,7 +770,7 @@ stuck_reason() {
 # out of time. Callers put it in their message, so a failure names the service.
 HEALTH_PROBLEM=""
 wait_healthy() { # wait_healthy <seconds> <service>... (BB_HEALTH_WAIT caps the seconds — a test's short wait)
-  local deadline=$(( $(date +%s) + ${BB_HEALTH_WAIT:-$1} )) s h pending why id readers=""
+  local deadline=$(( $(date +%s) + ${BB_HEALTH_WAIT:-$1} )) s h pending why id readers="" bridge=""
   local -A base=()
   shift; HEALTH_PROBLEM=""
   while :; do
@@ -517,6 +781,9 @@ wait_healthy() { # wait_healthy <seconds> <service>... (BB_HEALTH_WAIT caps the 
       # reader that did not start is said (here, in status, and by the doctor's ingest.readers row)
       # but never holds up `up` or fails an update. The process running is what is waited for.
       if [ "$s" = stream-ingest ] && [ "$h" = unhealthy ]; then readers=1; continue; fi
+      # The Discord bridge answers only once Discord lets it in: its process running is enough
+      # (it waits and retries by itself; the doctor's discord.bridge row says why it does not answer).
+      if [ "$s" = ooye ] && { [ "$h" = unhealthy ] || [ "$h" = starting ]; }; then bridge=1; continue; fi
       case "$h" in healthy|running) ;; *)
         pending+=("$s:$h")
         if [ -z "${base[$s]+x}" ]; then
@@ -529,7 +796,8 @@ wait_healthy() { # wait_healthy <seconds> <service>... (BB_HEALTH_WAIT caps the 
       esac
     done
     if [ "${#pending[@]}" -eq 0 ]; then
-      [ -n "$readers" ] && printf '   stream-ingest runs, but a chat reader did not start — blackbranch doctor names it (Admin Panel → Stream shows the reason)\n' >&2
+      [ -n "$readers" ] && printf '   stream-ingest runs, but a chat reader did not start — blackbranch doctor names it and says why (Admin Panel → Doctor too)\n' >&2
+      [ -n "$bridge" ] && printf '   the Discord bridge runs, but does not answer yet — blackbranch doctor says why (blackbranch logs ooye)\n' >&2
       return 0
     fi
     [ "$(date +%s)" -ge "$deadline" ] && { HEALTH_PROBLEM="${pending[*]}"; printf '   not healthy: %s\n' "$HEALTH_PROBLEM" >&2; return 1; }
@@ -576,6 +844,8 @@ cmd_up() {
   info "synapse healthy; MAS answers"
   # The Forums tab's reader, before the site starts (it reads the sign-in from its environment).
   reader_ensure || true
+  # The community service account's name and picture (it exists from its registration alone).
+  community_service_ensure || true
   say "Starting stream-api and stream-ingest"
   docker_step "stream-api or stream-ingest failed to start (blackbranch logs stream-api)" compose up -d stream-api stream-ingest
   wait_healthy 180 stream-api || die "stream-api did not become healthy"
@@ -591,6 +861,7 @@ cmd_up() {
   # The community rooms, at every start (a restore's start may replace one that is gone). Never
   # fails the start: the site is up; a missing room is said, with the command that makes it.
   matrix_ensure "$UP_AFTER" || true
+  if community_reconciler_on; then community_reconcile_start apply >/dev/null || true; fi
 }
 
 cmd_migrate() {
@@ -626,6 +897,8 @@ cmd_status() {
     h=$(service_health "$s")
     if [ "$s" = stream-ingest ] && [ "$h" = unhealthy ]; then
       printf '  %-15s %s\n' "$s" "running, but a chat reader did not start — blackbranch doctor names it"
+    elif [ "$s" = ooye ] && [ "$h" = unhealthy ]; then
+      printf '  %-15s %s\n' "$s" "running, but Discord or the homeserver has not let it in — blackbranch logs ooye"
     else printf '  %-15s %s\n' "$s" "$h"; fi
     case "$h" in healthy|running) ;; *) rc=1 ;; esac
   done < <(expected_services)
@@ -808,9 +1081,9 @@ cmd_process_requests() {
     # root's own records in results/ (update-last.json, backup-last.json, …), update or not.
     if update_running; then
       case "$name" in
-        update-check|doctor|backup-key|recovery-sheet|site-icons) ;;
-        restart-*|render|matrix-bootstrap|apply-install|backup|backup-test|update-v*)
-           case "$name" in update-v*) out=update ;; esac
+        update-check|doctor|backup-key|recovery-sheet|site-icons|discord-links|discord-bot|discord-read-*) ;;
+        restart-*|render|matrix-bootstrap|apply-install|backup|backup-test|community-reconcile|community-report|update-v*|discord-guild-*|discord-link-*|discord-unlink-*|discord-privacy-*|discord-token)
+           case "$name" in update-v*) out=update ;; discord-guild-*) out=discord-links ;; discord-link-*|discord-unlink-*|discord-privacy-*) out=$DISCORD_CALL_RESULT ;; discord-token) rm -f -- "$dir/$DISCORD_TOKEN_DROP" ;; esac
            request_answer "$res" "$out" "$name" "$name" false "an update is running; try again when it has finished"; continue ;;
         *) echo "blackbranch: refused an unknown request ($name)" >&2; continue ;;
       esac
@@ -825,7 +1098,31 @@ cmd_process_requests() {
       render) verb=render; if msg=$(cmd_render 2>&1); then ok=true; fi ;;
       # The setup pages: the community step, and the last step's display values.
       matrix-bootstrap) verb="matrix bootstrap"; if msg=$(matrix_bootstrap 2>&1); then ok=true; fi ;;
+      # The Admin Panel after a change to its channels or roles: a run in its own unit, answered at once.
+      community-reconcile) verb="community reconcile"; if msg=$(community_reconcile_start apply 2>&1); then ok=true; fi ;;
+      # The Admin Panel's Check now: a report run (reads, changes nothing), in its own unit, answered at once.
+      community-report) verb="community report"; if msg=$(community_reconcile_start report 2>&1); then ok=true; fi ;;
       apply-install) verb=apply-install; if msg=$(cmd_apply_install 2>&1); then ok=true; fi ;;
+      # The panel's Discord page: what the bridge has linked, read into results/ (read only).
+      discord-links) verb="discord links"; if msg=$(discord_links dump 2>&1); then ok=true; fi ;;
+      # Its Link the server button: the Discord server id is in the request's NAME, checked here.
+      discord-guild-*)
+        out=discord-links; verb="discord server"
+        if [[ "${name#discord-guild-}" =~ $DISCORD_GUILD_RE ]]; then if msg=$(discord_links activate "${name#discord-guild-}" 2>&1); then ok=true; fi
+        else msg="a Discord server id is 17 to 20 digits"; fi ;;
+      # Its link and unlink buttons: the ids are in the request's NAME, the rooms come from the site's
+      # rows; the bridge's own answer is the message (link.js's JSON line).
+      discord-link-*|discord-unlink-*|discord-privacy-*)
+        out=$DISCORD_CALL_RESULT; verb="discord call"
+        if msg=$(discord_request "$name" 2>&1); then ok=true; fi ;;
+      # The Bot step: who the bot is and the servers it is in; the token the site dropped, into .env.
+      discord-bot) verb="discord bot"; if msg=$(discord_read bot 2>&1); then ok=true; fi ;;
+      discord-token) verb="discord token"; if msg=$(discord_token 2>&1); then ok=true; fi ;;
+      # The Import step: one Discord server read whole (its id in the request's NAME, checked here).
+      discord-read-*)
+        out=discord-read; verb="discord read"
+        if [[ "${name#discord-read-}" =~ $DISCORD_GUILD_RE ]]; then if msg=$(discord_read guild "${name#discord-read-}" 2>&1); then ok=true; fi
+        else msg="a Discord server id is 17 to 20 digits"; fi ;;
       recovery-sheet) verb="recovery sheet"; if msg=$(recovery_sheet 2>&1); then ok=true; fi ;;
       # The setup pages' icon upload (W2): the site drops the PNGs, the host checks and installs them.
       site-icons) verb="site icons"; if msg=$(site_icons 2>&1); then ok=true; fi ;;
@@ -1134,7 +1431,7 @@ BIN_DIR="${BB_BIN_DIR:-/usr/local/bin}"
 BUNDLE_HOME_FILES=(compose.yaml compose.public.yaml compose.lab.yaml)
 BUNDLE_UNITS=(blackbranch-requests.path blackbranch-requests.service blackbranch-backup.service blackbranch-verify.service
   blackbranch-update.service blackbranch-update@.service blackbranch-reconcile.service blackbranch-matrix.service
-  blackbranch-check.service blackbranch-check.timer)
+  blackbranch-check.service blackbranch-check.timer blackbranch-community@.service blackbranch-community.timer)
 put_file() { # put_file <src> <dest> <mode> — replaced by a rename (a running copy keeps the old one); prints dest when changed
   if [ -f "$2" ] && cmp -s "$1" "$2"; then return 0; fi
   install -m "$3" "$1" "$2.new.$$" && mv -f "$2.new.$$" "$2" && printf '%s\n' "$2"
@@ -1159,6 +1456,7 @@ install_files() { # install_files <release dir> → the files that changed, one 
   done
   # The daily check (low disk, certificates, a backup gone quiet): enabled and started.
   systemctl is-enabled -q blackbranch-check.timer 2>/dev/null || systemctl enable -q --now blackbranch-check.timer || true
+  community_timer_sync || true
   return 0
 }
 cmd_install_files() { need_root install-files; need_install; install_files "$BB_HOME/release"; }
@@ -1198,7 +1496,7 @@ cmd_matrix() {
 room_id_ok() { [[ "$1" =~ ^![A-Za-z0-9._~=/+:-]+$ ]]; }
 matrix_bootstrap() {
   need_root matrix; need_install
-  local as="" domain owner localpart device token out hub general forum stored_hub stored_general space_name
+  local as="" domain owner localpart device token out hub general forum stored_hub stored_general space_name service=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --as) as="${2:?--as needs an account name}"; shift 2 ;;
@@ -1235,10 +1533,14 @@ matrix_bootstrap() {
   space_name=$(printf '%s\n' "SELECT value #>> '{install,SITE_NAME}' FROM site.instance_config WHERE key = 'setup.state';" \
     | compose exec -T postgres psql -U postgres -d stream -qAt -v ON_ERROR_STOP=1 2>/dev/null || true)
   space_name="${space_name:-$(env_get SITE_NAME)}"
+  # The community service account (when its name is this install's): invited into the three rooms
+  # and granted 100 there, so the reconciler can read and keep them (its first run joins).
+  if community_registered; then service=$(community_user_id); fi
   out=$(printf '%s\n' "$token" | compose run --rm --no-deps -T \
           -v "$BB_HOME/release/install/matrix:/bb-matrix:ro" \
           -e MX_BASE=http://synapse:8008 -e MX_SERVER_NAME="$domain" -e MX_SPACE_NAME="$space_name" \
           -e MX_STORED_HUB="$stored_hub" -e MX_STORED_GENERAL="$stored_general" -e MX_RECREATE="${BB_RECREATE:-0}" \
+          -e MX_COMMUNITY_USER="$service" \
           --entrypoint node stream-api /bb-matrix/bootstrap.mjs) || die "the bootstrap did not finish (nothing it made is lost; run it again)"
   hub=$(printf '%s' "$out" | grep -oE '"hub":"[^"]+"' | cut -d'"' -f4)
   general=$(printf '%s' "$out" | grep -oE '"general":"[^"]+"' | cut -d'"' -f4)
@@ -1309,6 +1611,451 @@ reader_join_forum() {
     -d '{}' "http://localhost:8008/_matrix/client/v3/join/%23forum%3A$(env_get BB_DOMAIN)" >/dev/null 2>&1
 }
 
+# ── the community service account ─────────────────────────────────────────────────────────────
+# The install's own account for running the community's rooms: an application service registration
+# (render.sh mx_render_appservice_community, rendered/synapse/$COMMUNITY_REGISTRATION) whose two
+# tokens live in .env. The registration alone makes the account exist — never register it — and MAS
+# refuses its name to anyone signing up. `up` gives it the site's name and icon; the job reads first
+# and writes only what differs. The token travels on stdin, never on a command line.
+community_localpart() { local l; l=$(env_get COMMUNITY_LOCALPART); printf '%s' "${l:-blackbranch}"; }
+community_user_id() { printf '@%s:%s' "$(community_localpart)" "$(env_get BB_DOMAIN)"; }
+# A PERSON may already hold the name on an upgraded install (made through MAS before this release):
+# an exclusive namespace over their id would let the token act as them. The registration is rendered
+# only while the name is nobody's: no MAS account, and no Synapse user that is not the app service.
+# → taken | free | unknown (the database is not running) | error (it runs, but an answer could not be
+# read). Each probe must answer exactly t/f, each count digits: anything else is an error, never "free".
+# A table that does not exist yet (MAS or Synapse never started: a new install) holds nobody.
+community_name_state() {
+  local lp n db
+  postgres_up || { echo unknown; return 0; }
+  lp=$(community_localpart)
+  for db in mas synapse; do
+    n=$(printf '%s\n' "SELECT to_regclass('public.users') IS NOT NULL;" \
+      | compose exec -T postgres psql -U postgres -d "$db" -qAt -v ON_ERROR_STOP=1 2>/dev/null) || n=""
+    case "$n" in t) ;; f) continue ;; *) echo error; return 0 ;; esac
+    if [ "$db" = mas ]; then
+      n=$(printf '%s\n' "SELECT count(*) FROM users WHERE username = :'u';" \
+        | compose exec -T postgres psql -U postgres -d mas -qAt -v ON_ERROR_STOP=1 -v u="$lp" 2>/dev/null) || n=""
+    else
+      n=$(printf '%s\n' "SELECT count(*) FROM users WHERE appservice_id IS NULL AND name = :'n';" \
+        | compose exec -T postgres psql -U postgres -d synapse -qAt -v ON_ERROR_STOP=1 -v n="@$lp:$(env_get BB_DOMAIN)" 2>/dev/null) || n=""
+    fi
+    [[ "$n" =~ ^[0-9]+$ ]] || { echo error; return 0; }
+    if [ "$n" -gt 0 ]; then echo taken; return 0; fi
+  done
+  echo free
+}
+COMMUNITY_TAKEN_WORDS="Someone already uses the name @%s on this server, so the community has no account of its own. Set COMMUNITY_LOCALPART in the install's .env to a name nobody uses on this server, then run: sudo blackbranch up"
+# The last answer for the name in use, from state/community-name ("taken <name>" or "free <name>")
+# → taken | free | none (never answered for this name).
+community_name_record() {
+  case "$(stamp_get community-name)" in
+    "taken $(community_localpart)") echo taken; return 0 ;;
+    "free $(community_localpart)") echo free; return 0 ;;
+  esac
+  # The first form of the record (state/community-name-taken, holding the name) until a render rewrites it.
+  if [ "$(stamp_get community-name-taken)" = "$(community_localpart)" ]; then echo taken; else echo none; fi
+}
+COMMUNITY_UNCHECKED_WORDS="could not check whether the name @%s is free, so nothing is registered for it. Run sudo blackbranch up again once the database answers"
+# Every render asks first and records the answer. A database that is down, or an answer that cannot
+# be read, keeps the last answer: taken stays taken. A name never answered for is not registered
+# until the database answers (a new box answers at its first start: the database runs before it).
+community_name_check() {
+  local lp old; lp=$(community_localpart)
+  old=$(stamp_get community-name-taken)
+  if [ -n "$old" ] && stamp_set community-name "taken $old"; then rm -f "$STATE/community-name-taken"; fi
+  case "$(community_name_state)" in
+    taken) stamp_set community-name "taken $lp" || true ;;
+    free) stamp_set community-name "free $lp" || true ;;
+  esac
+  # shellcheck disable=SC2059 # the words are this script's own format
+  case "$(community_name_record)" in
+    taken) printf "   ⚠ community service account: $COMMUNITY_TAKEN_WORDS\n" "$lp" >&2 ;;
+    none) printf "   ⚠ community service account: $COMMUNITY_UNCHECKED_WORDS.\n" "$lp" >&2 ;;
+  esac
+}
+# Whether the registration may be rendered: the record's answer for this name. None recorded → asked
+# now, the same way (so a render and the doctor's fresh-render comparison agree); only "free" is yes.
+community_registered() {
+  case "$(community_name_record)" in
+    taken) return 1 ;;
+    free) return 0 ;;
+  esac
+  [ "$(community_name_state)" = free ]
+}
+# The name checked at all: a record for it, or a live answer → true | false.
+community_name_checked() {
+  if [ "$(community_name_record)" != none ]; then echo true; return 0; fi
+  case "$(community_name_state)" in taken|free) echo true ;; *) echo false ;; esac
+}
+# The site's 512 px icon, from the folder the site uses (web siteIcons.ts): site-files/ (setup's icons,
+# /site-files), another folder of the release's web/public, or the product's own set (/brand) when
+# unset or unusable. Nothing when the file is not there.
+community_icon_dir() {
+  local set dir
+  set=$(env_get SITE_ICON_SET); set="${set%/}"
+  if [ -z "$set" ] || ! [[ "$set" =~ ^/[A-Za-z0-9/_-]*$ ]] || [[ "$set" == *//* ]]; then set=/brand; fi
+  case "$set" in
+    /site-files) dir="$BB_HOME/site-files" ;;
+    *) dir="$BB_HOME/release/web/public$set" ;;
+  esac
+  if [ -f "$dir/icon-512.png" ]; then printf '%s' "$dir"; fi
+}
+community_service_ensure() { # → 1 when the account could not be checked (said, with the command)
+  local tok id dir out rc=0 line stamp why args=()
+  community_registered || return 1   # its name is a person's: said by the render (community_name_check)
+  tok=$(env_get COMMUNITY_AS_TOKEN)
+  if [ -z "$tok" ] || [ ! -f "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION" ]; then
+    printf '   ⚠ community service account: not registered yet. Run: sudo blackbranch render, then sudo blackbranch up\n' >&2; return 1
+  fi
+  id=$(community_user_id)
+  dir=$(community_icon_dir)
+  if [ -n "$dir" ]; then
+    args+=(-v "$dir:/bb-icon:ro" -e MX_AVATAR=/bb-icon/icon-512.png)
+    stamp=$(stamp_get community-service-avatar)
+    if [ -n "$stamp" ]; then args+=(-e "MX_AVATAR_STAMP=$stamp"); fi
+  fi
+  out=$(printf '%s\n' "$tok" | compose run --rm --no-deps -T \
+          -v "$BB_HOME/release/install/matrix:/bb-matrix:ro" \
+          -e MX_BASE=http://synapse:8008 -e MX_USER_ID="$id" -e MX_DISPLAY_NAME="$(env_get SITE_NAME)" "${args[@]}" \
+          --entrypoint node stream-api /bb-matrix/community-service.mjs 2>&1) || rc=$?
+  line=$({ printf '%s\n' "$out" | grep -E '^\{"user":' | tail -n 1; } || true)
+  if [ "$rc" != 0 ] || [ -z "$line" ]; then
+    why=$({ printf '%s\n' "$out" | grep -E '^community: ' | tail -n 1 | sed 's/^community: //'; } || true)
+    printf '   ⚠ community service account: %s. Run: sudo blackbranch community token-check\n' "${why:-the check did not finish}" >&2
+    return 1
+  fi
+  stamp=$({ printf '%s\n' "$line" | grep -oE '"avatarStamp":"[0-9a-f]{64} mxc://[A-Za-z0-9.:-]+/[A-Za-z0-9_-]+"' | cut -d'"' -f4; } || true)
+  if [ -n "$stamp" ]; then stamp_set community-service-avatar "$stamp" || true; fi
+  local name avatar said=""
+  name=$({ printf '%s\n' "$line" | grep -oE '"name":"[a-z]+"' | cut -d'"' -f4; } || true)
+  avatar=$({ printf '%s\n' "$line" | grep -oE '"avatar":"[a-z]+"' | cut -d'"' -f4; } || true)
+  if [ -z "$(stamp_get community-service)" ]; then stamp_set community-service made || true; said=1; fi
+  if [ -n "$said" ] || [ "$name" = set ] || [ "$avatar" = set ] || [ "$avatar" = failed ]; then
+    info "community service account: $id ready (name $name, picture $(case "$avatar" in none) echo "none: no icon" ;; failed) echo "not set: the icon was refused" ;; *) echo "$avatar" ;; esac))"
+  fi
+}
+# whoami with the account's token, asked inside Synapse's container → ok | wrong | refused | unreachable
+community_whoami() {
+  local t body
+  t=$(env_get COMMUNITY_AS_TOKEN); [ -n "$t" ] || { echo refused; return 0; }
+  body=$(printf 'Authorization: Bearer %s\n' "$t" \
+    | compose exec -T synapse curl -sS -m 10 -H @- http://localhost:8008/_matrix/client/v3/account/whoami 2>/dev/null) || { echo unreachable; return 0; }
+  body=$(printf '%s' "$body" | tr -d ' \n')
+  case "$body" in
+    *"\"user_id\":\"$(community_user_id)\""*) echo ok ;;
+    *'"user_id":'*) echo wrong ;;
+    *) echo refused ;;
+  esac
+}
+# The registration file against a fresh render → match | differs | missing | unknown (no render).
+community_registration_state() {
+  local caddy_txt hs_txt log_txt mas_txt as_txt ooye_txt ooye_as_txt
+  [ -f "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION" ] || { echo missing; return 0; }
+  render_all ro >/dev/null 2>&1 || { echo unknown; return 0; }
+  if printf '%s\n' "$as_txt" | cmp -s - "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION"; then echo match; else echo differs; fi
+}
+community_token_check() {
+  local reg who ok=0 name
+  name=$(community_name_state)
+  if [ "$name" != taken ] && [ "$name" != free ] && [ "$(community_name_record)" = none ]; then
+    # shellcheck disable=SC2059 # the words are this script's own format
+    info "$(printf "name: $COMMUNITY_UNCHECKED_WORDS" "$(community_localpart)")"
+    return 1
+  fi
+  if [ "$name" = taken ] || ! community_registered; then
+    info "name: someone already uses @$(community_localpart) on this server, so nothing is registered for it. Set COMMUNITY_LOCALPART in the install's .env to a name nobody uses, then run sudo blackbranch up"
+    return 1
+  fi
+  reg=$(community_registration_state)
+  case "$reg" in
+    match) info "registration: as rendered (rendered/synapse/$COMMUNITY_REGISTRATION)" ;;
+    differs) info "registration: differs from a fresh render. Run sudo blackbranch render"; ok=1 ;;
+    missing) info "registration: missing. Run sudo blackbranch render"; ok=1 ;;
+    *) info "registration: .env does not render (sudo blackbranch render says why)"; ok=1 ;;
+  esac
+  who=$(community_whoami)
+  case "$who" in
+    ok) info "token: answers as $(community_user_id)" ;;
+    wrong) info "token: answers as another account. Run sudo blackbranch render, then sudo blackbranch restart synapse"; ok=1 ;;
+    refused) info "token: refused by the homeserver. Run sudo blackbranch render, then sudo blackbranch restart synapse"; ok=1 ;;
+    *) info "token: the homeserver did not answer (sudo blackbranch status)"; ok=1 ;;
+  esac
+  return "$ok"
+}
+# ── the Discord bridge's links (the panel's Discord page) ─────────────────────────────────────
+# The panel links rooms through the bridge's own API; what is linked lives in the bridge's database,
+# which only its container can open. `dump` copies that to results/ for the page; `activate <id>`
+# first marks the Discord server as one the bridge may link, the one row its API cannot make
+# without Discord's add-the-bot sign-in (install/ooye/links.js says which).
+discord_bridge_up() { # → 0 when the bridge's container runs (its database is there, Discord or not)
+  if ! discord_on; then rm -f "$BB_HOME/results/$DISCORD_LINKS_RESULT"; echo "the Discord bridge is switched off"; return 1; fi
+  case "$(service_health ooye)" in
+    healthy|running|starting|unhealthy) ;;
+    *) echo "the Discord bridge is not running (sudo blackbranch up starts it)"; return 1 ;;
+  esac
+}
+discord_links() { # discord_links dump | activate <discord server id>
+  local out
+  if [ "${1:-}" = activate ] && ! [[ "${2:-}" =~ $DISCORD_GUILD_RE ]]; then echo "a Discord server id is 17 to 20 digits"; return 1; fi
+  discord_bridge_up || return 1
+  if ! out=$(compose exec -T ooye node --no-warnings /opt/blackbranch-ooye/links.js "$@" 2>&1); then
+    echo "the bridge could not read its links: $(printf '%s' "$out" | tail -n 1 | head -c 300)"; return 1
+  fi
+  out=$(printf '%s' "$out" | head -n 1)
+  [[ "$out" == '{"v":1,'* ]] || { echo "the bridge answered something other than its links"; return 1; }
+  printf '%s\n' "$out" | (results_put "$DISCORD_LINKS_RESULT") || { echo "could not write results/$DISCORD_LINKS_RESULT"; return 1; }
+  if [ "$1" = activate ]; then echo "the bridge may link Discord server $2"; else echo "links read"; fi
+}
+# The panel's link calls. The bridge's API answers only a page session sealed with its as_token, which
+# stays in the bridge's container: install/ooye/link.js seals one there and makes the call. Every id
+# here is checked; the rooms come from the site's own rows, never from the request.
+discord_hub_room() { # → the community's main space, from the site's rows (else the room setup recorded)
+  local r
+  r=$(printf '%s\n' "SELECT matrix_room_id FROM site.community_spaces WHERE kind = 'hub' AND matrix_room_id IS NOT NULL ORDER BY id LIMIT 1" \
+    | compose exec -T postgres psql -U postgres -d stream -qAt -v ON_ERROR_STOP=1 2>/dev/null | head -n 1) || r=""
+  [ -n "$r" ] || r=$(config_get matrix.rooms.hub 2>/dev/null || true)
+  if [[ "$r" =~ $MX_ROOM_ID_RE ]]; then printf '%s' "$r"; fi
+}
+discord_channel_room() { # discord_channel_room <channel> → the room of the one row marked for it, if that row may be linked
+  local r
+  r=$(printf '%s\n' "SELECT matrix_room_id FROM site.community_rooms WHERE discord_channel_id = :'c' AND see_rule = 'everyone' AND post_rule = 'everyone' AND NOT archived AND NOT encrypted AND matrix_room_id IS NOT NULL" \
+    | compose exec -T postgres psql -U postgres -d stream -qAt -v ON_ERROR_STOP=1 -v c="$1" 2>/dev/null | head -n 1) || r=""
+  if [[ "$r" =~ $MX_ROOM_ID_RE ]]; then printf '%s' "$r"; fi
+}
+discord_call() { # discord_call <action> <ids…> → the bridge's answer as link.js's JSON line, last; the links read again after
+  local out
+  discord_bridge_up || return 1
+  if ! out=$(compose exec -T ooye node --no-warnings /opt/blackbranch-ooye/link.js "$1" "$(community_user_id)" "${@:2}" 2>&1); then
+    echo "the bridge call could not be made: $(printf '%s' "$out" | tail -n 1 | head -c 300)"; return 1
+  fi
+  out=$(printf '%s' "$out" | tail -n 1)
+  [[ "$out" == '{"ok":'* ]] || { echo "the bridge call answered something else"; return 1; }
+  discord_links dump >/dev/null 2>&1 || true
+  printf '%s\n' "$out"
+}
+discord_request() { # discord_request <request name> → the call it names, its ids checked
+  local n="$1" g c room
+  case "$n" in
+    discord-link-space-*) g="${n#discord-link-space-}"
+      [[ "$g" =~ $DISCORD_GUILD_RE ]] || { echo "a Discord server id is 17 to 20 digits"; return 1; }
+      room=$(discord_hub_room); [ -n "$room" ] || { echo "the community has no main space yet"; return 1; }
+      discord_call link-space "$g" "$room" ;;
+    discord-privacy-*) g="${n#discord-privacy-}"
+      [[ "$g" =~ $DISCORD_GUILD_RE ]] || { echo "a Discord server id is 17 to 20 digits"; return 1; }
+      discord_call privacy "$g" ;;
+    discord-unlink-space-*) g="${n#discord-unlink-space-}"
+      [[ "$g" =~ $DISCORD_GUILD_RE ]] || { echo "a Discord server id is 17 to 20 digits"; return 1; }
+      discord_call unlink-space "$g" ;;
+    discord-link-*|discord-unlink-*)
+      [[ "${n#discord-*link-}" =~ ^([0-9]{17,20})-([0-9]{17,20})$ ]] || { echo "a Discord server and channel id are 17 to 20 digits each"; return 1; }
+      g="${BASH_REMATCH[1]}"; c="${BASH_REMATCH[2]}"
+      if [[ "$n" == discord-unlink-* ]]; then discord_call unlink "$g" "$c"; return; fi
+      room=$(discord_channel_room "$c")
+      [ -n "$room" ] || { echo "no room the panel may link is marked for that channel"; return 1; }
+      discord_call link "$g" "$room" "$c" ;;
+    *) echo "not a Discord call"; return 1 ;;
+  esac
+}
+# The panel's reads of Discord itself: who the bot is (`bot`), one server whole (`guild <id>`). Run in
+# the bridge (install/ooye/discord-read.js), where the bot token already is; GET only. The line goes
+# to results/ either way (a refusal says why on the page); the request is ok only when Discord answered.
+discord_read() { # discord_read bot | guild <discord server id>
+  local out file
+  case "${1:-}" in
+    bot) file=$DISCORD_BOT_RESULT; [ $# = 1 ] || { echo "not a Discord read"; return 1; } ;;
+    guild) [ $# = 2 ] && [[ "$2" =~ $DISCORD_GUILD_RE ]] || { echo "a Discord server id is 17 to 20 digits"; return 1; }; file=$DISCORD_GUILD_RESULT ;;
+    *) echo "not a Discord read"; return 1 ;;
+  esac
+  discord_bridge_up || return 1
+  if ! out=$(compose exec -T ooye node --no-warnings /opt/blackbranch-ooye/discord-read.js "$@" 2>&1); then
+    echo "the bridge could not read Discord: $(printf '%s' "$out" | tail -n 1 | head -c 300)"; return 1
+  fi
+  out=$(printf '%s' "$out" | tail -n 1)
+  [[ "$out" == '{"v":1,"ok":'* ]] || { echo "the bridge answered something other than Discord's answer"; return 1; }
+  printf '%s\n' "$out" | (results_put "$file") || { echo "could not write results/$file"; return 1; }
+  case "$out" in
+    '{"v":1,"ok":true'*) echo "read" ;;
+    *) echo "Discord did not give it: $(jfield "$out" error)"; return 1 ;;
+  esac
+}
+# The Bot step's token. The site drops it beside its requests and asks for `discord-token`; nothing
+# there is trusted. It is MOVED into root's own folder before anything reads it (a rename never follows
+# a link, so a link planted in its place moves as itself and is refused), read once (at most 200 bytes),
+# checked for a bot token's shape, and removed. The site keeps no copy; the bridge reads it from .env.
+discord_token() {
+  local drop="$BB_HOME/requests/$DISCORD_TOKEN_DROP" held tok
+  mkdir -p "$STATE"
+  held=$(mktemp "$STATE/discord-token.XXXXXX") || { rm -f -- "$drop"; echo "could not take the token (is the disk full?)"; return 1; }
+  if [ ! -e "$drop" ] && [ ! -L "$drop" ]; then rm -f -- "$held"; echo "no token was dropped"; return 1; fi
+  if ! mv -fT -- "$drop" "$held" 2>/dev/null; then rm -rf -- "$drop"; rm -f -- "$held"; echo "the dropped token could not be taken"; return 1; fi
+  if [ -L "$held" ] || [ ! -f "$held" ]; then rm -rf -- "$held"; echo "the dropped token is not a plain file; nothing changed"; return 1; fi
+  tok=$(head -c 200 -- "$held" | tr -d '\r\n'); rm -f -- "$held"
+  [[ "$tok" =~ $DISCORD_TOKEN_RE ]] || { echo "that is not a Discord bot token (Discord's Developer Portal, your application, Bot: Reset Token, then copy it); nothing changed"; return 1; }
+  if [ "$(env_get DISCORD_BOT_TOKEN)" != "$tok" ]; then env_set DISCORD_BOT_TOKEN "$tok" || { echo "could not write .env; nothing changed"; return 1; }; fi
+  if ! discord_on; then echo "saved. The Discord bridge is switched off on this server: run sudo blackbranch discord on"; return 0; fi
+  # The bridge's settings file carries the token: written again, the bridge restarts with it.
+  ( cmd_render ) >/dev/null 2>&1 || { echo "saved, but the bridge's settings file could not be written again: run sudo blackbranch render"; return 1; }
+  echo "saved; the bridge restarts with it"
+}
+# `discord on|off`: the bridge's line in COMPOSE_PROFILES, then the bundle brought to that state.
+cmd_discord() {
+  local sub="${1:-}" p want
+  case "$sub" in on|off) ;; *) die "usage: blackbranch discord on | off" ;; esac
+  need_root discord; need_install
+  p=$(env_get COMPOSE_PROFILES); p="${p// /}"
+  if [ "$sub" = on ]; then
+    [ -n "$(env_get DISCORD_BOT_TOKEN)" ] || die "no Discord bot token is set: paste it on the Admin Panel's Discord page first (Site → Discord, Bot)"
+    if discord_on; then info "the Discord bridge is already on"; return 0; fi
+    want="${p:+$p,}discord"
+  else
+    if ! discord_on; then info "the Discord bridge is already off"; return 0; fi
+    want=$(printf ',%s,' "$p" | sed 's/,discord,/,/g; s/^,//; s/,$//')
+  fi
+  env_set COMPOSE_PROFILES "$want" || die "nothing changed"
+  if [ "$sub" = off ]; then compose rm -sf ooye >/dev/null 2>&1 || true; fi
+  info "COMPOSE_PROFILES=$want; bringing the bundle to it"
+  cmd_up
+}
+# The doctor's facts on the bot: asked of Discord through the bridge while it runs with a token —
+# whether Discord let the bot in, its privileged switches, and whether it is in the Discord server the
+# community was imported from. No name or id: only what the row says.
+discord_bot_facts_json() {
+  local line gid sees=null ok status
+  if ! discord_on || [ -z "$(env_get DISCORD_BOT_TOKEN)" ]; then printf 'null'; return; fi
+  case "$(service_health ooye)" in healthy|unhealthy|running) ;; *) printf '{"checked":false}'; return ;; esac
+  line=$(compose exec -T ooye node --no-warnings /opt/blackbranch-ooye/discord-read.js bot 2>/dev/null | tail -n 1 || true)
+  [[ "$line" == '{"v":1,"ok":'* ]] || { printf '{"checked":false}'; return; }
+  gid=$(printf '%s\n' "SELECT guild_id FROM site.community_discord_import ORDER BY imported_at DESC LIMIT 1" \
+    | compose exec -T postgres psql -U postgres -d stream -qAt -v ON_ERROR_STOP=1 2>/dev/null | head -n 1) || gid=""
+  if [[ "$gid" =~ $DISCORD_GUILD_RE ]]; then
+    case "$line" in *"\"id\":\"$gid\""*) sees='"present"' ;; *) sees='"absent"' ;; esac
+  fi
+  ok=$(jfield "$line" ok); status=$(jfield "$line" status)
+  [ "$ok" = true ] || ok=false
+  [[ "$status" =~ ^[0-9]{3}$ ]] || status=null
+  printf '{"checked":true,"ok":%s,"status":%s,"members":%s,"content":%s,"guild":%s}' "$ok" "$status" \
+    "$(jbool "$(jfield "$line" members)")" "$(jbool "$(jfield "$line" content)")" "$sees"
+}
+
+# ── the community reconciler: the rooms kept as the Admin Panel sets them ─────────────────────
+# install/matrix/reconcile.mjs reads what the panel wants from the site (its internal feed) and what
+# the homeserver holds (as the community service account), and makes the second match the first. It
+# runs in a one-shot container of the stream-api image, the token on stdin. A run is its own unit
+# (blackbranch-community@<mode>.service), so the request watcher never waits on it; the timer starts
+# apply every 10 minutes. Two runs never overlap: state/community.lock, and a second run exits 75.
+# The switch is COMMUNITY_RECONCILER in .env (true on a new install, false on one set up before
+# this existed): `community on|off` sets it, restarts the site with it (the site stops writing
+# room settings from the browser once it is on) and starts or stops the timer. Report and adopt
+# change nothing on the homeserver, so they run whatever the switch says; apply only while it is on.
+COMMUNITY_MODE_RE='^(report|adopt|apply)$'
+COMMUNITY_OFF_WORDS="this install does not keep the community's rooms as the Admin Panel sets them. To turn that on: sudo blackbranch community on"
+COMMUNITY_RECONCILE_USAGE="usage: blackbranch community reconcile [--mode report|adopt|apply]"
+community_reconciler_on() { [ "$(env_get COMMUNITY_RECONCILER)" = true ]; }
+# The timer runs while the switch is on, and only then.
+community_timer_sync() {
+  if community_reconciler_on; then
+    systemctl is-enabled -q blackbranch-community.timer 2>/dev/null || systemctl enable -q --now blackbranch-community.timer
+  elif systemctl is-enabled -q blackbranch-community.timer 2>/dev/null; then
+    systemctl disable -q --now blackbranch-community.timer
+  fi
+}
+community_reconcile_start() { # community_reconcile_start <mode> — starts the run's unit, answers at once
+  [[ "${1:-}" =~ $COMMUNITY_MODE_RE ]] || { echo "not a mode: report, adopt or apply"; return 1; }
+  if [ "$1" = apply ] && ! community_reconciler_on; then echo "$COMMUNITY_OFF_WORDS"; return 1; fi
+  systemctl start --no-block "blackbranch-community@$1.service" || { echo "the community run could not be started (systemctl status blackbranch-community@$1)"; return 1; }
+  echo started
+}
+community_reconcile() { # community_reconcile <mode> → the reconciler's exit status (0 done, 1 report found changes, 2 failed, 75 setup not finished)
+  local tok rc=0
+  tok=$(env_get COMMUNITY_AS_TOKEN)
+  if ! community_registered || [ -z "$tok" ] || [ ! -f "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION" ]; then
+    echo "the community service account is not registered on the homeserver yet, so nothing was run. Run: sudo blackbranch community token-check" >&2
+    return 2
+  fi
+  printf '%s\n' "$tok" | compose run --rm --no-deps -T \
+      -v "$BB_HOME/release/install/matrix:/bb-matrix:ro" \
+      -e MX_BASE=http://synapse:8008 -e MX_SERVER_NAME="$(env_get BB_DOMAIN)" -e MX_AS_USER="$(community_user_id)" \
+      -e COMMUNITY_WEB_BASE=http://web:3000 \
+      --entrypoint node stream-api /bb-matrix/reconcile.mjs --mode "$1" || rc=$?
+  return "$rc"
+}
+cmd_community_reconcile() {
+  need_root community; need_install
+  local mode=report rc=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mode) mode="${2:-}"; shift 2 || shift ;;
+      *) die "$COMMUNITY_RECONCILE_USAGE" ;;
+    esac
+  done
+  [[ "$mode" =~ $COMMUNITY_MODE_RE ]] || die "$COMMUNITY_RECONCILE_USAGE"
+  if [ "$mode" = apply ] && ! community_reconciler_on; then die "$COMMUNITY_OFF_WORDS"; fi
+  # Busy is 75 (the unit counts it a success): an update in progress, or another run.
+  if update_running; then echo "blackbranch: an update is running; try again when it has finished" >&2; exit 75; fi
+  mkdir -p "$STATE"
+  exec 4>"$STATE/community.lock"
+  flock -n 4 || { echo "blackbranch: a community run is already running" >&2; exit 75; }
+  community_reconcile "$mode" || rc=$?
+  # A report that found something to change is a finished check, not a failed unit: what it found is
+  # in its result (the run log). For apply, 1 (ops the homeserver refused) and 2 stay failures.
+  if [ "$mode" = report ] && [ "$rc" = 1 ]; then rc=0; fi
+  # 75 from the reconciler: the site is still being set up, so nothing ran — not an outcome (no
+  # alert, no failure recorded, and the first run after setup is not a "working again").
+  if [ "$mode" = apply ] && [ "$rc" != 75 ]; then community_outcome "$rc"; fi
+  exit "$rc"
+}
+# One alert when apply starts failing (the run before it was ok, or there was none), one when it works
+# again, nothing between: state/community.last-outcome holds the last apply's ok|failed. Fixed words
+# only (the topic is unauthenticated): never a token, a room or the reconciler's own error text.
+COMMUNITY_OUTCOME="community.last-outcome"
+community_outcome() { # community_outcome <the apply run's exit status>
+  local now was
+  if [ "$1" = 0 ]; then now=ok; else now=failed; fi
+  was=$(cat "$STATE/$COMMUNITY_OUTCOME" 2>/dev/null || true)
+  if [ "$now" = failed ] && [ "$was" != failed ]; then
+    alert 4 "the community's rooms could not be kept" "A run that keeps the community's rooms as the Admin Panel sets them failed at $(now_utc). Until a run works, a ban, timeout or channel change may not reach every room.
+The Doctor's row \"The community's rooms are as the Community page sets them\" says more.
+To read what the last run found, on the server run: sudo blackbranch community reconcile --mode report"
+  elif [ "$now" = ok ] && [ "$was" = failed ]; then
+    alert 3 "community reconcile is working again" "The community's rooms are kept as the Admin Panel sets them again (a run worked at $(now_utc))."
+  fi
+  printf '%s\n' "$now" > "$STATE/$COMMUNITY_OUTCOME.tmp" && mv -f "$STATE/$COMMUNITY_OUTCOME.tmp" "$STATE/$COMMUNITY_OUTCOME" || true
+}
+community_switch() { # community_switch true|false
+  local want="$1" old
+  old=$(env_get COMMUNITY_RECONCILER)
+  if [ "$old" != "$want" ]; then
+    env_set COMMUNITY_RECONCILER "$want" || die "nothing changed"
+    info "COMMUNITY_RECONCILER is now $want; restarting the site with it"
+    # The site reads it when it starts (it stops writing room settings from the browser once it is on).
+    compose up -d
+    # shellcheck disable=SC2046
+    if ! wait_healthy 180 $(expected_services); then
+      env_set COMMUNITY_RECONCILER "$old" || die "the site did not come back, AND putting the old value back failed: check COMMUNITY_RECONCILER in $ENV_FILE"
+      compose up -d >/dev/null 2>&1 || true
+      die "not every service became healthy ($HEALTH_PROBLEM) — COMMUNITY_RECONCILER put back to ${old:-its previous value}"
+    fi
+  fi
+  community_timer_sync || die "the timer could not be switched (systemctl status blackbranch-community.timer)"
+  if [ "$want" = true ]; then
+    community_reconcile_start apply >/dev/null || true
+    info "the server keeps the community's rooms as the Admin Panel sets them: a run has started, then every 10 minutes"
+  else
+    info "the server no longer keeps the community's rooms; the rooms stay as they are now"
+  fi
+}
+cmd_community() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    token-check) need_root community; need_install; community_token_check ;;
+    reconcile) cmd_community_reconcile "$@" ;;
+    on) need_root community; need_install; community_switch true ;;
+    off) need_root community; need_install; community_switch false ;;
+    *) die "usage: blackbranch community token-check | reconcile [--mode report|adopt|apply] | on | off" ;;
+  esac
+}
+
 # ── the community rooms, kept in place ────────────────────────────────────────────────────────
 # The bootstrap above runs once at setup (the Community page). After that the rooms must stay: at
 # every start (`up` — the installer, every update, every restore) and at every boot
@@ -1317,7 +2064,8 @@ reader_join_forum() {
 # recorded room that is gone (the snapshot's settings can name a room its homeserver data does not
 # hold); a plain start never does that by itself: it says so, with the command.
 # matrix_rooms_state <hub> <general> → "complete" when the recorded space and #general exist, #forum
-# has its alias, the four space links carry a `via` and the three rooms are in the public list.
+# has its alias, the four space links carry a `via`, the three rooms are in the public list, and the
+# community service account (when registered) is in or invited to all three.
 matrix_rooms_state() {
   printf '%s\n' "WITH f AS (SELECT room_id FROM room_aliases WHERE room_alias = :'fa' LIMIT 1),
   links AS (SELECT c.room_id, c.type, c.state_key FROM current_state_events c JOIN event_json j ON j.event_id = c.event_id
@@ -1329,9 +2077,12 @@ SELECT CASE WHEN (SELECT count(*) FROM rooms WHERE room_id IN (:'hub', :'gen')) 
   AND (SELECT count(*) FROM links WHERE type = 'm.space.child' AND room_id = :'hub' AND state_key IN (:'gen', (SELECT room_id FROM f))) = 2
   AND (SELECT count(*) FROM links WHERE type = 'm.space.parent' AND state_key = :'hub' AND room_id IN (:'gen', (SELECT room_id FROM f))) = 2
   AND (SELECT count(*) FROM current_state_events WHERE type = 'm.room.member' AND state_key = :'reader' AND membership = 'join' AND room_id = (SELECT room_id FROM f)) = 1
+  AND (:'svc' = '' OR (SELECT count(*) FROM current_state_events WHERE type = 'm.room.member' AND state_key = :'svc'
+        AND membership IN ('join', 'invite') AND room_id IN (:'hub', :'gen', (SELECT room_id FROM f))) = 3)
 THEN 'complete' ELSE 'missing' END;" \
     | compose exec -T postgres psql -U postgres -d synapse -qAt -v ON_ERROR_STOP=1 \
-        -v hub="$1" -v gen="$2" -v fa="#forum:$(env_get BB_DOMAIN)" -v reader="@$READER_LOCALPART:$(env_get BB_DOMAIN)"
+        -v hub="$1" -v gen="$2" -v fa="#forum:$(env_get BB_DOMAIN)" -v reader="@$READER_LOCALPART:$(env_get BB_DOMAIN)" \
+        -v svc="$(if community_registered; then community_user_id; fi)"
 }
 matrix_ensure() { # matrix_ensure [after-restore] → 1 when something is missing and could not be made again
   local hub general owner state out rc=0 why
@@ -1741,10 +2492,10 @@ cmd_restore() {
 # What only the box can see reaches the person who runs it: a nightly backup or weekly restore check
 # that failed, an update that went back (or could not, or stopped), and the daily check (low disk,
 # a certificate about to run out in direct mode, no good backup for 36 hours). ONE channel, kept in
-# .env and never printed or put on a command line: an ntfy topic address (BB_ALERT_NTFY_URL) and/or
-# a command that sends an email it reads on its standard input, headers first, like
-# `sendmail you@example.com` (BB_ALERT_EMAIL_COMMAND; $BB_ALERT_SUBJECT holds the subject too).
-# No channel set: the alert is logged only (the journal of the unit that raised it). Sending never
+# .env and never printed or put on a command line: an ntfy topic address (BB_ALERT_NTFY_URL; unset,
+# the site's own alerts topic) and/or a command that sends an email it reads on its standard input,
+# headers first, like `sendmail you@example.com` (BB_ALERT_EMAIL_COMMAND; $BB_ALERT_SUBJECT holds the
+# subject too). No channel set: the alert is logged only (the journal of the unit that raised it). Sending never
 # changes the outcome of what raised it. Like the site's own alerts (stream-api notify.js), an ntfy
 # topic is unauthenticated: only fixed words, versions, numbers and the site's public names go out,
 # never a tool's own error text (`blackbranch status` and the doctor say why).
@@ -1752,22 +2503,42 @@ cmd_restore() {
 ALERT_DISK_FREE_PCT=15
 ALERT_CERT_DAYS=14
 ALERT_BACKUP_AGE_H=36
+# With no BB_ALERT_NTFY_URL, the site's own alerts topic carries the box's alerts too
+# (Admin Panel → Site → Site, card Alerts to your phone): read inside the stream-api image (install/alerts/topic.cjs),
+# the topics last read kept root-only for when the database is down. Priority 4 and up go to the
+# urgent topic, the rest to the quiet one (one topic set takes both).
+ALERT_TOPIC_CACHE="$STATE/alert-topic.env"
+site_alert_topic() { # site_alert_topic <priority> → a topic address, or nothing
+  local lines line k v wake="" quiet=""
+  if postgres_up && lines=$(compose run --rm --no-deps -T -v "$BB_HOME/release/install/alerts:/bb-alerts:ro" \
+       --entrypoint node stream-api /bb-alerts/topic.cjs 2>/dev/null); then
+    mkdir -p "$STATE" && ( umask 077; printf '%s\n' "$lines" > "$ALERT_TOPIC_CACHE.new" ) && mv -f "$ALERT_TOPIC_CACHE.new" "$ALERT_TOPIC_CACHE" || true
+  else
+    lines=$(cat "$ALERT_TOPIC_CACHE" 2>/dev/null || true)
+  fi
+  while IFS= read -r line; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in NTFY_WAKE) wake="$v" ;; NTFY_QUIET) quiet="$v" ;; esac
+  done <<< "$lines"
+  if [ "$1" -ge 4 ]; then printf '%s' "${wake:-$quiet}"; else printf '%s' "${quiet:-$wake}"; fi
+}
 alert() { # alert <priority 3|4|5> <title> <message>
-  local prio="$1" title msg url cmd sent="" failed="" subject
+  local prio="$1" title msg url cmd via sent="" failed="" subject
   title="$(jsafe "$(env_get BB_DOMAIN)" | tr -cd 'A-Za-z0-9.-'): $(jsafe "$2" | cut -c1-120)"
   msg=$(printf '%s' "$3" | tr -d '\000-\010\013-\037\177' | head -c 2000)
   printf 'ALERT: %s\n%s\n' "$title" "$msg" | sed '2,$s/^/   /' >&2
   if command -v logger >/dev/null 2>&1; then logger -t blackbranch-alert -- "$title: $(printf '%s' "$msg" | tr '\n' ' ')" 2>/dev/null || true; fi
-  url=$(env_get BB_ALERT_NTFY_URL); cmd=$(env_get BB_ALERT_EMAIL_COMMAND)
+  url=$(env_get BB_ALERT_NTFY_URL); cmd=$(env_get BB_ALERT_EMAIL_COMMAND); via="the ntfy topic (BB_ALERT_NTFY_URL)"
+  if [ -z "$url" ]; then url=$(site_alert_topic "$prio"); via="the site's alerts topic (Admin Panel → Site → Site, card Alerts to your phone)"; fi
   if [ -z "$url" ] && [ -z "$cmd" ]; then
-    info "no alert channel is set (BB_ALERT_NTFY_URL or BB_ALERT_EMAIL_COMMAND in .env): this alert is in the log only" >&2; return 0
+    info "no alert channel is set (no alerts topic in Admin Panel → Site → Site, card Alerts to your phone, and no BB_ALERT_NTFY_URL or BB_ALERT_EMAIL_COMMAND in .env): this alert is in the log only" >&2; return 0
   fi
   if [ -n "$url" ]; then
     # The address reaches curl through a config file on a descriptor, never its command line.
     if [[ "$url" =~ ^https?://[^[:space:]\"\\]+$ ]] && printf '%s\n' "$msg" | curl -fsS -o /dev/null --max-time 20 \
          -K <(printf 'url = "%s"\n' "$url") -H "Title: Black Branch $title" -H "Priority: $prio" -H "Tags: warning" --data-binary @- 2>/dev/null; then
       sent+=" ntfy"
-    else failed+=" the ntfy topic (BB_ALERT_NTFY_URL)"; fi
+    else failed+=" $via"; fi
   fi
   if [ -n "$cmd" ]; then
     subject="[Black Branch] $title"
@@ -1948,9 +2719,11 @@ BOOTSTRAP_SECRETS=(
   POSTGRES_PASSWORD STREAM_DB_PASSWORD SYNAPSE_DB_PASSWORD MAS_DB_PASSWORD STREAM_API_SECRET AUTH_SECRET
   TOKEN_ENC_KEY INSTANCE_MASTER_KEY MATRIX_OAUTH_CLIENT_SECRET MAS_SYNAPSE_SECRET MAS_ENCRYPTION_SECRET
   SYNAPSE_REGISTRATION_SECRET SYNAPSE_MACAROON_SECRET SYNAPSE_FORM_SECRET BACKUP_PASSPHRASE
+  COMMUNITY_AS_TOKEN COMMUNITY_HS_TOKEN OOYE_AS_TOKEN OOYE_HS_TOKEN
 )
-# .env keys whose values are the product's own words (they appear in any report's fix lines).
-REPORT_PLAIN_KEYS=(COMPOSE_PROJECT_NAME COMPOSE_PROFILES BB_TLS_MODE)
+# .env keys whose values are the product's own words (they appear in any report's fix lines). KEY=value:
+# plain only while it holds that value (a service account name the operator picked may identify them).
+REPORT_PLAIN_KEYS=(COMPOSE_PROJECT_NAME COMPOSE_PROFILES BB_TLS_MODE COMMUNITY_LOCALPART=blackbranch)
 
 jbool() { case "$1" in true|false) printf '%s' "$1" ;; *) printf null ;; esac; }
 jnum() { if [[ "$1" =~ ^-?[0-9]+$ ]]; then printf '%s' "$1"; else printf null; fi; }
@@ -1963,13 +2736,23 @@ answer_path() { case "$1" in site) echo /robots.txt ;; api) echo /stream/current
 # Two app services' own reports, asked inside each one's container (neither port is published) and
 # cut down THERE to fixed fields by node — the box has no node, and these facts are written into
 # JSON as they come: no payload, no name, only states, booleans and one short error line per reader.
-#   stream-ingest  GET :3010/health   its chat readers (round 1 contract 1)
+#   stream-ingest  GET :3010/health   its chat readers (round 1 contract 1) and each platform's live
+#                                     detection (liveness Task 10: a name, one of four states, a kebab
+#                                     code, ISO-like times, stale as a boolean — nothing else)
 #   stream-api     GET :3001/tts/status  read-aloud's switch, key and voice (contract 2; loopback is trusted)
 INGEST_HEALTH_JS='const line=(s)=>String(s??"").replace(/[\u0000-\u001f\u007f]/g," ").slice(0,160);
+const iso=(s)=>typeof s==="string"?s.replace(/[^0-9TZ:.+-]/g,"").slice(0,32):null;
+const named=(o)=>Object.entries(o&&typeof o==="object"&&!Array.isArray(o)?o:{}).slice(0,12).filter(([k])=>/^[a-z]{1,20}$/.test(k));
 fetch("http://127.0.0.1:3010/health",{signal:AbortSignal.timeout(5000)}).then((r)=>r.json()).then((j)=>{const readers={};
-for(const [k,v] of Object.entries((j&&j.readers)||{}).slice(0,12)){if(!/^[a-z]{1,20}$/.test(k)||!v||typeof v!=="object")continue;
-readers[k]={state:["running","starting","failed","off"].includes(v.state)?v.state:"unknown",since:typeof v.since==="string"?v.since.replace(/[^0-9TZ:.+-]/g,"").slice(0,32):null,error:line(v.error)};}
-process.stdout.write(JSON.stringify({answered:true,ok:j.ok===true,readers}));},()=>process.stdout.write("{\"answered\":false}"));'
+for(const [k,v] of named(j&&j.readers)){if(!v||typeof v!=="object")continue;
+readers[k]={state:["running","starting","failed","off"].includes(v.state)?v.state:"unknown",since:iso(v.since),error:line(v.error)};}
+const out={answered:true,ok:j.ok===true,readers};
+if(j&&j.liveness&&typeof j.liveness==="object"&&!Array.isArray(j.liveness)){const liveness={};
+for(const [k,v] of named(j.liveness)){if(v===null){liveness[k]=null;continue;}if(typeof v!=="object")continue;
+liveness[k]={state:["live","offline","unknown","upcoming"].includes(v.state)?v.state:"unknown",since:iso(v.since),lastAnswerAt:iso(v.lastAnswerAt),scheduledStart:iso(v.scheduledStart),
+evidence:typeof v.evidence==="string"&&/^[a-z][a-z-]{0,39}$/.test(v.evidence)?v.evidence:"",stale:v.stale===true};}
+out.liveness=liveness;}
+process.stdout.write(JSON.stringify(out));},()=>process.stdout.write("{\"answered\":false}"));'
 TTS_STATUS_JS='fetch("http://127.0.0.1:3001/tts/status",{signal:AbortSignal.timeout(5000)}).then((r)=>r.ok?r.json():Promise.reject(new Error())).then((j)=>
 process.stdout.write(JSON.stringify({answered:true,enabled:j.enabled===true,keySet:j.keySet===true,voiceSet:j.voiceSet===true})),()=>process.stdout.write("{\"answered\":false}"));'
 app_fact_json() { # app_fact_json <service> <js> → one JSON object, {"answered":false} when it did not answer
@@ -1995,10 +2778,21 @@ setup_facts_json() {
   fi
 }
 
+# The retention block of the rendered homeserver.yaml, as days (null = not in it): the doctor compares
+# it with the cap the site holds. {"rendered":false} when there is no rendered file at all.
+retention_rendered_json() {
+  local f="$BB_HOME/rendered/synapse/homeserver.yaml" blk d m
+  [ -f "$f" ] || { printf '{"rendered":false}'; return 0; }
+  blk=$(awk '/^retention:/ { on = 1; next } on && /^[^ ]/ { exit } on' "$f" 2>/dev/null || true)
+  d=$(printf '%s\n' "$blk" | sed -n 's/^    max_lifetime: \([0-9]\{1,4\}\)d$/\1/p' | head -n 1)
+  m=$(printf '%s\n' "$blk" | sed -n 's/^  allowed_lifetime_max: \([0-9]\{1,4\}\)d$/\1/p' | head -n 1)
+  printf '{"rendered":true,"defaultDays":%s,"maxDays":%s}' "$(jnum "$d")" "$(jnum "$m")"
+}
+
 doctor_host_facts() { # doctor_host_facts [health] — health: the update's run, which skips the outside check
   local mode mem docker_root disk="" clock upg name_json="" tunnel=null certs="" answers="" outside="" via rendered="" render_err=false
   local l h ok code days missing="" k v n=0 maskeys signing=null release sep
-  local caddy_txt hs_txt log_txt mas_txt
+  local caddy_txt hs_txt log_txt mas_txt as_txt ooye_txt ooye_as_txt creg cwho=null ctaken clp dprof=false dtok=false dstate=null dreg=null danswer=null
   mode=$(env_get BB_TLS_MODE)
   release=$(head -1 "$BB_HOME/release/RELEASE" 2>/dev/null | tr ' ' '-' | tr -cd 'A-Za-z0-9._+-' | cut -c1-40)
   mem=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null)
@@ -2052,12 +2846,46 @@ doctor_host_facts() { # doctor_host_facts [health] — health: the update's run,
   # The rendered config against a fresh render (read-only: the federation switch is read, not stamped).
   if render_all ro 2>/dev/null; then
     sep=""
-    for k in "caddy/Caddyfile:caddy_txt" "synapse/homeserver.yaml:hs_txt" "synapse/log.config:log_txt" "mas/config.yaml:mas_txt"; do
+    for k in "caddy/Caddyfile:caddy_txt" "synapse/homeserver.yaml:hs_txt" "synapse/log.config:log_txt" "mas/config.yaml:mas_txt" \
+             "synapse/$COMMUNITY_REGISTRATION:as_txt" "ooye/registration.yaml:ooye_txt" "synapse/$OOYE_REGISTRATION:ooye_as_txt"; do
       v="${k#*:}"
+      # No registration while the account's name is a person's, or the bridge is off: nothing to compare.
+      if [ -z "${!v}" ] && { [ "$v" = as_txt ] || [ "$v" = ooye_txt ] || [ "$v" = ooye_as_txt ]; }; then continue; fi
       if printf '%s\n' "${!v}" | cmp -s - "$BB_HOME/rendered/${k%%:*}" 2>/dev/null; then ok=true; else ok=false; fi
       rendered+="$sep{\"file\":\"${k%%:*}\",\"match\":$ok}"; sep=","
     done
   else render_err=true; fi
+  # The community service account: its registration as rendered, and its token answering as it
+  # (asked only while Synapse is healthy; null = not asked).
+  if [ ! -f "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION" ]; then creg=missing
+  elif [ "$render_err" = true ]; then creg=unknown
+  elif printf '%s\n' "$as_txt" | cmp -s - "$BB_HOME/rendered/synapse/$COMMUNITY_REGISTRATION" 2>/dev/null; then creg=match
+  else creg=differs; fi
+  if [ "$(service_health synapse)" = healthy ]; then cwho="\"$(community_whoami)\""; fi
+  # The name a person's: asked live while the database runs (read only), else the last render's record.
+  case "$(community_name_state)" in taken) ctaken=true ;; free) ctaken=false ;; *) if [ "$(community_name_record)" = taken ]; then ctaken=true; else ctaken=false; fi ;; esac
+  # The name goes into JSON only in the shape a Matrix user name has (.env could hold anything).
+  clp=$(community_localpart); if [[ "$clp" =~ ^[a-z0-9._=-]{1,64}$ ]]; then clp="\"$clp\""; else clp=null; fi
+
+  # The Discord bridge: switched on (the profile), its bot token set (never the token), and how
+  # its container is (asked only while it is switched on).
+  if discord_on; then dprof=true; dstate="\"$(service_health ooye)\""; fi
+  [ -n "$(env_get DISCORD_BOT_TOKEN)" ] && dtok=true
+  # Switched on: its settings file against a fresh render (both copies), and what the bridge's own
+  # first process says it is doing (install/ooye/entrypoint.js: waiting-settings, waiting-storage,
+  # setup, running, retrying), read from inside its container while that runs.
+  if discord_on; then
+    if [ ! -f "$BB_HOME/rendered/ooye/registration.yaml" ] || [ ! -f "$BB_HOME/rendered/synapse/$OOYE_REGISTRATION" ]; then dreg='"missing"'
+    elif [ "$render_err" = true ] || [ -z "$ooye_txt" ]; then dreg='"unknown"'
+    elif printf '%s\n' "$ooye_txt" | cmp -s - "$BB_HOME/rendered/ooye/registration.yaml" 2>/dev/null \
+      && printf '%s\n' "$ooye_as_txt" | cmp -s - "$BB_HOME/rendered/synapse/$OOYE_REGISTRATION" 2>/dev/null; then dreg='"match"'
+    else dreg='"differs"'; fi
+    case "$(service_health ooye)" in
+      healthy|unhealthy|starting|running)
+        danswer=$(compose exec -T ooye cat "$OOYE_STATE_FILE" 2>/dev/null | head -c 40 | tr -d '\n' || true)
+        if [[ "$danswer" =~ ^[a-z-]{1,20}$ ]]; then danswer="\"$danswer\""; else danswer=null; fi ;;
+    esac
+  fi
 
   # Bootstrap secrets: present and not a placeholder. Names only — never a value.
   sep=""
@@ -2074,10 +2902,66 @@ doctor_host_facts() { # doctor_host_facts [health] — health: the update's run,
   printf '"names":[%s],"tunnel":%s,"certs":[%s],"answers":[%s],"answersVia":"%s","outside":[%s],"rendered":[%s],"renderError":%s,' \
     "$name_json" "$(jbool "$tunnel")" "$certs" "$answers" "$via" "$outside" "$rendered" "$render_err"
   printf '"secrets":{"count":%s,"missing":[%s],"masKeys":%s,"signingKey":%s},' "$n" "$missing" "$maskeys" "$(jbool "$signing")"
+  printf '"community":{"registration":"%s","whoami":%s,"nameTaken":%s,"nameChecked":%s,"localpart":%s},' "$creg" "$cwho" "$ctaken" "$(community_name_checked)" "$clp"
+  printf '"retention":%s,' "$(retention_rendered_json)"
+  printf '"discord":{"profile":%s,"token":%s,"state":%s,"registration":%s,"answer":%s},' "$dprof" "$dtok" "$dstate" "$dreg" "$danswer"
+  if [ "${1:-}" = health ]; then printf '"discordBot":null,'; else printf '"discordBot":%s,' "$(discord_bot_facts_json)"; fi
   # Not on the update's own run: neither is an update check (the update compares the readers itself).
   if [ "${1:-}" = health ]; then printf '"ingest":null,"tts":null,"setup":null,'
   else printf '"ingest":%s,"tts":%s,"setup":%s,' "$(app_fact_json stream-ingest "$INGEST_HEALTH_JS")" "$(app_fact_json stream-api "$TTS_STATUS_JS")" "$(setup_facts_json)"; fi
+  printf '"mail":%s,' "$(mail_facts_json)"
+  # Sign-in providers ask outside servers: not on the update's own run (none is an update check).
+  if [ "${1:-}" = health ]; then printf '"signin":null,'; else printf '"signin":%s,' "$(signin_facts_json)"; fi
   printf '"backups":%s,"updates":%s}\n' "$(backup_facts_json check)" "$(updates_facts_json)"
+}
+# The doctor's mail facts: whether a mail server is set (null: the settings cannot be read) and the
+# last `blackbranch mail test` answer as it was recorded (time, sent or not, the fixed code).
+mail_facts_json() {
+  local set last
+  set=$( (mail_state ro >/dev/null 2>&1 && { [ -n "$MX_SMTP_HOST" ] && echo true || echo false; }) || echo null)
+  last=$(cat "$BB_HOME/results/$MAIL_TEST_LAST" 2>/dev/null || true)
+  [[ "$last" =~ ^\{\"v\":1,\"at\":\"[0-9TZ:-]{20}\",\"ok\":(true|false),\"code\":\"[a-z_]{1,40}\"\}$ ]] || last=null
+  printf '{"set":%s,"test":%s}' "$set" "$last"
+}
+
+# The doctor's sign-in provider facts, per slot: switched on, complete (the render offers it), listed
+# (MAS's own table has it enabled; null = not asked) and its discovery document as asked from inside
+# stream-api (status, and whether it names the issuer MAS is given — MAS refuses one that does not).
+# Never a client id or a secret.
+SIGNIN_DISCOVERY_JS='const want=JSON.parse(process.argv[1]||"{}");const out={};
+Promise.all(Object.entries(want).map(([slot,iss])=>fetch(iss.replace(/\/$/,"")+"/.well-known/openid-configuration",{signal:AbortSignal.timeout(8000),redirect:"error"})
+.then(async(r)=>{let issuer=null;if(r.ok){try{const j=await r.json();issuer=!!j&&j.issuer===iss;}catch{issuer=false;}}out[slot]={status:r.status,issuer};},()=>{out[slot]={status:0,issuer:null};})))
+.then(()=>process.stdout.write(JSON.stringify(out)));'
+signin_issuer() { case "$1" in GOOGLE) echo https://accounts.google.com ;; DISCORD) echo https://discord.com ;; TWITCH) echo https://id.twitch.tv/oauth2 ;; OIDC) echo "$MX_SIGNIN_OIDC_ISSUER" ;; esac; }
+signin_facts_json() {
+  local s lc on uuid comp listed providers="" asked=0 want="" sep="" answers="" d out=""
+  signin_state ro >/dev/null 2>&1 || { printf '{"read":false}'; return 0; }
+  if postgres_up; then
+    providers=$(printf '%s\n' "SELECT upstream_oauth_provider_id FROM upstream_oauth_providers WHERE disabled_at IS NULL;" \
+      | compose exec -T postgres psql -U postgres -d mas -qAt -v ON_ERROR_STOP=1 2>/dev/null) && asked=1
+  fi
+  for s in $MX_SIGNIN_SLOTS; do
+    on="MX_SIGNIN_${s}_ON"
+    if [ "${!on}" = true ] && mx_signin_usable "$s" 2>/dev/null; then want+="$sep\"${s,,}\":\"$(signin_issuer "$s")\""; sep=","; fi
+  done
+  if [ -n "$want" ]; then
+    answers=$(compose exec -T stream-api node -e "$SIGNIN_DISCOVERY_JS" "{$want}" 2>/dev/null | head -c 2048 | head -n 1 || true)
+    [[ "$answers" =~ ^\{(\"[a-z]{1,10}\":\{\"status\":[0-9]{1,3},\"issuer\":(true|false|null)\},?)*\}$ ]] || answers=""
+  fi
+  sep=""
+  for s in $MX_SIGNIN_SLOTS; do
+    lc="${s,,}"; on="MX_SIGNIN_${s}_ON"; uuid="MX_SIGNIN_${s}_UUID"
+    if [ "${!on}" = true ]; then on=true; else on=false; fi
+    if [ "$on" = true ] && mx_signin_usable "$s" 2>/dev/null; then comp=true; else comp=false; fi
+    listed=null
+    if [ "$asked" = 1 ]; then
+      if [ -n "${!uuid}" ] && grep -qxF "${!uuid}" <<< "$providers"; then listed=true; else listed=false; fi
+    fi
+    d=null
+    if [[ "$answers" =~ \"$lc\":(\{[^}]*\}) ]]; then d="${BASH_REMATCH[1]}"; fi
+    out+="$sep\"$lc\":{\"on\":$on,\"complete\":$comp,\"listed\":$listed,\"discovery\":$d}"; sep=","
+  done
+  printf '{"read":true,"slots":{%s}}' "$out"
 }
 
 # The update channel's three files, as they are (root writes them, fixed fields): the last feed read,
@@ -2134,9 +3018,10 @@ doctor_eval() {
 report_leaks() {
   local key val k plain pats=""
   while IFS= read -r key; do
-    plain=0; for k in "${REPORT_PLAIN_KEYS[@]}"; do [ "$k" = "$key" ] && plain=1; done
+    val=$(env_get "$key")
+    plain=0; for k in "${REPORT_PLAIN_KEYS[@]}"; do if [ "$k" = "$key" ] || [ "$k" = "$key=$val" ]; then plain=1; fi; done
     [ "$plain" = 1 ] && continue
-    val=$(env_get "$key"); [ "${#val}" -ge 6 ] && pats+="$val"$'\n'
+    [ "${#val}" -ge 6 ] && pats+="$val"$'\n'
   done < <(grep -oE '^[A-Za-z_][A-Za-z0-9_]*' "$ENV_FILE")
   [ -n "$pats" ] || return 1
   # Not a pipe into grep -q: under pipefail its early exit would read as "no match".
@@ -2551,6 +3436,7 @@ update_build() { # update_build <dir> — images pulled by digest (the site's am
   done
   info "fetched ${#imgs[@]} images by digest"
   if web_from_source "$1/install/compose.yaml"; then targets+=(web); fi
+  if discord_on "$ENVN"; then targets+=(ooye); fi
   if ! compose_next --profile backup build "${targets[@]}" >&2; then U_ERR="$U_VERSION's images did not build"; return 1; fi
   stamp_set "images.$U_VERSION" "$(tree_hash "$1")"
   if ! BB_DOTENV="$ENVN" bash "$1/install/blackbranch" render --check >&2; then U_ERR="$U_VERSION's config templates do not render with this .env"; return 1; fi
@@ -2950,6 +3836,63 @@ cmd_health() {
   [ "$ok" = true ]
 }
 
+# ── accounts ─────────────────────────────────────────────────────────────────────────────────
+# The admin role, the same rule as the Admin Panel's Admins list (web adminRole.ts): any account may
+# be made an admin; the last admin is never removed — every admin row is locked first, so a removal
+# in the panel at the same moment cannot leave none. One transaction, the change a mod-log row. The
+# name and the switch travel as psql variables, never in the SQL text.
+USER_ADMIN_SQL=$(cat <<'SQL'
+BEGIN;
+WITH locked AS (
+  SELECT matrix_id, is_admin FROM site.users
+   WHERE (is_admin OR matrix_id = :'m') AND deleted_at IS NULL
+   ORDER BY matrix_id FOR UPDATE
+), prev AS (
+  SELECT is_admin AS was FROM locked WHERE matrix_id = :'m'
+), upd AS (
+  UPDATE site.users u SET is_admin = :'g'::boolean
+    FROM prev
+   WHERE u.matrix_id = :'m'
+     AND (:'g'::boolean OR NOT prev.was OR (SELECT count(*) FROM locked WHERE is_admin AND matrix_id <> :'m') > 0)
+   RETURNING prev.was
+), logged AS (
+  INSERT INTO site.mod_log (action, target_id, performed_by, reason)
+  SELECT CASE WHEN :'g'::boolean THEN 'admin_granted' ELSE 'admin_revoked' END, :'m', 'blackbranch', 'blackbranch user admin'
+    FROM upd WHERE upd.was IS DISTINCT FROM :'g'::boolean
+  RETURNING 1
+)
+SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM prev) THEN 'missing'
+            WHEN EXISTS (SELECT 1 FROM logged) THEN 'changed'
+            WHEN EXISTS (SELECT 1 FROM upd) THEN 'same'
+            ELSE 'last' END;
+COMMIT;
+SQL
+)
+cmd_user() {
+  need_root user; need_install
+  local usage="usage: blackbranch user admin <name> on|off"
+  [ "${1:-}" = admin ] && [ "$#" -eq 3 ] || die "$usage"
+  case "$3" in on|off) ;; *) die "$usage" ;; esac
+  local name="$2" server mxid out
+  server=$(env_get MATRIX_SERVER_NAME)
+  case "$name" in @*:*) mxid="$name" ;; *) mxid="@${name#@}:$server" ;; esac
+  [[ "$mxid" =~ ^@[a-z0-9._=/-]{1,255}:[A-Za-z0-9.:-]{1,255}$ ]] || die "not an account name: $name (a username, or @user:server)"
+  postgres_up || die "the database must be running (blackbranch up)"
+  out=$(printf '%s\n' "$USER_ADMIN_SQL" | compose exec -T postgres psql -U postgres -d stream -qAt -v ON_ERROR_STOP=1 \
+        -v m="$mxid" -v g="$([ "$3" = on ] && echo true || echo false)") || die "the database did not answer"
+  # The admin's power in the community rooms follows the role now, not at the next timer run.
+  if [ "$out" = changed ] && community_reconciler_on; then community_reconcile_start apply >/dev/null || true; fi
+  case "$out:$3" in
+    changed:on)  info "$mxid is now an admin (recorded in the moderation log)" ;;
+    changed:off) info "$mxid is no longer an admin (recorded in the moderation log)" ;;
+    same:on)     info "$mxid is already an admin" ;;
+    same:off)    info "$mxid is already not an admin" ;;
+    missing:*)   die "no account $mxid on this site (it must have signed in to the site once)" ;;
+    last:*)      die "$mxid is the only admin: make someone else an admin first" ;;
+    *)           die "the database gave no answer" ;;
+  esac
+}
+
 cmd="${1:-}"; shift || true
 BB_ARGS=$(printf '%s' "$cmd" | tr -cd 'a-z-' | cut -c1-24)   # the command's name, for "run it with sudo"
 case "$cmd" in
@@ -2962,6 +3905,8 @@ case "$cmd" in
   up)               cmd_up "$@" ;;
   process-requests) cmd_process_requests "$@" ;;
   matrix)           cmd_matrix "$@" ;;
+  community)        cmd_community "$@" ;;
+  discord)          cmd_discord "$@" ;;
   federation)       cmd_federation "$@" ;;
   setup-link)       cmd_setup_link "$@" ;;
   apply-install)    cmd_apply_install "$@" ;;
@@ -2972,7 +3917,8 @@ case "$cmd" in
   health)           cmd_health "$@" ;;
   alerts)           cmd_alerts "$@" ;;
   install-files)    cmd_install_files "$@" ;;
-  user)             not_yet "$cmd" ;;
+  user)             cmd_user "$@" ;;
+  mail)             cmd_mail "$@" ;;
   ""|help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; echo; restart_settings_text ;;
   *) die "unknown command \"$cmd\" (blackbranch help)" ;;
 esac

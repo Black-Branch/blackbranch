@@ -6,8 +6,13 @@ import type { Room } from "matrix-js-sdk";
 import { ClientEvent } from "matrix-js-sdk";
 import { Bar } from "@/app/components/chrome";
 import { Avatar } from "@/app/components/Avatar";
-import { UnreadDot } from "./parts";
+import { UnreadDot, useUnreadMode } from "./parts";
+import type { UnreadMode } from "@/app/lib/settingsRegistry";
 import { memberName } from "@/app/lib/matrixDisplay";
+import { agoLabel } from "@/app/lib/relativeTime";
+import { conversationActions, partnerFace, type DmConversation } from "@/app/lib/dmConversations";
+import { DmActionsMenu } from "@/app/components/DmActionsMenu";
+import { NewMessageSearch } from "./NewMessageSearch";
 import { senderLabel } from "@/app/lib/discordSender";
 import PlatformIcon from "@/app/components/PlatformIcon";
 import { lsGet, lsSet } from "@/app/lib/safeLocalStorage";
@@ -15,24 +20,25 @@ import {
   roomUnreads,
   aggregateUnreads,
   allChannelsInNode,
-  dmPartner,
   isForumRoom,
   type SpaceNode,
   type RailServer,
 } from "@/app/lib/matrixRooms";
-import { Chats, CaretDown } from "@phosphor-icons/react/dist/ssr";
+import { Chats, CaretDown, Plus, PushPin } from "@phosphor-icons/react/dist/ssr";
 import { useLongPress } from "@/app/lib/useLongPress";
 import { NotificationMenu } from "./NotificationMenu";
 import { siteName } from "@/app/lib/siteName";
 import { useSetting } from "@/app/lib/useSetting";
 import { useMatrixClient } from "@/app/lib/MatrixClientContext";
 import { roomNotifySetting, type RuleSet } from "@/app/lib/pushRules";
+import { mxcToScaled, onScaledError } from "@/app/lib/matrixMedia";
+import { useSpaceBanner } from "./useSpaceBanner";
 
 // Community › Channel list, read once by the column and handed to every row:
-// counts instead of dots, and whether a muted channel (bell = Off — the
+// the unread mode (dots, number on mentions, counts), and whether a muted channel (bell = Off — the
 // push-rule mute) is left out. The open channel is never hidden, so muting the
 // one you are reading does not yank it away.
-type ListPrefs = { counts: boolean; hideMuted: boolean; muted: (r: Room) => boolean };
+type ListPrefs = { mode: UnreadMode; hideMuted: boolean; muted: (r: Room) => boolean };
 
 // Discord-style channel column: header + channel rows + collapsible sub-space
 // "channel-groups". Home mode swaps the body for DMs + pinned channels.
@@ -103,50 +109,72 @@ function ChannelRow({
       >
         {room.name || room.roomId}
       </span>
-      <UnreadDot total={total} highlight={highlight} counts={prefs.counts} className="w-1.5 h-1.5 shrink-0" />
+      <UnreadDot total={total} highlight={highlight} mode={prefs.mode} className="w-1.5 h-1.5 shrink-0" />
     </button>
   );
 }
 
+/** One conversation per person (Task 20): picture, name, the last line and how long ago, pinned
+ *  mark, unread count. Long-press or right-click opens its own menu (Pin · Close · Leave). */
 function DMRow({
-  room,
-  myUserId,
-  dmRoomIds,
+  conv,
   active,
-  onSelect,
-  counts,
+  onOpen,
+  onMenu,
+  unreadMode,
 }: {
-  room: Room;
-  myUserId: string;
-  dmRoomIds: Set<string>;
+  conv: DmConversation;
   active: boolean;
-  onSelect: (r: Room) => void;
-  counts: boolean;
+  onOpen: (c: DmConversation) => void;
+  onMenu: (c: DmConversation, x: number, y: number, anchor: HTMLElement | null) => void;
+  unreadMode: UnreadMode;
 }) {
-  const { total, highlight } = roomUnreads(room);
-  const partner = dmPartner(room, myUserId, dmRoomIds);
-  const partnerLabel = partner ? senderLabel(memberName(partner, partner.userId), partner.userId) : null;
-  const label = partnerLabel ? partnerLabel.label : room.name || room.roomId;
+  const { total, highlight } = conv.unread;
+  const face = partnerFace(conv);
+  const rowRef = useRef<HTMLButtonElement>(null);
+  const longPress = useLongPress((pos) => onMenu(conv, pos.x, pos.y, rowRef.current));
+  const when = conv.lastTs ? agoLabel(new Date(conv.lastTs).toISOString()) : "";
   return (
     <button
+      ref={rowRef}
       type="button"
-      onClick={() => onSelect(room)}
-      className={`w-full text-left flex items-center gap-2 rounded-md px-2 py-1 mx-1 transition-colors ${
+      data-dm-row={conv.partner}
+      onClick={() => onOpen(conv)}
+      {...longPress}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        // A menu key has no point: the menu opens under the row.
+        const r = rowRef.current?.getBoundingClientRect();
+        const pointed = Number.isFinite(e.clientX) && Number.isFinite(e.clientY);
+        onMenu(conv, pointed ? e.clientX : r?.left ?? 8, pointed ? e.clientY : r?.bottom ?? 8, rowRef.current);
+      }}
+      className={`w-full text-left flex items-center gap-2 rounded-md px-2 py-1.5 mx-1 transition-colors ${
         active ? "bg-surface-2 text-strong" : total > 0 ? "text-heading hover:bg-surface-1" : "text-secondary hover:bg-surface-1 hover:text-body"
       }`}
       style={{ width: "calc(100% - 0.5rem)" }}
     >
-      <Avatar mxcUrl={partner?.getMxcAvatarUrl()} name={label} size={22} />
-      <span
-        className={`truncate min-w-0 flex-1 text-shadow-chat ${total > 0 && !active ? "font-medium" : ""}`}
-        style={{ fontSize: CHAT_FONT }}
-      >
-        {label}
-        {partnerLabel?.fromDiscord && (
-          <PlatformIcon platform="discord" size="0.85em" className="ml-1 inline-block align-baseline opacity-70" />
-        )}
+      <Avatar mxcUrl={face.mxc} name={face.label} size="md" />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1 min-w-0">
+          <span
+            className={`truncate min-w-0 text-shadow-chat ${total > 0 && !active ? "font-semibold" : "font-medium"}`}
+            style={{ fontSize: CHAT_FONT }}
+          >
+            {face.label}
+            {face.fromDiscord && (
+              <PlatformIcon platform="discord" size="0.85em" className="ml-1 inline-block align-baseline opacity-70" />
+            )}
+          </span>
+          {conv.pinned && <PushPin size={11} weight="fill" className="shrink-0 text-muted" aria-label="Pinned" />}
+          {when && <span className="ml-auto shrink-0 text-3xs text-muted" data-dm-when="">{when}</span>}
+        </span>
+        <span className="flex items-center gap-1 min-w-0">
+          <span data-dm-preview="" className={`truncate min-w-0 flex-1 ${total > 0 && !active ? "text-body" : "text-muted"}`} style={{ fontSize: "var(--text-chat-sm)" }}>
+            {conv.preview}
+          </span>
+          <UnreadDot total={total} highlight={highlight} mode={unreadMode} className="w-1.5 h-1.5 shrink-0" />
+        </span>
       </span>
-      <UnreadDot total={total} highlight={highlight} counts={counts} className="w-1.5 h-1.5 shrink-0" />
     </button>
   );
 }
@@ -194,7 +222,7 @@ function InviteRow({
       <Avatar
         mxcUrl={isDm ? inviter?.getMxcAvatarUrl() : room.getMxcAvatarUrl() ?? inviter?.getMxcAvatarUrl()}
         name={label}
-        size={22}
+        size="md"
       />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-heading text-shadow-chat" style={{ fontSize: CHAT_FONT }}>
@@ -268,7 +296,7 @@ function Group({
           className={`shrink-0 transition-transform ${collapsed ? "-rotate-90" : ""}`}
         />
         <span className="truncate text-left">{node.space.name}</span>
-        {collapsed && <UnreadDot total={unreads.total} highlight={unreads.highlight} counts={prefs.counts} className="w-1.5 h-1.5 shrink-0" />}
+        {collapsed && <UnreadDot total={unreads.total} highlight={unreads.highlight} mode={prefs.mode} className="w-1.5 h-1.5 shrink-0" />}
       </button>
       {!collapsed && (
         <div className="mt-0.5">
@@ -287,12 +315,13 @@ function Group({
 export function ChannelColumn({
   mode,
   server,
-  dms,
+  conversations,
+  onOpenConversation,
+  onNewMessage,
   pinned,
   invites,
   selected,
   myUserId,
-  dmRoomIds,
   onSelect,
   onAcceptInvite,
   onRejectInvite,
@@ -302,12 +331,15 @@ export function ChannelColumn({
   /** "home" → DMs + pinned; "space" → the active server's channels/groups. */
   mode: "home" | "space";
   server: RailServer | null;
-  dms: Room[];
+  /** The DM list: one conversation per person, pinned first then newest (dmConversations). */
+  conversations: DmConversation[];
+  onOpenConversation: (c: DmConversation) => void;
+  /** The "+": message someone found by name (opens a draft; nothing is made until a line goes). */
+  onNewMessage?: (userId: string) => void;
   pinned: Room[];
   invites: Room[];
   selected: Room | null;
   myUserId: string;
-  dmRoomIds: Set<string>;
   onSelect: (r: Room) => void;
   onAcceptInvite: (r: Room) => Promise<void>;
   onRejectInvite: (r: Room) => Promise<void>;
@@ -320,7 +352,9 @@ export function ChannelColumn({
   const title = mode === "home" ? "Direct Messages" : server?.name ?? siteName();
   const [menu, setMenu] = useState<{ room: Room; x: number; y: number; anchor: HTMLElement | null } | null>(null);
   const onMenu: OnMenu = (room, x, y, anchor) => setMenu({ room, x, y, anchor });
-  const counts = useSetting("chatStyle_mxUnread") === "counts";
+  const [dmMenu, setDmMenu] = useState<{ conv: DmConversation; x: number; y: number; anchor: HTMLElement | null } | null>(null);
+  const [searching, setSearching] = useState(false);
+  const unreadMode = useUnreadMode();
   const hideMuted = useSetting("chatStyle_mxHideMuted") === "1";
   // A mute made here or in another client lands as an account-data echo of
   // m.push_rules; re-render on it so a muted channel leaves the list at once.
@@ -333,17 +367,35 @@ export function ChannelColumn({
     return () => { client.off(ClientEvent.AccountData, onAccountData); };
   }, [client, hideMuted]);
   const rules = client?.pushRules as RuleSet | undefined;
-  const prefs: ListPrefs = { counts, hideMuted, muted: (r) => roomNotifySetting(rules, r.roomId) === "none" };
+  const prefs: ListPrefs = { mode: unreadMode, hideMuted, muted: (r) => roomNotifySetting(rules, r.roomId) === "none" };
+  // The space's banner heads its list with the name over it, as Discord's server banner does.
+  // Spaces only: never Direct Messages, never a category.
+  const bannerMxc = useSpaceBanner(mode === "space" ? server?.room ?? null : null);
+  const bannerSrc = mxcToScaled(bannerMxc);
+  const header = (
+    <Bar slot="top" name="mx-header" center={
+      <>
+        <span className={`font-bold truncate ${bannerSrc ? "text-strong" : "text-heading"}`}
+          style={{ fontSize: CHAT_FONT, ...(bannerSrc ? { textShadow: "0 1px 3px rgb(0 0 0 / 0.8)" } : {}) }}>
+          {title}
+        </span>
+      </>
+    } seam={!bannerSrc} />
+  );
 
   return (
     <div className="flex flex-col h-full overflow-hidden flex-1 min-w-0">
-      <Bar slot="top" name="mx-header" center={
-        <>
-          <span className="font-bold text-heading truncate" style={{ fontSize: CHAT_FONT }}>
-            {title}
-          </span>
-        </>
-      } />
+      {bannerSrc ? (
+        // The box keeps its size when the picture fails to load (the picture hides itself), so the
+        // name still has a place.
+        <div data-space-banner className="relative shrink-0 w-full overflow-hidden bg-surface-2" style={{ aspectRatio: "16 / 9", maxHeight: 140 }}>
+          <img key={bannerSrc} src={bannerSrc} alt="" decoding="async" className="absolute inset-0 h-full w-full object-cover"
+            onError={(e) => onScaledError(e.currentTarget, bannerMxc)} />
+          <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-16"
+            style={{ background: "linear-gradient(to bottom, rgb(0 0 0 / 0.55), transparent)" }} />
+          <div className="absolute inset-x-0 top-0">{header}</div>
+        </div>
+      ) : header}
 
       <div className="flex-1 overflow-y-auto no-scrollbar py-2">
         {/* Before the client is ready there are no rooms to list, and an empty
@@ -368,19 +420,26 @@ export function ChannelColumn({
                 <div className="h-2" aria-hidden />
               </>
             )}
-            <div className="px-2.5 py-0.5 uppercase tracking-wider font-semibold text-muted" style={{ fontSize: "var(--text-chat-xs)" }}>
-              Direct Messages
+            <div className="flex items-center pl-2.5 pr-1 uppercase tracking-wider font-semibold text-muted" style={{ fontSize: "var(--text-chat-xs)" }}>
+              <span className="flex-1">Direct Messages</span>
+              {onNewMessage && (
+                <button type="button" onClick={() => setSearching((o) => !o)} aria-label="New message" title="New message"
+                  aria-expanded={searching} data-new-message-toggle=""
+                  className="flex h-9 w-10 items-center justify-center rounded-md text-muted hover:bg-surface-1 hover:text-body focus-visible:outline focus-visible:outline-edge-bright">
+                  <Plus size={14} weight="bold" />
+                </button>
+              )}
             </div>
-            {dms.length > 0 ? (
-              dms.map((room) => (
+            {searching && onNewMessage && <NewMessageSearch onPick={onNewMessage} onDone={() => setSearching(false)} />}
+            {conversations.length > 0 ? (
+              conversations.map((conv) => (
                 <DMRow
-                  key={room.roomId}
-                  room={room}
-                  myUserId={myUserId}
-                  dmRoomIds={dmRoomIds}
-                  active={selected?.roomId === room.roomId}
-                  onSelect={onSelect}
-                  counts={counts}
+                  key={conv.partner}
+                  conv={conv}
+                  active={!!selected && (selected === conv.active || conv.earlier.includes(selected))}
+                  onOpen={onOpenConversation}
+                  onMenu={(c, x, y, anchor) => setDmMenu({ conv: c, x, y, anchor })}
+                  unreadMode={unreadMode}
                 />
               ))
             ) : (
@@ -420,6 +479,10 @@ export function ChannelColumn({
           </p>
         ))}
       </div>
+      {dmMenu && client && (
+        <DmActionsMenu name={partnerFace(dmMenu.conv).label} actions={conversationActions(client, dmMenu.conv)}
+          x={dmMenu.x} y={dmMenu.y} onDismiss={() => setDmMenu(null)} anchorRef={{ current: dmMenu.anchor }} />
+      )}
       {menu && (
         <NotificationMenu room={menu.room} serverRooms={serverRooms} x={menu.x} y={menu.y}
           onClose={() => setMenu(null)} anchorRef={{ current: menu.anchor }} />

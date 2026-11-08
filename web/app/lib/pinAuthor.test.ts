@@ -61,3 +61,24 @@ test("a linked account with no colour of its own falls back to the platform colo
   a = await pinAuthor("twitch", 1, throwing);
   assert.deepEqual(a, { matrixId: null, usernameColor: null, usernameStyle: null });
 });
+
+// ADR 0145: a pinned tip given under a typed name is a plain banner — its row keeps the account
+// (the money record, a moderator's reach) but the banner never wears it.
+test("a pinned plain tip resolves to no author; a pinned account tip keeps its author", async () => {
+  const look = { matrix_id: "@casey:site.test", username_color: "#ff8800", username_style: { font: "pixel" }, display_name: "Casey" };
+  const nobody = { matrixId: null, usernameColor: null, usernameStyle: null };
+  const pin = (event_json: unknown) => pinAuthor("native", 5, answering([{ ...look, event_kind: "donation", event_json } as Row]));
+  assert.deepEqual(await pin({ username: "Your Mom", tipIdentity: "plain" }), nobody);
+  assert.deepEqual(await pin({ username: "Your Mom", matrixId: "@casey:site.test" }), nobody, "a card from before the fix, under a typed name");
+  assert.deepEqual(await pin(JSON.stringify({ username: "Your Mom" })), nobody, "event_json as text");
+  assert.deepEqual(await pin({ username: "Casey", tipIdentity: "account" }),
+    { matrixId: "@casey:site.test", usernameColor: "#ff8800", usernameStyle: { font: "pixel" } });
+  // A chat line (no event kind) is untouched.
+  assert.equal((await pinAuthor("native", 5, answering([look as Row]))).matrixId, "@casey:site.test");
+});
+
+test("the native pin query reads the card's kind, payload and the account's name", async () => {
+  const seen: { sql: string; params: unknown[] }[] = [];
+  await pinAuthor("native", 5, answering([], seen));
+  assert.match(seen[0]!.sql, /m\.event_kind, m\.event_json, u\.display_name/);
+});

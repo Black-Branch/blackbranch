@@ -164,7 +164,7 @@ export function CreditOverlay() {
             ref={nameRef}
             className={usernameStyleAnimClass(st?.usernameStyle)}
             style={{ color: st?.usernameColor ?? "#99c1f1", filter: "drop-shadow(0 2px 4px rgba(0,0,0,.7))",
-                     ...usernameStyleCSS(st?.usernameStyle, st?.usernameColor) }}
+                     ...usernameStyleCSS(st?.usernameStyle, st?.usernameColor, current.name) }}
           >
             {current.name}
           </span>

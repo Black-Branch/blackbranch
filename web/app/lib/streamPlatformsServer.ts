@@ -2,10 +2,10 @@
 // current title where a key the site already holds can READ it, and the platform's own page for
 // changing it. Nothing here writes to a platform: no token the site holds can. Server only (the
 // app tokens and the API key never leave it).
-import { instanceList, instanceString } from "./instanceConfigServer";
-import { twitchAppToken, twitchBroadcasterId, twitchClientId } from "./twitch";
-import { liveSourcesOn, type LiveSource } from "./playerSource";
-import type { PlatformKey, PlatformRow } from "./streamStats";
+import { instanceList, instanceString } from "./instanceConfigServer.ts";
+import { twitchAppToken, twitchBroadcasterId, twitchClientId } from "./twitch.ts";
+import { liveSourcesOn, type LiveSource } from "./playerSource.ts";
+import type { PlatformKey, PlatformRow } from "./streamStats.ts";
 
 const TITLE_TTL_MS = 2 * 60_000;
 const YT_TITLE_TTL_MS = 5 * 60_000;
@@ -131,7 +131,7 @@ export async function platformRows(ytVideoId: string | null): Promise<PlatformRo
       twitchChannel ? `https://dashboard.twitch.tv/u/${encodeURIComponent(twitchChannel)}/stream-manager` : null, "twitch"),
     row("youtube", "YouTube", !!ytChannel, embed("youtube"), yt,
       ytChannel ? `https://studio.youtube.com/channel/${encodeURIComponent(ytChannel)}/livestreaming` : null, "youtube"),
-    row("kick", "Kick", setUp.kick, null, titleCache.kick,
+    row("kick", "Kick", setUp.kick, embed("kick"), titleCache.kick,
       instanceString("platform.kick.slug") ? "https://dashboard.kick.com/" : null, "kick"),
     row("streamplace", "Streamplace", spSetUp, embed("streamplace"), sp, null, "streamplace"),
     row("native", "Site player", spSetUp, embed("native"), spSetUp ? none("Plays the Streamplace stream") : NOT_SET, null, "streamplace"),

@@ -65,7 +65,7 @@ test("the hook is wired to the pure derivations — keys/activeKey/enabled/onCom
     "MatrixView no longer imports the house client-value hook");
   assert.match(VIEW, /import \{ Q_POINTER_COARSE \} from "@\/app\/lib\/deviceQueries";/,
     "MatrixView no longer imports the canonical coarse-pointer query");
-  assert.match(VIEW, /const mxPaneKeys = matrixPaneKeys\(!!selected\);/,
+  assert.match(VIEW, /const mxPaneKeys = matrixPaneKeys\(!!selected \|\| !!draftDm\);/,
     "the key set is no longer derived from the helper");
   assert.match(VIEW, /const mxActivePane = matrixActivePane\(vis\);/,
     "the active pane is no longer derived from the helper");
@@ -194,7 +194,7 @@ test("the panes are native scroll-snap slots, and the row is built from KEYED on
   // how many panes exist. (The timeline does it through its className: it is
   // always in the tree, but wears `contents` — no box, no pane — when there is
   // nothing to show.)
-  assert.match(VIEW, /className=\{mxPagerOn && selected \? MX_PANE_SLOT : "contents"\}/,
+  assert.match(VIEW, /className=\{mxPagerOn && \(selected \|\| draftDm\) \? MX_PANE_SLOT : "contents"\}/,
     "the timeline slot no longer drops to `contents` without a selection — it would add an empty fourth pane the key list does not know about");
   assert.match(VIEW, /selected && \(\s*<div key="members"/, "the members slot lost its selected guard");
   // Nothing ELSE inside the wrapper may become a pane. The two other
@@ -204,7 +204,7 @@ test("the panes are native scroll-snap slots, and the row is built from KEYED on
   // requires no thread and no threads list (so `showRightThread` is false).
   // These are the guards that make that true; if either changes shape, the row
   // can silently grow a pane the pager's arithmetic cannot see.
-  assert.match(VIEW, /\{showTimeline && !selected && \(/,
+  assert.match(VIEW, /\{showTimeline && !selected && !draftDm && \(/,
     "the empty-centre guard changed — under the pager it must stay unreachable");
   assert.match(VIEW, /\{showRightThread && selected && \(\(\) => \{/,
     "the thread region's guard changed — under the pager it must stay unreachable");
@@ -218,7 +218,7 @@ test("the TIMELINE is the stable child — same key, same position, same depth i
   // slot on it adds none either.
   assert.match(
     VIEW,
-    /<div\s*key="timeline"\s*inert=\{mxPagerOn && mxActivePane !== "timeline"\}\s*className=\{mxPagerOn && selected \? MX_PANE_SLOT : "contents"\}\s*>\s*\{\(mxPagerOn \|\| showTimeline\) && mxTimelineEl\}\s*<\/div>/,
+    /<div\s*key="timeline"\s*inert=\{mxPagerOn && mxActivePane !== "timeline"\}\s*className=\{mxPagerOn && \(selected \|\| draftDm\) \? MX_PANE_SLOT : "contents"\}\s*>\s*\{\(mxPagerOn \|\| showTimeline\) && mxTimelineEl\}\s*<\/div>/,
     "the timeline slot is no longer ONE element with a key, an enabled-guarded inert and a className swap — any fork here remounts the timeline on every split-divider drag across 680px",
   );
   // It must not be conditionally rendered: a `{x && <div key="timeline"` would
@@ -329,7 +329,7 @@ test("sibling ORDER inside the wrapper is the modes-2/3 layout — the thread re
   const wrapper = at("ref={mxScrollerRef}");
   const directory = at("{mxPagerOn ? (");
   const timeline = at('key="timeline"');
-  const empty = at("{showTimeline && !selected &&");
+  const empty = at("{showTimeline && !selected && !draftDm &&");
   const thread = at("{showRightThread && selected &&");
   const members = at("ref={memOuterRef}");
   assert.ok(
@@ -348,11 +348,11 @@ test("the empty-centre states keep their own rule: modes 2/3 only, never a pane"
   // only. It is a SIBLING of the pane slots inside the wrapper, which is why
   // the guard above matters: if
   // it could fire under the pager it would become an unaccounted-for pane.
-  assert.match(VIEW, /\{showTimeline && !selected && \(/,
+  assert.match(VIEW, /\{showTimeline && !selected && !draftDm && \(/,
     "the empty-centre branch changed shape or moved");
   assert.match(VIEW, /Sign in to join the community\./, "the signed-out CTA is gone");
   // It is not wearing a pane slot, and never gained one.
-  const emptyAt = VIEW.indexOf("{showTimeline && !selected &&");
+  const emptyAt = VIEW.indexOf("{showTimeline && !selected && !draftDm &&");
   const emptyEnd = VIEW.indexOf("{showRightThread", emptyAt);
   assert.ok(emptyEnd > emptyAt, "could not isolate the empty-centre branch");
   assert.ok(!VIEW.slice(emptyAt, emptyEnd).includes("MX_PANE_SLOT"),
@@ -372,7 +372,7 @@ test("the pager: MatrixTimeline's scroller trades the both-axes overscroll-conta
   // while freeing the horizontal axis to chain.
   assert.match(
     TIMELINE,
-    /flex-1 overflow-y-auto overscroll-y-contain py-1 no-scrollbar/,
+    /flex-1 overflow-y-auto overscroll-y-contain mx-scroll pb-1 no-scrollbar/,
     "MatrixTimeline's scroll-layer class string changed shape — re-check overscroll-y-contain is still there",
   );
   // Token-boundary matched so `overscroll-y-contain` does not fool the
@@ -396,7 +396,7 @@ test("ThreadPanel's scroller trades the both-axes overscroll-contain for overscr
   // would not.
   assert.match(
     THREAD,
-    /flex-1 overflow-y-auto overscroll-y-contain py-1 no-scrollbar/,
+    /flex-1 overflow-y-auto overscroll-y-contain mx-scroll pb-1 no-scrollbar/,
     "ThreadPanel's scroll-layer class string changed shape — re-check overscroll-y-contain is still there",
   );
   assert.doesNotMatch(

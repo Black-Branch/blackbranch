@@ -6,6 +6,7 @@ import { lsGet, lsSet } from "@/app/lib/safeLocalStorage";
 import { useClientValue } from "@/app/lib/useClientState";
 import { Q_POINTER_COARSE } from "@/app/lib/deviceQueries";
 import { siteName } from "@/app/lib/siteName";
+import { useNudgeSlot } from "@/app/lib/nudgeSlot";
 
 // Dismissible bottom banner nudging mobile users to install the site as an app.
 // Android/Chrome gets a one-tap Install button (deferred beforeinstallprompt);
@@ -33,10 +34,18 @@ export default function PwaInstallNudge() {
 
   // Show only on touch devices, not yet installed, not dismissed, and only when we
   // actually have something to offer (a real prompt, or iOS manual steps).
-  if (dismissed || isStandalone || !mobile || !(canInstall || isIos)) return null;
+  const wants = !dismissed && !isStandalone && mobile && (canInstall || isIos);
+  // One first-run prompt at a time (nudgeSlot.ts).
+  const holds = useNudgeSlot("pwa-install", wants);
+  if (!holds) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[calc(var(--z-nudge)_+_10)] p-3 pointer-events-none">
+    // Sits on the bottom bar's live height (Bar.tsx) plus the panel's gap and frame below it, so it stays
+    // above a composer however tall it grows.
+    <div
+      className="fixed inset-x-0 z-[calc(var(--z-nudge)_+_10)] p-3 pointer-events-none"
+      style={{ bottom: "calc(var(--chrome-bottom-live, var(--chrome-bottom-h)) + var(--panel-gap, 12px) + var(--frame-width, 2px))" }}
+    >
       <div
         className="pointer-events-auto mx-auto max-w-md flex items-center gap-3 rounded-xl glass px-3 py-2.5 modal-in pb-safe"
         style={{

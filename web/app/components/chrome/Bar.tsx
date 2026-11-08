@@ -90,6 +90,19 @@ export type BarProps = {
   onBlurCapture?: FocusEventHandler<HTMLDivElement>;
 };
 
+// The bottom bars' live heights, written as `--chrome-bottom-live` on <html>:
+// the tallest bottom bar mounted, so a prompt sitting on it rides above a
+// composer grown to several lines. A bar in a hidden pane measures 0 and does
+// not count; with no bar left the variable goes and users fall back to the token.
+const bottomHeights = new Map<Element, number>();
+function writeBottomLive(el: Element, height: number | null) {
+  if (height && height > 0) bottomHeights.set(el, height);
+  else bottomHeights.delete(el);
+  const root = document.documentElement.style;
+  if (bottomHeights.size === 0) root.removeProperty("--chrome-bottom-live");
+  else root.setProperty("--chrome-bottom-live", `${Math.max(...bottomHeights.values())}px`);
+}
+
 export function Bar({
   slot, name, hidden = false, overlay = false, occluded = false, revealed = false, onRevealChange, standDown = false, band = false, background,
   seam = slot === "top", leading, center, trailing, ref,
@@ -244,6 +257,14 @@ export function Bar({
     // the real value again when it lifts, with no pointer event needed.
     onRevealChangeRef.current?.(nearEdge && !standDown);
   }, [overlay, hidden, nearEdge, standDown]);
+
+  useEffect(() => {
+    const el = selfRef.current;
+    if (slot !== "bottom" || !el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => writeBottomLive(el, el.getBoundingClientRect().height));
+    ro.observe(el);
+    return () => { ro.disconnect(); writeBottomLive(el, null); };
+  }, [slot]);
 
   // Recreated only when `ref` itself changes (`useCallback`, not a fresh
   // closure every render): a stable identity means React attaches this once

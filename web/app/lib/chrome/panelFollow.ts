@@ -27,6 +27,18 @@ export function currentTranslateY(el: HTMLElement): number {
   return y ? parseFloat(y) || 0 : 0;
 }
 
+/** How far a panel window can open — the same for one that slides up from the
+ *  composer and one that slides down from the top (#234): the layer minus the
+ *  ceiling the keyboard has put behind the chrome above it, i.e. the whole
+ *  visible pane. The layer's rect, never `clientHeight`: the layer has no
+ *  border, and `clientHeight` rounds to an integer while the pane's real
+ *  height is fractional. */
+export function paneCap(layer: HTMLElement | null): number {
+  if (!layer) return 0;
+  const ceiling = parseFloat(layer.ownerDocument.defaultView?.getComputedStyle(layer).getPropertyValue("--pane-ceiling") ?? "") || 0;
+  return layer.getBoundingClientRect().height - ceiling;
+}
+
 /** The element's live computed `transform` Y in px. A browser reports a
  *  computed transform as `matrix(a, b, c, d, tx, ty)` or `matrix3d(…)` while
  *  panel-seam-in/out run (they animate `translateY(100%)`, resolved to px);

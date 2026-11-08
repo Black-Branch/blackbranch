@@ -76,11 +76,11 @@ test("Live always has a menu; Community only when there is a choice; Radio never
   assert.equal(modeHasMenu("radio", { communityPlatforms: 2 }), false);
 });
 
-test("Live options: the four sources by name, current one checked, no other rows", () => {
+test("Live options: the five sources by name, current one checked, no other rows", () => {
   const rows = liveOptions("youtube");
-  assert.deepEqual(rows.map((r) => r.label), [`${siteName()} player`, "Streamplace", "YouTube", "Twitch"]);
-  assert.deepEqual(rows.map((r) => r.checked), [false, false, true, false]);
-  assert.deepEqual(rows.map((r) => r.key), ["native", "streamplace", "youtube", "twitch"]);
+  assert.deepEqual(rows.map((r) => r.label), [`${siteName()} player`, "Streamplace", "YouTube", "Twitch", "Kick"]);
+  assert.deepEqual(rows.map((r) => r.checked), [false, false, true, false, false]);
+  assert.deepEqual(rows.map((r) => r.key), ["native", "streamplace", "youtube", "twitch", "kick"]);
   assert.ok(rows.every((r) => typeof r.platform === "string"));
 });
 

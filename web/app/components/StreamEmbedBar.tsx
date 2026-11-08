@@ -182,6 +182,7 @@ export function StreamEmbedBar({
               its neighbours (the universal style). */}
           {isMod && (
             <BarButton
+              size="touch"
               icon={<GearSix size={15} weight="bold" />}
               label="Manage community embeds"
               onClick={() => setShowEmbedMgr(true)}
@@ -190,6 +191,7 @@ export function StreamEmbedBar({
           {/* One-click theatre toggle — shortcut to the drag endpoint */}
           {!narrow && (
             <BarButton
+              size="touch"
               display="hidden md:flex"
               icon={<CornersOut size={14} weight="bold" />}
               label={panelMode === "theatre" ? "Exit theatre mode (Alt+R)" : "Theatre mode (Alt+R)"}
@@ -201,6 +203,7 @@ export function StreamEmbedBar({
               dragging the video column up. */}
           {!narrow && (
             <BarButton
+              size="touch"
               display="hidden md:flex"
               icon={folded ? <CaretDown size={13} weight="bold" /> : <CaretUp size={13} weight="bold" />}
               label={folded ? "Unfold player" : "Fold player"}

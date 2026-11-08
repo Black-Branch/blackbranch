@@ -16,7 +16,6 @@ import { card, h2, btn, timeAgo } from "./shared";
 type Candidate = {
   userId: string; name: string | null; nickname: string | null;
   activity: number; firstSeen: string | null; platforms: string[];
-  impression: string | null; interactions: number;
 };
 type Preview = { targets: Candidate[]; survivorId: string; victimId: string };
 
@@ -176,7 +175,6 @@ export default function IdentitySection({ note }: { note: (m: string) => void })
                 <span className="text-body-dim font-medium">{displayName(t)}</span>
                 {" · "}{t.platforms.join(", ") || "no platforms"} · {t.activity} msgs
                 {t.firstSeen ? ` · first seen ${timeAgo(t.firstSeen)}` : ""}
-                {t.impression ? <span className="text-muted"> · read: “{t.impression.slice(0, 120)}{t.impression.length > 120 ? "…" : ""}”</span> : ""}
               </li>
             ))}
           </ul>

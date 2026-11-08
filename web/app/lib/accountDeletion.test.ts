@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { Client } from "pg";
 import { stripComments } from "./testSource.ts";
 import { accountNameOf, confirmsName, eraseSiteData, restrictionExpiry, DELETION_DECLARATION } from "./accountDeletion.ts";
+import { AUTOMOD_HELD_RETENTION_DAYS } from "../legal/automodRetention.ts";
 import { noOptOutSql } from "./linkConsent.ts";
 
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -37,19 +38,28 @@ test("the confirm name: the account's local name, typed exactly (case and a lead
   assert.equal(confirmsName(undefined, "@kate:example.tv"), false);
 });
 
-// A TIMEOUT's restriction on the deleted account's platform ids ends when the
-// timeout does. A permanent ban, or any open case, keeps it with no end.
-test("the restriction a deletion leaves ends with a timeout — never with a permanent ban or an open case", () => {
+// The restriction a deletion leaves on the account's platform ids ends like a live account's
+// restriction would (A3-06): a timeout at its end, an open case with its evidence (the held-message
+// retention, ADR 0104), a timeout with an open case at the later of the two; a permanent ban only
+// when a mod lifts it (LIFT_BAN_SQL — stream-api identity-restriction.db.test.js).
+test("the restriction a deletion leaves ends with its timeout or its case; a permanent ban only when lifted", () => {
   const none = { mark: false, held: false, report: false };
+  const now = Date.parse("2026-10-18T12:00:00.000Z");
+  const caseEnd = new Date(now + AUTOMOD_HELD_RETENTION_DAYS * 86_400_000).toISOString();
   const end = "2026-10-18T12:10:00.000Z";
-  assert.equal(restrictionExpiry({ banned: true, banEndsAt: end, openCases: none }), end);
-  assert.equal(restrictionExpiry({ banned: true, banEndsAt: null, openCases: none }), null, "a permanent ban ended");
+  assert.equal(restrictionExpiry({ banned: true, banEndsAt: end, openCases: none }, now), end);
+  assert.equal(restrictionExpiry({ banned: true, banEndsAt: null, openCases: none }, now), null, "a permanent ban got an end");
+  assert.equal(restrictionExpiry({ banned: true, banEndsAt: null, openCases: { ...none, report: true } }, now), null, "a permanent ban with a case got an end");
   for (const k of ["mark", "held", "report"] as const) {
-    assert.equal(restrictionExpiry({ banned: true, banEndsAt: end, openCases: { ...none, [k]: true } }), null, `an open ${k} ended with the timeout`);
+    assert.equal(restrictionExpiry({ banned: false, banEndsAt: null, openCases: { ...none, [k]: true } }, now), caseEnd, `an open ${k} never ends`);
+    assert.equal(restrictionExpiry({ banned: true, banEndsAt: end, openCases: { ...none, [k]: true } }, now), caseEnd, `an open ${k} ended with a shorter timeout`);
   }
-  assert.equal(restrictionExpiry({ banned: false, banEndsAt: null, openCases: { ...none, report: true } }), null);
+  const longTimeout = new Date(now + 90 * 86_400_000).toISOString();
+  assert.equal(restrictionExpiry({ banned: true, banEndsAt: longTimeout, openCases: { ...none, mark: true } }, now), longTimeout, "a case cut a longer timeout short");
   const src = readWhole("app/lib/accountDeletion.ts");
   assert.match(src, /restrictionExpiresAt: restrictionExpiry\(check\)/, "deleteAccount does not send the end to stream-api");
+  // A flag-mode measurement is of a DELIVERED message — not an open case.
+  assert.match(src, /site\.automod_held WHERE matrix_id = \$1 AND status IN \('pending', 'blocked'\)\) AS held/, "a flagged row counts as an open case");
 });
 
 test("the route deletes only the session's own account, same-origin, with no target parameter", () => {
@@ -65,12 +75,22 @@ test("every refusal comes before the first write, in deleteAccount itself", () =
   const fn = src.slice(src.indexOf("export async function deleteAccount"));
   const firstWrite = fn.indexOf("INSERT INTO site.account_deletions");
   assert.ok(firstWrite > 0);
-  for (const guard of ["confirmsName(typedName, matrixId)", "if (!check.fresh)", "if (check.activeSubscription)"]) {
+  // The last admin too (A2-07): deleting them would leave the site with no admin and no way to get one.
+  for (const guard of ["confirmsName(typedName, matrixId)", "if (!check.fresh)", "if (check.activeSubscription)", "if (check.lastAdmin) return { ok: false, status: 409, error: LAST_ADMIN_DELETE };"]) {
     const at = fn.indexOf(guard);
     assert.ok(at > 0 && at < firstWrite, `${guard} is missing or comes after a write`);
   }
   assert.ok(fn.indexOf('"/account/erase"') < fn.indexOf("eraseSiteData(client"), "the AI memory must go while the identity links still exist");
   assert.match(src, /export const FRESH_MS = 15 \* 60_000;/);
+  assert.match(src, /lastAdmin: await isLastAdmin\(\(sql, params\) => pool\.query\(sql, params\), matrixId\),/, "the check asks the one last-admin question (adminRole.ts, run on Postgres there)");
+  // …and again under the admin rows' lock INSIDE the erase transaction, before anything is erased
+  // (two admins deleting themselves at once: adminRole.test.ts runs that on Postgres).
+  const tx = fn.slice(fn.indexOf('await client.query("BEGIN");'));
+  const guard = tx.indexOf('if (await releaseAdminInTx((sql, params) => client.query(sql, params), matrixId) === "last") {');
+  assert.ok(guard > 0 && guard < tx.indexOf("readCredentials(client") && guard < tx.indexOf("eraseSiteData(client"), "the guard runs first in the transaction");
+  assert.match(tx.slice(guard, guard + 300), /await client\.query\("ROLLBACK"\);\s*return \{ ok: false, status: 409, error: LAST_ADMIN_DELETE \};/);
+  const ui = read("app/components/DeleteAccount.tsx");
+  assert.ok(ui.indexOf("check.lastAdmin ?") > 0 && ui.indexOf("check.lastAdmin ?") < ui.indexOf("<form"), "the screen says it before offering the form");
 });
 
 test("freshness is the session's own SIGN-IN time: set only by the sign-in callbacks, never by a token refresh", () => {
@@ -84,9 +104,13 @@ test("freshness is the session's own SIGN-IN time: set only by the sign-in callb
     assert.match(up, /ON CONFLICT \(matrix_id, mx_device_id\) DO UPDATE SET[\s\S]*signed_in_at\s+= now\(\)/, `${cb}: a re-sign-in on the same device does not refresh signed_in_at`);
   }
   // Every other writer of site.user_sessions must leave signed_in_at alone.
-  const refresh = readWhole("app/lib/matrixSession.ts");
-  assert.match(refresh, /UPDATE site\.user_sessions/, "the refresh path was not read");
+  // The refresh's writes live in matrixSessionCore.ts (resolveTokens); matrixSession.ts wires it.
+  const refresh = readWhole("app/lib/matrixSessionCore.ts");
+  assert.match(refresh, /UPDATE site\.user_sessions\s+SET mx_access_token = \$1, mx_refresh_token = \$2/, "the refresh path was not read");
   assert.doesNotMatch(refresh, /signed_in_at/, "a token refresh moves the sign-in time — a refreshed session would read as fresh");
+  const wiring = readWhole("app/lib/matrixSession.ts");
+  assert.match(wiring, /export async function destroyMatrixSession/, "vacuity: matrixSession.ts was read");
+  assert.doesNotMatch(wiring, /signed_in_at/);
   const route = read("app/api/me/delete-account/route.ts");
   assert.match(route, /sessionId: \(session as \{ sessionId\?: string \} \| null\)\?\.sessionId \?\? null/, "the session id must come from the signed session");
 });
@@ -95,7 +119,9 @@ test("nothing but an active subscription blocks a deletion — an open report, h
   const lib = read("app/lib/accountDeletion.ts");
   const fn = lib.slice(lib.indexOf("export async function deleteAccount"), lib.indexOf("INSERT INTO site.account_deletions"));
   const refusals = fn.match(/return \{ ok: false/g) ?? [];
-  assert.equal(refusals.length, 3, "a refusal was added beyond the name, the fresh sign-in and the subscription");
+  // The fourth, accepted in A2-07: the site's only admin (the site would be left with no admin).
+  assert.equal(refusals.length, 4, "a refusal was added beyond the name, the fresh sign-in, the subscription and the last admin");
+  assert.match(fn, /if \(check\.lastAdmin\) return \{ ok: false, status: 409, error: LAST_ADMIN_DELETE \};/);
   assert.doesNotMatch(fn, /check\.banned\) return|openCases\.[a-z]+\) return|isAdmin\) return/, "an open case blocks the deletion");
   assert.match(fn, /evidence: check\.banned \|\| check\.openCases\.mark \|\| check\.openCases\.held \|\| check\.openCases\.report, links: check\.banned/);
   assert.match(lib, /site\.reports WHERE reported_id = \$1 AND status <> 'resolved'/);
@@ -301,9 +327,12 @@ test("nothing is revoked until the erase commits: a stream-api outage leaves the
   assert.doesNotMatch(lib, /nothing was deleted yet/, "the 502 claims nothing changed (the stream side may have run in part)");
   assert.match(lib, /your account was not deleted and you are still signed in/);
   const rc = lib.slice(lib.indexOf("async function readCredentials"), lib.indexOf("export type DeletionResult"));
-  assert.match(rc, /FROM site\.user_sessions WHERE matrix_id = \$1/, "only one device's session revoked");
-  assert.match(rc, /oauthRevoke\(refresh, "refresh_token"\)/);
-  assert.match(rc, /oauthRevoke\(access, "access_token"\)/);
+  // Every session of THIS account (loadSessionRowsFor: WHERE s.matrix_id = $1, executed in
+  // matrixSessionCore.test.ts), each ended the way sign-out ends one — at its own issuer.
+  const code = stripComments(rc);
+  assert.match(code, /loadSessionRowsFor\(\(sql, params\) => client\.query\(sql, params\), matrixId\)/);
+  assert.match(code, /const upstream = upstreamDeps\(decToken\);\s*await Promise\.allSettled\(c\.sessions\.map\(\(r\) => endUpstream\(upstream, r\)\)\)/);
+  assert.doesNotMatch(code, /oauthRevoke\(/, "a session's tokens sent to OUR issuer whatever server issued them");
   assert.match(rc, /revokePlatformGrant\(/);
   assert.match(rc, /NOT EXISTS \(SELECT 1 FROM site\.accounts o WHERE o\.provider = a\.provider AND o\.provider_account_id = a\.provider_account_id AND o\.matrix_id <> \$1\)/, "a shared grant would be revoked at the provider");
 });

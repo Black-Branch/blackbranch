@@ -96,8 +96,8 @@ test("a dropped socket is visible — after it was up at least once", () => {
     "derived during render (React's storing-previous-render pattern), never in an effect");
   const gated = src.match(/\{everConnected && !connected &&[\s\S]{0,400}/)?.[0] ?? "";
   assert.ok(gated, "the reconnect pill must be gated on a drop AFTER an open");
-  assert.match(gated, /Reconnecting to chat/);
-  assert.match(gated, /role="status"/, "a blip is context, not an interruption — never role=alert");
+  // The pill is the shared StatusPill (role="status" lives there — reconnectIndicator.test.ts).
+  assert.match(gated, /^\{everConnected && !connected && <StatusPill>Reconnecting to chat…<\/StatusPill>\}/);
 });
 
 // The window may run in a browser with a transparency mod, so its canvas must

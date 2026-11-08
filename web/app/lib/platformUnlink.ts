@@ -16,6 +16,8 @@
 //      the person is told to try again (503): our rows gone with the merge in place is the bug
 //      this exists to fix, and it could never be retried.
 //   2. Then the provider revoke and our rows, as before.
+// Before either: refused (409) while a site ban runs — the ban follows the platform account through
+// its link, and an unlink would let it chat on site again (A3-01).
 // stream-api's 404 (the platform account never chatted — no identity to separate) and 409 (its
 // identity is not tied to THIS account, so there is no merge of ours to undo) are answers, not
 // failures: the unlink goes on, so a person can always take back their grant.
@@ -31,7 +33,12 @@ export type UnlinkDeps = {
   decrypt: (stored: string | null) => string | null;
 };
 
-export type UnlinkResult = { ok: true } | { ok: false; status: 503; error: string };
+export type UnlinkResult = { ok: true } | { ok: false; status: 409 | 503; error: string };
+
+/** What a person is told when they try to unlink while a site ban (or timeout) runs.
+ *  @test-only exported so platformUnlink.test.ts pins the exact words; unlinkPlatformAccount (this
+ *  file) answers with it. */
+export const UNLINK_WHILE_BANNED = "You can unlink this account when your ban ends.";
 
 /** The platform account's own id on that platform, for the stream-side unlink: the identity link
  *  (site.platform_links) when it exists, else the OAuth row's account id (linked, maybe never bound). */
@@ -51,6 +58,19 @@ async function platformAccountId(matrixId: string, platform: string, query: Unli
 
 export async function unlinkPlatformAccount(matrixId: string, platform: string, deps: UnlinkDeps): Promise<UnlinkResult> {
   const retry: UnlinkResult = { ok: false, status: 503, error: "Couldn't unlink right now — nothing was changed. Try again in a moment." };
+
+  // 0. Not while a site ban runs. The ban holds the account's platform ids through these links
+  //    (stream-api ban-hold.js); unlinking would put the platform account on a fresh identity the
+  //    ban does not name, and its lines would reach site chat again. Refused before anything changes;
+  //    an unreadable ban refuses too (503), never reads as "not banned".
+  let banned: boolean;
+  try {
+    banned = (await deps.query(
+      `SELECT 1 AS one FROM site.bans WHERE matrix_id = $1 AND (expires_at IS NULL OR expires_at > now()) LIMIT 1`, [matrixId])).rows.length > 0;
+  } catch {
+    return retry;
+  }
+  if (banned) return { ok: false, status: 409, error: UNLINK_WHILE_BANNED };
 
   // 1. Separate the stream identity while the link row still proves ownership.
   const platformId = await platformAccountId(matrixId, platform, deps.query);

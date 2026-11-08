@@ -1,6 +1,6 @@
 import pool from "@/lib/db";
 import { matrixLocalpart } from "./chatIdentity";
-import { groupGiftPurchases, iso, type GiftGivenRow, type GiftPendingRow } from "./giftLedger";
+import { GIFT_GIVEN_DATES_SQL, groupGiftPurchases, iso, type GiftGivenRow, type GiftPendingRow } from "./giftLedger";
 import type { GiftPurchaseView, GiftReceivedView } from "./supportStatus";
 
 // The queries behind the gifter's ledger (GET /api/billing/gifts). Read-only —
@@ -20,7 +20,7 @@ export async function loadGiftLedger(
   const givenQ = pool
     .query<GivenRawRow>(
       `SELECT g.stripe_session_id, g.kind, g.months, g.anonymous, g.created_at,
-              g.recipient_matrix_id, ru.display_name AS recipient_name, g.expires_at
+              g.recipient_matrix_id, ru.display_name AS recipient_name, ${GIFT_GIVEN_DATES_SQL}
        FROM site.gift_subscriptions g
        LEFT JOIN site.users ru ON ru.matrix_id = g.recipient_matrix_id
        WHERE g.gifter_matrix_id = $1
@@ -32,7 +32,7 @@ export async function loadGiftLedger(
     .query<GiftPendingRow>(
       `SELECT p.stripe_session_id, p.months, p.anonymous, p.created_at, p.claimed_by, p.claimed_at, p.claim_expires_at
        FROM site.gift_pending p
-       WHERE p.gifter_matrix_id = $1`,
+       WHERE p.gifter_matrix_id = $1 AND p.reversed_by IS NULL`,
       [matrixId]
     )
     .catch(() => ({ rows: [] as GiftPendingRow[] }));
