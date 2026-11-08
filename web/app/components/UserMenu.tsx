@@ -67,6 +67,13 @@ export default function UserMenu({
   // Where each panel opens when the other panel's search sent the viewer there.
   const [modPlace, setModPlace] = useState<ModPlace | undefined>(undefined);
   const [adminPlace, setAdminPlace] = useState<string | undefined>(undefined);
+  // Counts each ask for a place: asking for the place the window was opened at again (after moving
+  // elsewhere inside it) still moves it there.
+  const [adminAsk, setAdminAsk] = useState(0);
+  const openAdminAt = (place: string | undefined) => {
+    if (place) { setAdminPlace(place); setAdminAsk((n) => n + 1); }
+    setAdminOpen(true);
+  };
   // Shared monotonic cache-buster (profileCardPrefetch) — see ProfileCardBody.
   const [avatarVer, setAvatarVer] = useState(currentAvatarVersion);
   // A failure belongs to one version: a new avatar (the events below bump it) is tried again.
@@ -98,7 +105,7 @@ export default function UserMenu({
       setModTarget(detail?.target || undefined);
       setModOpen(true);
     },
-    onAdminPanel: () => setAdminOpen(true),
+    onAdminPanel: (detail) => openAdminAt(typeof detail?.place === "string" ? detail.place : undefined),
     onProfileCard: () => open(),
     // The secure-account nudge jumps straight to Devices & Security.
     onAccountSettings: () => open(PAGES.security),
@@ -226,7 +233,7 @@ export default function UserMenu({
           target={modTarget}
           place={modPlace}
           searchAdmin={searchAdminPlaces}
-          onOpenAdmin={(p) => { setAdminPlace(p); setAdminOpen(true); }}
+          onOpenAdmin={(p) => openAdminAt(p)}
           onClose={() => {
             setModOpen(false);
             setModPlace(undefined);
@@ -240,6 +247,7 @@ export default function UserMenu({
       {adminOpen && (
         <AdminWindow
           place={adminPlace}
+          ask={adminAsk}
           onOpenMod={(p) => { setModPlace(isModPlace(p) ? p : undefined); setModOpen(true); }}
           onClose={() => { setAdminOpen(false); setAdminPlace(undefined); }}
         />

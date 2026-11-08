@@ -33,6 +33,7 @@ function Hub({ log, name }: { log: string[]; name: string }) {
     onAccountSettings: () => log.push(`${name}:settings`),
     onSupport: (d) => log.push(`${name}:support:${d?.giftUsername ?? ""}`),
     onProfileSynced: () => log.push(`${name}:synced`),
+    onAdminPanel: (d) => log.push(`${name}:admin:${d?.place ?? ""}`),
   });
   return null;
 }
@@ -65,6 +66,12 @@ test("two mounted hubs, ONE answers an open — and the dispatcher still sees it
   log.length = 0;
   act(() => { dispatchClaimable("bb:open-support", { giftUsername: "@k:site.test" }); });
   assert.deepEqual(log, ["a:support:@k:site.test"], "support opens once, detail intact");
+  log.length = 0;
+  act(() => { dispatchClaimable("bb:open-adminpanel", { place: "utility/timer" }); });
+  assert.deepEqual(log, ["a:admin:utility/timer"], "the admin window opens once, at the place asked for (the Stream tab's settings jumps)");
+  log.length = 0;
+  act(() => { dispatchClaimable("bb:open-adminpanel"); });
+  assert.deepEqual(log, ["a:admin:"], "no place: the window opens where it opens");
   unmount();
 });
 
@@ -90,7 +97,7 @@ test("with NO hub mounted, the dispatch reports unclaimed — the dispatcher's f
 const HUB_CLAIMED = [
   "bb:open-support", "bb:open-store", "bb:open-modpanel",
   "bb:open-profile-card", "bb:open-account-settings",
-  "bb:open-linked-accounts", "bb:open-chat-appearance",
+  "bb:open-linked-accounts", "bb:open-chat-appearance", "bb:open-adminpanel",
 ];
 
 function* walk(dir: string): Generator<string> {

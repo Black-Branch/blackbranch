@@ -123,7 +123,8 @@ test("the pages render the same windows, never a bare page of links", () => {
   const pop = stripComments(read("app/(main)/admin/[section]/AdminPopout.tsx"));
   assert.match(pop, /<AdminWindow popout section=\{section\} sub=\{sub\}/);
   const win = stripComments(read("app/features/instance/AdminWindow.tsx"));
-  assert.match(win, /<AdminPanel section=\{section\} initialSub=\{sub\} syncUrl=\{popout\} onPlace=\{setHref\} onOpenMod=\{onOpenMod\} \/>/);
+  // `ask` (#247): asking again for the same place — the Stream tab's settings jumps — moves the panel there.
+  assert.match(win, /<AdminPanel section=\{section\} initialSub=\{sub\} ask=\{ask\} syncUrl=\{popout\} onPlace=\{setHref\} onOpenMod=\{onOpenMod\} \/>/);
   assert.match(win, /title="Admin panel"/);
 });
 

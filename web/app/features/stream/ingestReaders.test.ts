@@ -6,6 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readersView, livenessChip, YOUTUBE_LIVE_NOTE } from "./ingestReaders.ts";
 import { PLATFORM_LIVENESS } from "../../lib/platformLiveness.generated.mjs";
+import { mergePlatformRows } from "./platformsView.ts";
+import type { PlatformRow } from "../../lib/streamStats.ts";
 
 const since = "2026-10-20T08:00:00.000Z";
 const health = {
@@ -75,6 +77,14 @@ test("chip words: Live, Offline, Scheduled for <local time>, and Can't tell with
   }
   assert.equal(livenessChip(live("unknown", { evidence: "helix-error" }), fmt).words, "Can't tell — Twitch could not be asked, or its answer could not be read", "vacuity: real words");
   assert.equal(livenessChip(live("unknown", { evidence: "a-code-from-a-newer-ingest" }), fmt).words, "Can't tell");
+  // The chip's head and the reason line (#247): the whole words are exactly head — why.
+  const why = livenessChip(live("unknown", { evidence: "helix-error" }), fmt);
+  assert.deepEqual([why.head, why.why], ["Can't tell", "Twitch could not be asked, or its answer could not be read"]);
+  assert.equal(why.words, `${why.head} — ${why.why}`);
+  const lv = livenessChip(live("live", { evidence: "helix-live" }), fmt);
+  assert.deepEqual([lv.head, lv.why], ["Live", null], "only a can't-tell carries a reason");
+  assert.equal(livenessChip(live("upcoming", { scheduledStart: "2026-10-25T18:00:00.000Z" }), fmt).head, "Scheduled for at 2026-10-25T18:00:00.000Z");
+  assert.equal(livenessChip(live("unknown", { evidence: "a-code-from-a-newer-ingest" }), fmt).why, null);
   assert.equal(livenessChip(live("unknown", { evidence: "__proto__" }), fmt).words, "Can't tell", "a prototype name is not a code");
   assert.equal(livenessChip(live("dancing"), fmt).state, "unknown", "a state the page does not know reads can't tell");
   const stale = livenessChip(live("unknown", { evidence: "helix-error", stale: true }), fmt);
@@ -99,4 +109,28 @@ test("readersView carries each configured platform's chip on its row; not config
 
 test("the YouTube row note says when YouTube ends a broadcast by itself", () => {
   assert.equal(YOUTUBE_LIVE_NOTE, "YouTube ends the broadcast about a minute after you stop only when auto-stop is on in YouTube Studio; otherwise it stays live until you end it there.");
+});
+
+// ── #247: the one Platforms card joins the site's rows and the readers' rows ───────────────────────
+const siteRow = (key: PlatformRow["key"], label: string): PlatformRow => ({ key, label, setUp: true, embed: null, title: null, category: null, titleNote: "", manageUrl: null, setupHref: `/admin/platforms?sub=${key}` });
+
+test("merge: one row per platform — the site's order, each with its reader; a reader-only platform after; nothing dropped", () => {
+  const v = readersView({ reachable: true, health: { ...health, readers: { ...health.readers, zzz: { state: "running", since } } } });
+  if (v.kind !== "ok") throw new Error("vacuity: not read");
+  const site = [siteRow("twitch", "Twitch"), siteRow("youtube", "YouTube"), siteRow("native", "Site player"), siteRow("kick", "Kick")];
+  const rows = mergePlatformRows(site, v.rows);
+  assert.deepEqual(rows.map((r) => [r.key, r.site?.label ?? null, r.reader?.state ?? null]), [
+    ["twitch", "Twitch", "running"], ["youtube", "YouTube", "starting"], ["native", "Site player", null], ["kick", "Kick", "failed"],
+    ["streamplace", null, "off"], ["zzz", null, "running"],
+  ]);
+  assert.equal(rows.find((r) => r.key === "streamplace")!.label, "Streamplace", "a reader-only row is named by the platform vocabulary");
+  assert.equal(new Set(rows.map((r) => r.key)).size, rows.length, "no platform twice");
+});
+
+test("merge: the site not loaded yet still shows the readers; the readers not answering still shows the site", () => {
+  const v = readersView({ reachable: true, health });
+  if (v.kind !== "ok") throw new Error("vacuity");
+  assert.deepEqual(mergePlatformRows(null, v.rows).map((r) => r.key), ["twitch", "youtube", "kick", "streamplace"]);
+  assert.deepEqual(mergePlatformRows([siteRow("twitch", "Twitch")], []).map((r) => [r.key, r.reader]), [["twitch", null]]);
+  assert.deepEqual(mergePlatformRows(null, []), []);
 });

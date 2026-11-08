@@ -239,7 +239,7 @@ test("up gives the community service account its name once the homeserver is hea
     assert.match(m[2], /-e MX_BASE=http:\/\/synapse:8008 /);
     assert.match(m[2], /-e MX_USER_ID=@blackbranch:example\.test /);
     assert.match(m[2], /-e MX_DISPLAY_NAME=Example Stream /);
-    assert.match(m[2], new RegExp(`-v ${h.home.replace(/[.]/g, "\\.")}/site-files:/bb-icon:ro -e MX_AVATAR=/bb-icon/icon-512\\.png `));
+    assert.match(m[2], new RegExp(`-v ${h.home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/site-files:/bb-icon:ro -e MX_AVATAR=/bb-icon/icon-512\\.png `));
     const job = r.calls.search(JOB), homeserver = r.calls.search(/^compose up -d mas synapse$/m), apps = r.calls.search(/^compose up -d stream-api stream-ingest$/m);
     assert.ok(homeserver >= 0 && job > homeserver && apps > job, "after the homeserver, before stream-api");
     assert.equal(readFileSync(path.join(h.fake, "community-stdin"), "utf8"), `${h.token()}\n`, "the token arrives on stdin");
@@ -270,7 +270,7 @@ test("restart and retry: the next start hands the last picture back and says not
     writeFileSync(path.join(h.home, "release/web/public/brand/icon-512.png"), PNG);
     writeFileSync(path.join(h.fake, "community-out"), answer("kept").replace('"name":"set"', '"name":"kept"'));
     const third = h.go({}, "up");
-    assert.match(third.calls.match(JOB)[2], new RegExp(`-v ${h.home.replace(/[.]/g, "\\.")}/release/web/public/brand:/bb-icon:ro -e MX_AVATAR=/bb-icon/icon-512\\.png -e MX_AVATAR_STAMP=${STAMP.replace(/[.]/g, "\\.")} `));
+    assert.match(third.calls.match(JOB)[2], new RegExp(`-v ${h.home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/release/web/public/brand:/bb-icon:ro -e MX_AVATAR=/bb-icon/icon-512\\.png -e MX_AVATAR_STAMP=${STAMP.replace(/[.]/g, "\\.")} `));
     // The job fails (Synapse not taking the token yet): said, with the command; the start finishes.
     writeFileSync(path.join(h.fake, "community-out"), "community: the homeserver refused the token (401 M_UNKNOWN_TOKEN)\n");
     const failed = h.go({ FAKE_COMMUNITY_STATUS: "1" }, "up");

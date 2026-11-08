@@ -410,7 +410,7 @@ test('one standing rule, both readers', async (t) => {
       assert.equal((await timeoutPostResponse(req({ userId: A, minutes: 60, reason: 'spam' }, 'POST'), deps(A))).status, 200);
       await linkAndMerge();
       const carried = (await rowsOn(c2.c)).at(-1);
-      assert.match(carried.reason, new RegExp(`^timed out with ${A.replace(/[.]/g, '\\.')} · carried by merge from ab5`), 'the carry dropped the placing account');
+      assert.match(carried.reason, new RegExp(`^timed out with ${A.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · carried by merge from ab5`), 'the carry dropped the placing account');
       assert.equal(await judge(c2.c, c2.pid), true);
       const res = await timeoutDeleteResponse(req({ userId: A }, 'DELETE'), deps(A));
       assert.deepEqual([res.status, (await res.json()).lifted], [200, true]);

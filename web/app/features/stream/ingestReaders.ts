@@ -7,8 +7,10 @@ import { PLATFORM_LIVENESS } from "../../lib/platformLiveness.generated.mjs";
 
 export type ReaderState = "running" | "starting" | "failed" | "off";
 type LiveState = "live" | "offline" | "unknown" | "upcoming";
-/** One platform's live detection as the row shows it. */
-export type LiveChip = { state: LiveState; words: string; stale: boolean; note: string | null };
+/** One platform's live detection as the row shows it: `words` whole; `head` is the chip beside the
+ *  platform's name (Live / Offline / Scheduled for … / Can't tell) and `why` the reason it can't
+ *  tell, drawn on the line under it so a long reason never pushes the row's switch off its line. */
+export type LiveChip = { state: LiveState; words: string; head: string; why: string | null; stale: boolean; note: string | null };
 /** `state` is null for a platform with live detection but no chat reader row. */
 export type ReaderRow = { platform: string; state: ReaderState | null; since: string | null; error: string | null; live: LiveChip | null };
 
@@ -35,12 +37,14 @@ export function livenessChip(entry: unknown, fmt: (iso: string) => string = loca
   const state: LiveState = LIVE_STATES.includes(e.state as LiveState) ? (e.state as LiveState) : "unknown";
   const start = typeof e.scheduledStart === "string" && !Number.isNaN(Date.parse(e.scheduledStart)) ? e.scheduledStart : null;
   const why = evidenceWords(e.evidence);
-  const words = state === "live" ? "Live"
+  const head = state === "live" ? "Live"
     : state === "offline" ? "Offline"
     : state === "upcoming" ? (start ? `Scheduled for ${fmt(start)}` : "Scheduled")
-    : why ? `Can't tell — ${why}` : "Can't tell";
+    : "Can't tell";
+  const reason = state === "unknown" ? why : null;
+  const words = reason ? `${head} — ${reason}` : head;
   const stale = e.stale === true;
-  return { state, words, stale, note: stale ? `No answer for over ${STALE_MIN} min — an open stream stays open while it can't tell.` : null };
+  return { state, words, head, why: reason, stale, note: stale ? `No answer for over ${STALE_MIN} min — an open stream stays open while it can't tell.` : null };
 }
 
 /** What the relay answers: the ingest's own body, or that it could not be reached. */

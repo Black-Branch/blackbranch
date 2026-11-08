@@ -54,7 +54,7 @@ test("frame-src allows BOTH the live and sandbox PayPal hosts", () => {
 
 test("frame-src allows Kick's player (its embed is a Live source) and nothing else widens", () => {
   const d = sources("frame-src");
-  assert.ok(d.includes("https://player.kick.com"), "frame-src missing https://player.kick.com — the Kick embed would load as an empty frame");
+  assert.ok(d.some((s) => s === "https://player.kick.com"), "frame-src missing https://player.kick.com — the Kick embed would load as an empty frame");
   // The whole list, exact: the Kick player is the only frame origin the Kick embed adds.
   assert.deepEqual(d, [
     "frame-src", "https://stream.place", "https://www.youtube.com", "https://player.twitch.tv", "https://player.kick.com",

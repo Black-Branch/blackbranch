@@ -4,6 +4,11 @@
 // needs — its address with this site's key (copy, regenerate), a light for whether a rig page is
 // connected now and since when, test buttons that send a made-up clip down the real path, and the
 // scenes the page reported, each a button that switches OBS through it.
+//
+// ONE component, two mounts: Admin Panel → Utility → OBS (the whole page) and the Stream tab's OBS
+// card (`frame`: the stream view's card look, the status light, scene buttons and the tests — the
+// address and its key stay on the admin page, out of a screen that is on stream). Both send the same
+// actions to the same route, so a scene switch drives OBS the same way from either.
 
 import { useCallback, useEffect, useState } from "react";
 import { getJson, postJson } from "@/app/lib/http";
@@ -26,16 +31,28 @@ const SCENE_REFUSED: Record<string, string> = {
   off: "the OBS module is off",
 };
 
-function Light({ on, label }: { on: boolean; label: string }) {
+function Light({ on, label, small = false }: { on: boolean; label: string; small?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-sm text-body" data-rig-light={on ? "on" : "off"}>
+    <span className={`inline-flex items-center gap-1.5 ${small ? "text-2xs" : "text-sm"} text-body`} data-rig-light={on ? "on" : "off"}>
       <span aria-hidden className={`inline-block size-2.5 rounded-full ${on ? "bg-emerald-400" : "bg-surface-3 ring-1 ring-edge"}`} />
       {label}
     </span>
   );
 }
 
-export default function RigPanel({ note }: { note: (m: string) => void }) {
+/** The Stream tab's card classes, handed in so this feature does not reach into that one. */
+type Frame = { card: string; title: string };
+
+export default function RigPanel({ note: noteProp, frame, active = true }: {
+  /** The Admin Panel's status line; without one (the Stream tab) the card shows its own. */
+  note?: (m: string) => void;
+  /** Set = the Stream tab's compact card. */
+  frame?: Frame;
+  /** The Stream tab polls only while it is the open tab and the page is visible. */
+  active?: boolean;
+}) {
+  const [said, setSaid] = useState<string | null>(null);
+  const note = noteProp ?? setSaid;
   const [view, setView] = useState<RigView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState(false);
@@ -48,10 +65,12 @@ export default function RigPanel({ note }: { note: (m: string) => void }) {
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "could not load"));
   }, []);
   useEffect(() => {
+    if (!active) return;
     load();
-    const t = setInterval(load, POLL_MS);
+    // The admin page polls as it always has; the stream card skips a hidden page.
+    const t = setInterval(() => { if (!frame || document.visibilityState === "visible") load(); }, POLL_MS);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, active, frame]);
 
   const act = async (what: string, body: Record<string, unknown>, done: (b: Record<string, unknown>) => string) => {
     setBusy(what);
@@ -72,6 +91,7 @@ export default function RigPanel({ note }: { note: (m: string) => void }) {
     p.then(() => setCopied("copied"), () => setCopied("failed")).finally(() => setTimeout(() => setCopied(null), 1800));
   };
 
+  if (frame) return <StreamCard frame={frame} view={view} error={error} busy={busy} said={noteProp ? null : said} act={act} />;
   if (error) return <section className={card}><p className="text-sm text-red-300">Could not read the rig page&apos;s state: {error}</p></section>;
   if (!view) return <section className={card}><p role="status" className="text-sm text-muted">Loading the rig page…</p></section>;
   if (!view.on) {
@@ -83,8 +103,7 @@ export default function RigPanel({ note }: { note: (m: string) => void }) {
     );
   }
 
-  const first = view.pages[0] ?? null;
-  const level = view.pages.reduce<number | null>((m, p) => (p.level == null ? m : Math.max(m ?? 0, p.level)), null);
+  const level = maxLevel(view);
   const masked = view.url ? view.url.replace(/key=[^&]+/, "key=••••••••") : "";
 
   return (
@@ -92,9 +111,7 @@ export default function RigPanel({ note }: { note: (m: string) => void }) {
       <div className="space-y-1">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className={h2}>The rig page</h2>
-          <Light on={view.connected > 0} label={view.connected > 0
-            ? `Connected${view.connected > 1 ? ` (${view.connected} pages)` : ""} since ${first ? new Date(first.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "?"} · ${ago(first?.since)}`
-            : "Not connected"} />
+          <Light on={view.connected > 0} label={connectedLabel(view)} />
         </div>
         <p className="text-xs text-secondary">One browser source in OBS carries the bot&apos;s voice, the sound alerts, its avatar and scene switching. It connects out from OBS, so it works from any network; nothing is installed on your computer.</p>
       </div>
@@ -127,25 +144,79 @@ export default function RigPanel({ note }: { note: (m: string) => void }) {
       {view.scenes.length > 0 && (
         <div className="space-y-1">
           <h3 className={h3}>Switch scene</h3>
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="OBS scenes">
-            {view.scenes.map((s) => (
-              <button key={s} type="button" className={`${btn} ${s === view.scene ? "border-edge-bright text-strong" : ""}`} aria-pressed={s === view.scene}
-                disabled={busy !== null || (level ?? 0) < ADVANCED} onClick={() => void act(`scene:${s}`, { action: "scene", name: s }, () => `Asked OBS to show ${s}.`)}>
-                {s}
-              </button>
-            ))}
-          </div>
+          <Scenes view={view} level={level} busy={busy} act={act} />
         </div>
       )}
 
       <div className="space-y-1">
         <h3 className={h3}>Test</h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className={btn} disabled={busy !== null} onClick={() => void act("voice", { action: "test", what: "voice" }, () => "Test voice sent — the avatar moves while it plays.")}>Test voice</button>
-          <button type="button" className={btn} disabled={busy !== null} onClick={() => void act("sound", { action: "test", what: "sound" }, () => "Test sound sent.")}>Test sound</button>
-          {view.sink && <span className={`${chip} text-secondary`}>Plays through {SINK_WORDS[view.sink]}</span>}
-        </div>
+        <Tests view={view} busy={busy} act={act} />
       </div>
+    </section>
+  );
+}
+
+type Act = (what: string, body: Record<string, unknown>, done: (b: Record<string, unknown>) => string) => Promise<void>;
+
+const maxLevel = (view: RigView) => view.pages.reduce<number | null>((m, p) => (p.level == null ? m : Math.max(m ?? 0, p.level)), null);
+const connectedLabel = (view: RigView) => {
+  const first = view.pages[0] ?? null;
+  return view.connected > 0
+    ? `Connected${view.connected > 1 ? ` (${view.connected} pages)` : ""} since ${first ? new Date(first.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "?"} · ${ago(first?.since)}`
+    : "Not connected";
+};
+
+/** The scene buttons — the same on both mounts. */
+function Scenes({ view, level, busy, act }: { view: RigView; level: number | null; busy: string | null; act: Act }) {
+  return (
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="OBS scenes">
+      {view.scenes.map((s) => (
+        <button key={s} type="button" className={`${btn} ${s === view.scene ? "border-edge-bright text-strong" : ""}`} aria-pressed={s === view.scene}
+          disabled={busy !== null || (level ?? 0) < ADVANCED} onClick={() => void act(`scene:${s}`, { action: "scene", name: s }, () => `Asked OBS to show ${s}.`)}>
+          {s}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Test voice and Test sound — the same on both mounts. */
+function Tests({ view, busy, act }: { view: RigView; busy: string | null; act: Act }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className={btn} disabled={busy !== null} onClick={() => void act("voice", { action: "test", what: "voice" }, () => "Test voice sent — the avatar moves while it plays.")}>Test voice</button>
+      <button type="button" className={btn} disabled={busy !== null} onClick={() => void act("sound", { action: "test", what: "sound" }, () => "Test sound sent.")}>Test sound</button>
+      {view.sink && <span className={`${chip} text-secondary`}>Plays through {SINK_WORDS[view.sink]}</span>}
+    </div>
+  );
+}
+
+/** The Stream tab's card: the light, the scenes, the tests, and what the last tap did. */
+function StreamCard({ frame, view, error, busy, said, act }: { frame: Frame; view: RigView | null; error: string | null; busy: string | null; said: string | null; act: Act }) {
+  const level = view ? maxLevel(view) : null;
+  return (
+    <section className={frame.card} data-section="obs" data-rig-panel={view ? (view.on ? "on" : "off") : undefined}>
+      <div className={frame.title}>
+        <span>OBS</span>
+        {view?.on && <span className="normal-case tracking-normal font-normal"><Light on={view.connected > 0} label={connectedLabel(view)} small /></span>}
+      </div>
+      {error ? (
+        <p className="mt-2 text-xs text-red-300">Could not read the rig page&apos;s state: {error}</p>
+      ) : !view ? (
+        <p role="status" className="mt-2 text-xs text-muted">Loading…</p>
+      ) : !view.on ? (
+        <p className="mt-2 text-xs text-muted">{view.error ? `Not available: ${view.error}.` : "The OBS module is off — switch it on in Settings › OBS below; it applies when the chat service restarts."}</p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {view.connected === 0 && <p className="text-2xs text-muted">No rig page is connected — add its browser source in OBS (Settings › OBS below has the address).</p>}
+          {view.connected > 0 && level != null && level < ADVANCED && (
+            <p className="text-2xs text-amber-300">Scene switching needs &quot;Advanced access to OBS&quot; (the source&apos;s Properties → Page permissions).</p>
+          )}
+          {view.scenes.length > 0 && <Scenes view={view} level={level} busy={busy} act={act} />}
+          <Tests view={view} busy={busy} act={act} />
+        </div>
+      )}
+      {said && <p role="status" className="mt-1.5 text-2xs text-body-dim break-words">{said}</p>}
     </section>
   );
 }

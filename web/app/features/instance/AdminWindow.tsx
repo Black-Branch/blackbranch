@@ -13,10 +13,12 @@ import { ADMIN_HOME, adminHref, adminPlaceParts, type AdminSection } from "./adm
 // in the body. Opened from the profile card's row and from the mod window's band (admins only),
 // hosted where the mod window is. The /admin/<section> pages render this same window as a page
 // (`popout`), keeping each place's URL in the address bar.
-export default function AdminWindow({ onClose, section: sectionProp = ADMIN_HOME, sub: subProp, place, onOpenMod, popout = false }: {
+export default function AdminWindow({ onClose, section: sectionProp = ADMIN_HOME, sub: subProp, place, ask, onOpenMod, popout = false }: {
   onClose: () => void;
   /** A place id (`ai/bot`) to open on — another panel's search asked for it. Wins over section/sub. */
   place?: string;
+  /** Bumped on every ask for `place`, so asking again for the same place moves the panel back there. */
+  ask?: number;
   /** Opens the Mod Panel on a place (the search lists the mod panel's places too). */
   onOpenMod?: (place: string) => void;
   section?: AdminSection;
@@ -47,7 +49,7 @@ export default function AdminWindow({ onClose, section: sectionProp = ADMIN_HOME
       popoutUrl={popout ? undefined : href}
       onClose={onClose}
     >
-      <AdminPanel section={section} initialSub={sub} syncUrl={popout} onPlace={setHref} onOpenMod={onOpenMod} />
+      <AdminPanel section={section} initialSub={sub} ask={ask} syncUrl={popout} onPlace={setHref} onOpenMod={onOpenMod} />
     </Window>
   );
 }

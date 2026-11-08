@@ -1,13 +1,14 @@
 "use client";
 // The Stream tab: admin-only, in the lower dock on a computer and the chat panel's row on a phone.
-// The live stream — or a past one picked from a drop-down — with its graphs; the platforms with
-// their embed switches and titles; each platform's chat reader (running, starting, failed and why);
-// income behind a switch that is off by default; the doctor's health in one strip.
+// OBS one tap away (the rig page's own panel — the same component as Admin → Utility → OBS); the
+// live stream — or a past one picked from a drop-down — with its graphs; ONE Platforms card, a row
+// per platform with its live detection, chat reader, embed switch and title; jumps into the Admin
+// window's timer, support bar, effects and OBS places; income behind a switch that is off by
+// default; the doctor's health in one strip.
 //
 // Only an admin's host mounts this (tabRegistry readiness), and every route it reads is admin-only
 // on the server. Nothing polls unless the tab is the open one and the page is visible.
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { getJson } from "@/app/lib/http";
 import { useLocalStorageString } from "@/app/lib/useClientState";
 import { Toggle } from "@/app/components/SettingsControls";
@@ -18,13 +19,17 @@ import {
 } from "@/app/lib/streamStats";
 import { ChatCurve, CompositionBar, EarnedChart, VelocityChart, ViewerCurve, card, cardTitle } from "./StreamCharts";
 import { IncomeCard, SupportEventsList } from "./StreamIncome";
+import { RigPanel } from "@/app/features/instance";
 import { StreamPlatforms } from "./StreamPlatforms";
 import { StreamHealth } from "./StreamHealth";
-import { StreamReaders } from "./StreamReaders";
+import { StreamSettings } from "./StreamSettings";
+import { AdminJump } from "./AdminJump";
 
 /** Remembered per browser, off by default. */
 const INCOME_KEY = "bb_stream_income";
 const LIVE_POLL_MS = 15_000;
+/** The OBS card wears this tab's card look. */
+const OBS_FRAME = { card, title: cardTitle };
 const OFFLINE_POLL_MS = 60_000;
 
 /** `atMs` is the server's clock when it answered: the live length and the earned graph's end read it,
@@ -123,6 +128,9 @@ export function StreamTab({ active }: { active: boolean }) {
           </span>
         </div>
 
+        <RigPanel frame={OBS_FRAME} active={active} />
+        <StreamSettings />
+
         {pick === null ? (
           <LiveView data={live.data} failed={live.failed} income={income} onOpen={setPick} />
         ) : (
@@ -130,7 +138,6 @@ export function StreamTab({ active }: { active: boolean }) {
         )}
 
         <StreamPlatforms active={active} />
-        <StreamReaders active={active} />
         <StreamHealth active={active} />
       </div>
     </div>
@@ -170,7 +177,7 @@ function LiveView({ data, failed, income, onOpen }: { data: LiveReply | null; fa
         <section className={card}>
           <p className="text-xs text-muted">
             No streams recorded yet. A stream shows here once a platform is set up and you go live.{" "}
-            <Link href="/admin/platforms" className="underline hover:text-strong">Set up a platform (Admin → Platforms)</Link>
+            <AdminJump place="platforms">Set up a platform (Admin → Platforms)</AdminJump>
           </p>
         </section>
       );

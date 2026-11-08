@@ -257,7 +257,7 @@ function dailyHome(n, { free = 50, end = null, mode = "direct", backupOkHoursAgo
   }
   return h;
 }
-const inDays = (d) => new Date(Date.now() + d * 86400_000).toUTCString().replace("GMT", "GMT");
+const inDays = (d) => new Date(Date.now() + d * 86400_000).toUTCString();
 
 test("the daily check: all well sends nothing; low disk, a certificate near its end, no good backup for 36 hours each make one alert naming them all", async () => {
   const n = await ntfy();

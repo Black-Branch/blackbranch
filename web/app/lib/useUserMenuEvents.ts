@@ -28,9 +28,11 @@ import { claimEvent } from "./claimableEvent.ts";
 //                                  open-profile-card. Opens the ModWindow tool
 //                                  window; its host is whoever hosts the card
 //                                  (UserMenu claims and opens its window).
-//   bb:open-adminpanel        (no detail) — claimable, same as open-modpanel: opens the
+//   bb:open-adminpanel        detail { place? } — claimable, same as open-modpanel: opens the
 //                                  AdminWindow (admins only — the rows that send it
-//                                  are admin-only; every admin route re-checks)
+//                                  are admin-only; every admin route re-checks), at
+//                                  `place` (`utility/timer`) when one is named — the
+//                                  Stream tab's settings jumps send one
 //   bb:profile-synced         (no detail — avatar may have changed)
 //   bb:avatar-changed         (no detail — ProfileEditor uploaded a new
 //                                  avatar; thumbnails re-read the shared
@@ -52,12 +54,13 @@ import { claimEvent } from "./claimableEvent.ts";
 export type OpenSupportDetail = { giftUsername?: string; section?: string };
 export type OpenStoreDetail = { tab?: string };
 export type OpenModPanelDetail = { target?: string };
+export type OpenAdminPanelDetail = { place?: string };
 
 export function useUserMenuEvents(h: {
   onSupport?: (d: OpenSupportDetail | undefined) => void;
   onStore?: (d: OpenStoreDetail | undefined) => void;
   onModPanel?: (d: OpenModPanelDetail | undefined) => void;
-  onAdminPanel?: () => void;
+  onAdminPanel?: (d: OpenAdminPanelDetail | undefined) => void;
   onProfileCard?: () => void;
   onAccountSettings?: () => void;
   onLinkedAccounts?: () => void;
@@ -98,7 +101,7 @@ export function useUserMenuEvents(h: {
     const onAdminPanel = (e: Event) => {
       if (e.defaultPrevented || !ref.current.onAdminPanel) return;
       claimEvent(e);
-      ref.current.onAdminPanel();
+      ref.current.onAdminPanel((e as CustomEvent).detail as OpenAdminPanelDetail | undefined);
     };
     const onProfileCard = (e: Event) => {
       // Claim the claimable open-profile-card event so the /community rail

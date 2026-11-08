@@ -4,10 +4,10 @@
 // when the tab opens and on Refresh, never polled: the doctor gathers the site's facts on every
 // call.
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { getJson } from "@/app/lib/http";
 import { healthSummary, type DoctorRow } from "@/app/lib/streamStats";
 import { card, cardTitle } from "./StreamCharts";
+import { AdminJump } from "./AdminJump";
 
 const ORDER = [
   { status: "fail", label: "failing", tone: "text-red-400" },
@@ -32,7 +32,7 @@ export function StreamHealth({ active }: { active: boolean }) {
         <span>Health</span>
         <span className="flex items-center gap-3 normal-case tracking-normal font-normal">
           <button type="button" onClick={load} className="text-2xs text-muted underline hover:text-strong">Refresh</button>
-          <Link href="/admin/doctor" className="text-2xs text-muted underline hover:text-strong">Open Doctor</Link>
+          <AdminJump place="doctor" className="text-2xs text-muted underline hover:text-strong">Open Doctor</AdminJump>
         </span>
       </div>
       {!s ? (

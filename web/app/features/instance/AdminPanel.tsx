@@ -62,9 +62,11 @@ function placeFromLocation(): { section: AdminSection; sub: string | null } | nu
   return { section: m[1] as AdminSection, sub: new URLSearchParams(window.location.search).get("sub") };
 }
 
-export default function AdminPanel({ section, initialSub, syncUrl = false, onPlace, onOpenMod }: {
+export default function AdminPanel({ section, initialSub, ask = 0, syncUrl = false, onPlace, onOpenMod }: {
   section: AdminSection;
   initialSub?: string;
+  /** A new ask for a place (even the same one) — the host bumps it. */
+  ask?: number;
   /** Opens the Mod Panel on a place — the search lists its places too. */
   onOpenMod?: (place: string) => void;
   /** The page form: keep `/admin/<section>?sub=<sub>` in the address bar. */
@@ -75,7 +77,7 @@ export default function AdminPanel({ section, initialSub, syncUrl = false, onPla
   const rail = useMemo(() => adminRail(ADMIN_PLUGIN_PANELS), []);
   const [itemId, setItemId] = useState<string>(() => adminItemFor(rail, section, initialSub).id);
   // A new place asked for from outside (the mod panel's search) moves the open panel there.
-  const asked = `${section}/${initialSub ?? ""}`;
+  const asked = `${section}/${initialSub ?? ""}/${ask}`;
   const [seenAsk, setSeenAsk] = useState(asked);
   if (asked !== seenAsk) { setSeenAsk(asked); setItemId(adminItemFor(rail, section, initialSub).id); }
   const [search, setSearch] = useState("");
